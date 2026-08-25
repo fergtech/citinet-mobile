@@ -5,8 +5,22 @@
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
+const tintColorLight = '#2164f3';
 const tintColorDark = '#fff';
+
+// A fixed accent used for text/icon/border colors (where a two-tone fill isn't
+// renderable) — deliberately does NOT flip with theme like `Colors[].tint` does
+// (tint is white in dark mode, for icon contrast against dark backgrounds; using
+// it as a fill color would make white-on-white content disappear).
+export const Brand = tintColorLight;
+
+// The same brand identity as an actual gradient, for solid-fill surfaces
+// (buttons, FAB, avatars, badges) — see components/brand-gradient.tsx. A
+// plain linear gradient (expo-linear-gradient), top-left to bottom-right.
+export const BrandGradientColors = [
+  '#300feb', // deep blue
+  '#0d5adf', // blue
+] as const;
 
 export const Colors = {
   light: {

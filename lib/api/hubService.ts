@@ -1,0 +1,982 @@
+import { AtlasPin, AtlasPinCategory, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, SearchResults } from './types';
+
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    if (typeof body?.error === 'string') return body.error;
+  } catch {
+    // response wasn't JSON — fall through to the generic message
+  }
+  return fallback;
+}
+
+export async function loginUser(
+  tunnelUrl: string,
+  username: string,
+  password: string
+): Promise<LoginResponse> {
+  let res: Response;
+  try {
+    res = await fetch(`${tunnelUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new Error("Couldn't reach this hub. Check that it's online and try again.");
+  }
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Login failed. Check your username and password.'));
+  }
+  return res.json();
+}
+
+export async function getPosts(tunnelUrl: string, token: string): Promise<HubPost[]> {
+  const res = await fetch(`${tunnelUrl}/api/posts`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load posts for this hub."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.posts) ? data.posts : [];
+}
+
+export async function getUpcomingEvents(tunnelUrl: string, token: string): Promise<HubPost[]> {
+  const res = await fetch(`${tunnelUrl}/api/events/upcoming`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load upcoming events."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.events) ? data.events : [];
+}
+
+// Every EVENT post, not just upcoming ones — GET /api/events/upcoming only
+// ever returns future events (WHERE event_date >= NOW() - 2h, confirmed in
+// api/server.js), and there's no separate "past events" or "all events"
+// route. GET /api/posts does support a real ?category= filter though, so
+// this is the only way to see a past event again once its date has gone by
+// — app/events.tsx uses it to derive "Past" by excluding whatever
+// getUpcomingEvents() already returned, rather than reimplementing the
+// server's own upcoming/past boundary (including its 2-hour grace window)
+// client-side.
+export async function listEventPosts(tunnelUrl: string, token: string): Promise<HubPost[]> {
+  const res = await fetch(`${tunnelUrl}/api/posts?category=EVENT&limit=100`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load events."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.posts) ? data.posts : [];
+}
+
+export type CreatePostInput = {
+  category: HubPost['category'];
+  title?: string;
+  body?: string;
+  // Required by the real server when category is 'EVENT' — an ISO string.
+  event_date?: string;
+  event_location?: string;
+  visibility?: 'inherit' | 'hub' | 'private';
+  media?: { uri: string; name: string; type: string } | null;
+};
+
+// POST /api/posts — the app's first real post-creation call (everything
+// else under app/modal.tsx/compose-post.tsx is still a UI mockup). Unlike
+// every other POST in this file, the real route is multer-based
+// (`upload.single('media')`), so it only ever parses a multipart body, never
+// JSON — even when there's no photo attached, this has to be sent as
+// FormData or the server sees an empty req.body and 400s on "add a title or
+// some text." Response shape is hand-assembled server-side and is missing
+// like_count/my_liked (a freshly created post can't have either yet), so
+// those are defaulted here to keep the return value a real HubPost.
+export async function createPost(tunnelUrl: string, token: string, input: CreatePostInput): Promise<HubPost> {
+  const form = new FormData();
+  form.append('category', input.category);
+  if (input.title) form.append('title', input.title);
+  if (input.body) form.append('body', input.body);
+  if (input.event_date) form.append('event_date', input.event_date);
+  if (input.event_location) form.append('event_location', input.event_location);
+  if (input.visibility) form.append('visibility', input.visibility);
+  if (input.media) {
+    form.append('media', { uri: input.media.uri, name: input.media.name, type: input.media.type } as unknown as Blob);
+  }
+
+  const res = await fetch(`${tunnelUrl}/api/posts`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't create that post."));
+  }
+  const post = await res.json();
+  return { like_count: 0, my_liked: false, rsvp_count: 0, my_rsvp: false, ...post };
+}
+
+// Featured content is a supplementary highlight, not core feed data — mirrors
+// citinet's own web client here: fail quietly to an empty list rather than
+// surfacing an error banner over the main feed.
+export async function getFeatured(tunnelUrl: string, token: string): Promise<FeaturedItem[]> {
+  try {
+    const res = await fetch(`${tunnelUrl}/api/featured`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.items) ? data.items : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getPost(tunnelUrl: string, token: string, postId: string): Promise<HubPost> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this post."));
+  }
+  return res.json();
+}
+
+export async function listReplies(
+  tunnelUrl: string,
+  token: string,
+  postId: string
+): Promise<HubPostReply[]> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/replies`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load comments."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.replies) ? data.replies : [];
+}
+
+export async function createReply(
+  tunnelUrl: string,
+  token: string,
+  postId: string,
+  body: string,
+  replyToReplyId: string | null = null,
+  replyToUserId: string | null = null
+): Promise<HubPostReply> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/replies`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      body,
+      reply_to_reply_id: replyToReplyId,
+      reply_to_user_id: replyToUserId,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post your reply."));
+  }
+  return res.json();
+}
+
+export async function toggleLike(
+  tunnelUrl: string,
+  token: string,
+  postId: string
+): Promise<{ liked: boolean; count: number }> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/like`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update like."));
+  }
+  return res.json();
+}
+
+// Cast (or change) a vote on a POLL-category post.
+export async function votePoll(
+  tunnelUrl: string,
+  token: string,
+  postId: string,
+  optionIndex: number
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/vote`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ option_index: optionIndex }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't cast your vote."));
+  }
+}
+
+// Toggle the caller's RSVP ("going") on an EVENT-category post — same
+// toggle-and-return-the-new-state shape as toggleLike above.
+export async function toggleRsvp(
+  tunnelUrl: string,
+  token: string,
+  postId: string
+): Promise<{ going: boolean; count: number }> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/rsvp`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update your RSVP."));
+  }
+  return res.json();
+}
+
+export async function listAttendees(tunnelUrl: string, token: string, postId: string): Promise<EventAttendee[]> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/rsvp`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load attendees."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.attendees) ? data.attendees : [];
+}
+
+export async function listConversations(tunnelUrl: string, token: string): Promise<HubConversation[]> {
+  const res = await fetch(`${tunnelUrl}/api/conversations`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load messages."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.conversations) ? data.conversations : [];
+}
+
+export async function getMessages(
+  tunnelUrl: string,
+  token: string,
+  conversationId: string
+): Promise<HubMessage[]> {
+  const res = await fetch(`${tunnelUrl}/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this conversation."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.messages) ? data.messages : [];
+}
+
+export async function sendMessage(
+  tunnelUrl: string,
+  token: string,
+  conversationId: string,
+  body: string
+): Promise<HubMessage> {
+  const res = await fetch(`${tunnelUrl}/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't send that message."));
+  }
+  return res.json();
+}
+
+export async function search(tunnelUrl: string, token: string, query: string, limit = 20): Promise<SearchResults> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  const res = await fetch(`${tunnelUrl}/api/search?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't search this hub."));
+  }
+  const data = await res.json();
+  return {
+    posts: Array.isArray(data.results?.posts) ? data.results.posts : [],
+    members: Array.isArray(data.results?.members) ? data.results.members : [],
+    spaces: Array.isArray(data.results?.spaces) ? data.results.spaces : [],
+  };
+}
+
+function readString(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+
+// Field names vary across server versions (node_id/id, name/username, etc.) —
+// this mirrors citinet's own web client, which normalizes the same way rather
+// than trusting one fixed shape.
+function normalizeMember(m: Record<string, unknown>): HubMember {
+  const visibility = readString(m.profile_visibility);
+  return {
+    user_id: readString(m.user_id) ?? readString(m.id) ?? readString(m.node_id) ?? '',
+    username: readString(m.username) ?? readString(m.name) ?? '',
+    display_name: readString(m.display_name) ?? readString(m.displayName),
+    bio: readString(m.bio),
+    location: readString(m.location),
+    is_admin: m.is_admin === true || m.isAdmin === true,
+    role: readString(m.role),
+    profile_headline: readString(m.profile_headline),
+    website: readString(m.website),
+    tags: Array.isArray(m.tags) ? m.tags.filter((t): t is string => typeof t === 'string') : [],
+    profile_visibility: visibility === 'public' || visibility === 'private' ? visibility : 'hub',
+    location_visible: m.location_visible !== false,
+  };
+}
+
+export async function listMembers(tunnelUrl: string, token: string): Promise<HubMember[]> {
+  const res = await fetch(`${tunnelUrl}/api/members`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load members."));
+  }
+  const data = await res.json();
+  const raw: Record<string, unknown>[] = Array.isArray(data) ? data : Array.isArray(data.members) ? data.members : [];
+  return raw.map(normalizeMember);
+}
+
+export async function getMember(tunnelUrl: string, token: string, userId: string): Promise<HubMember> {
+  const res = await fetch(`${tunnelUrl}/api/members/${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this profile."));
+  }
+  return normalizeMember(await res.json());
+}
+
+// Starts (or resolves the existing) DM with a peer — mirrors citinet web's
+// POST /api/conversations with kind:'dm', which the server treats as
+// get-or-create rather than always minting a new conversation.
+export async function createConversation(
+  tunnelUrl: string,
+  token: string,
+  peerUserId: string
+): Promise<HubConversation> {
+  const res = await fetch(`${tunnelUrl}/api/conversations`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'dm', peer_user_id: peerUserId }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't start a conversation."));
+  }
+  return res.json();
+}
+
+// Mirrors citinet web's PATCH /api/auth/profile — only the fields this app
+// actually edits (see app/account/settings.tsx and app/account/privacy.tsx).
+// Web also supports tags/banner fields; not surfaced on mobile yet.
+export async function updateProfile(
+  tunnelUrl: string,
+  token: string,
+  updates: {
+    displayName?: string;
+    bio?: string;
+    profileHeadline?: string;
+    website?: string;
+    profileVisibility?: 'public' | 'hub' | 'private';
+    locationVisible?: boolean;
+  }
+): Promise<void> {
+  const body: Record<string, unknown> = {};
+  if (updates.displayName !== undefined) body.display_name = updates.displayName;
+  if (updates.bio !== undefined) body.bio = updates.bio;
+  if (updates.profileHeadline !== undefined) body.profile_headline = updates.profileHeadline;
+  if (updates.website !== undefined) body.website = updates.website;
+  if (updates.profileVisibility !== undefined) body.profile_visibility = updates.profileVisibility;
+  if (updates.locationVisible !== undefined) body.location_visible = updates.locationVisible;
+
+  const res = await fetch(`${tunnelUrl}/api/auth/profile`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't save your profile."));
+  }
+}
+
+export async function changePassword(
+  tunnelUrl: string,
+  token: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/auth/change-password`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't change your password."));
+  }
+}
+
+export async function deleteAccount(tunnelUrl: string, token: string, password: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/auth/account`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete your account."));
+  }
+}
+
+// ── E2E key management ──────────────────────────────────────────────
+// Note: getPeerPublicKey/getKeyBackup deliberately return null on a non-ok
+// response instead of throwing, unlike this file's other endpoints — "no key
+// registered" / "no backup yet" are expected states on the plaintext-fallback
+// and first-time-setup paths, not error conditions callers need to try/catch.
+
+export async function registerPublicKey(tunnelUrl: string, token: string, publicKeyJwk: string): Promise<void> {
+  await fetch(`${tunnelUrl}/api/keys`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ publicKeyJwk }),
+  });
+}
+
+export async function getPeerPublicKey(tunnelUrl: string, token: string, userId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${tunnelUrl}/api/keys/${encodeURIComponent(userId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const { publicKeyJwk } = await res.json();
+    return publicKeyJwk ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export type KeyBackupPayload = { encrypted_payload: string; salt: string; iv: string };
+
+export async function storeKeyBackup(tunnelUrl: string, token: string, backup: KeyBackupPayload): Promise<boolean> {
+  const res = await fetch(`${tunnelUrl}/api/keys/backup`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(backup),
+  });
+  return res.ok;
+}
+
+export async function getKeyBackup(tunnelUrl: string, token: string): Promise<KeyBackupPayload | null> {
+  try {
+    const res = await fetch(`${tunnelUrl}/api/keys/backup`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as KeyBackupPayload;
+  } catch {
+    return null;
+  }
+}
+
+// ── Notes ────────────────────────────────────────────────────────────
+// Plain REST here, same as messages: this file never touches crypto.
+// body_plain in/out of these calls is already ciphertext by the time it
+// gets here (or gets there) — see lib/crypto/e2e-context.tsx's
+// encryptNote/decryptNote, the layer that wraps these for screens.
+
+export async function listNotes(tunnelUrl: string, token: string, archived = false): Promise<HubNote[]> {
+  const res = await fetch(`${tunnelUrl}/api/notes${archived ? '?archived=true' : ''}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load notes."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.notes) ? data.notes : [];
+}
+
+export async function getNote(tunnelUrl: string, token: string, noteId: string): Promise<HubNote> {
+  const res = await fetch(`${tunnelUrl}/api/notes/${encodeURIComponent(noteId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this note."));
+  }
+  return res.json();
+}
+
+export async function createNote(
+  tunnelUrl: string,
+  token: string,
+  data: { title?: string; body_plain?: string; body_rich?: object | null }
+): Promise<HubNote> {
+  const res = await fetch(`${tunnelUrl}/api/notes`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't create that note."));
+  }
+  return res.json();
+}
+
+export async function updateNote(
+  tunnelUrl: string,
+  token: string,
+  noteId: string,
+  patch: Partial<
+    Pick<
+      HubNote,
+      | 'title'
+      | 'body_plain'
+      | 'body_rich'
+      | 'web_body_plain'
+      | 'web_body_rich'
+      | 'is_pinned'
+      | 'is_archived'
+      | 'is_public'
+      | 'is_web_public'
+      | 'is_blog_published'
+    >
+  >
+): Promise<HubNote> {
+  const res = await fetch(`${tunnelUrl}/api/notes/${encodeURIComponent(noteId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't save that note."));
+  }
+  return res.json();
+}
+
+export async function deleteNote(tunnelUrl: string, token: string, noteId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/notes/${encodeURIComponent(noteId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete that note."));
+  }
+}
+
+// ── Atlas pins ───────────────────────────────────────────────────────
+
+export async function listAtlasPins(tunnelUrl: string, token: string): Promise<AtlasPin[]> {
+  const res = await fetch(`${tunnelUrl}/api/atlas/pins`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load the atlas."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.pins) ? data.pins : [];
+}
+
+export async function createAtlasPin(
+  tunnelUrl: string,
+  token: string,
+  data: {
+    latitude: number;
+    longitude: number;
+    title: string;
+    description?: string;
+    category: AtlasPinCategory;
+    image_file_name?: string | null;
+  }
+): Promise<AtlasPin> {
+  const res = await fetch(`${tunnelUrl}/api/atlas/pins`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't drop that pin."));
+  }
+  return res.json();
+}
+
+// latitude/longitude are deliberately not editable — the real server route
+// doesn't accept them either (moving a pin isn't supported, only its content).
+export async function updateAtlasPin(
+  tunnelUrl: string,
+  token: string,
+  pinId: string,
+  data: { title: string; description?: string; category: AtlasPinCategory; image_file_name?: string | null }
+): Promise<AtlasPin> {
+  const res = await fetch(`${tunnelUrl}/api/atlas/pins/${encodeURIComponent(pinId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that pin."));
+  }
+  return res.json();
+}
+
+export async function deleteAtlasPin(tunnelUrl: string, token: string, pinId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/atlas/pins/${encodeURIComponent(pinId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that pin."));
+  }
+}
+
+export type UploadedFile = { file_id: string; file_name: string; size_bytes: number; mime_type: string };
+
+// POST /api/files — the one general-purpose upload route in citinet's real
+// server (streams to MinIO via busboy on their end; a plain multipart
+// FormData body here is all fetch needs, RN sets the boundary/Content-Type
+// itself from a { uri, name, type } part). `isPublic` gates whether the file
+// is downloadable without a token at all — false here, since Atlas has no
+// public/no-auth surface to justify that (unlike, say, an avatar).
+export async function uploadFile(
+  tunnelUrl: string,
+  token: string,
+  file: { uri: string; name: string; type: string },
+  isPublic = false
+): Promise<UploadedFile> {
+  const form = new FormData();
+  // RN's FormData accepts this { uri, name, type } shape directly; it isn't
+  // a real Blob/File, but fetch on RN knows how to stream it from the uri.
+  form.append('file', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
+
+  const res = await fetch(`${tunnelUrl}/api/files?is_public=${isPublic}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't upload that photo."));
+  }
+  const uploaded = await res.json();
+  // size_bytes comes back as a string (Postgres BIGINT) — see listFiles()'s
+  // comment for why this needs normalizing rather than trusted as a number.
+  return { ...uploaded, size_bytes: Number(uploaded.size_bytes) || 0 };
+}
+
+// Same POST /api/files?is_public=<bool> route as uploadFile() above, but via
+// XMLHttpRequest instead of fetch — RN's fetch has no upload-progress event,
+// while XHR's upload.onprogress does, and citinet web's own uploadFile() takes
+// a progressCallback for exactly this reason (its upload UI shows a real
+// percentage, not a spinner). Only app/files/upload.tsx needs this; every
+// other uploader in this app (Atlas/Marketplace/event photos) keeps using the
+// simpler uploadFile() above since none of them show a progress bar.
+export function uploadFileWithProgress(
+  tunnelUrl: string,
+  token: string,
+  file: { uri: string; name: string; type: string },
+  isPublic: boolean,
+  onProgress: (percent: number) => void
+): Promise<UploadedFile> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${tunnelUrl}/api/files?is_public=${isPublic}`);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const uploaded = JSON.parse(xhr.responseText);
+          // size_bytes comes back as a string (Postgres BIGINT) — see
+          // listFiles()'s comment for why this needs normalizing.
+          resolve({ ...uploaded, size_bytes: Number(uploaded.size_bytes) || 0 });
+        } catch {
+          reject(new Error("Couldn't upload that file."));
+        }
+      } else {
+        let message = "Couldn't upload that file.";
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (typeof body?.error === 'string') message = body.error;
+        } catch {
+          // response wasn't JSON — fall through to the generic message
+        }
+        reject(new Error(message));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Couldn't reach this hub. Check that it's online and try again."));
+    const form = new FormData();
+    form.append('file', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
+    xhr.send(form);
+  });
+}
+
+// Public endpoint, no auth header needed — safe to use directly as an <Image> uri.
+export function getAvatarUrl(tunnelUrl: string, userId: string): string {
+  return `${tunnelUrl}/api/auth/avatar/${encodeURIComponent(userId)}`;
+}
+
+// fileName -> in-flight/resolved download URL, so simultaneous requests for the
+// same file (e.g. shown in both the feed and post detail) share one token request.
+const mediaUrlCache = new Map<string, Promise<string>>();
+
+export function getMediaUrl(tunnelUrl: string, token: string, fileName: string): Promise<string> {
+  const cacheKey = `${tunnelUrl}::${fileName}`;
+  const cached = mediaUrlCache.get(cacheKey);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    const res = await fetch(`${tunnelUrl}/api/files/${encodeURIComponent(fileName)}/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      throw new Error(await readErrorMessage(res, "Couldn't load media."));
+    }
+    const { token: dlToken } = await res.json();
+    return `${tunnelUrl}/api/files/${encodeURIComponent(fileName)}/download?token=${dlToken}`;
+  })();
+
+  mediaUrlCache.set(cacheKey, promise);
+  promise.catch(() => mediaUrlCache.delete(cacheKey));
+  return promise;
+}
+
+// ── Files ────────────────────────────────────────────────────────────────
+// Own files plus every other member's is_public files — GET /api/files'
+// real WHERE clause is `owner_id = $1 OR is_public = true` (confirmed
+// directly against api/server.js), so there's no separate "browse the whole
+// hub's private files" mode to build; the server already scopes this
+// correctly and app/files/index.tsx's "All files" filter is just this list
+// unfiltered.
+
+export async function listFiles(tunnelUrl: string, token: string): Promise<HubFile[]> {
+  const res = await fetch(`${tunnelUrl}/api/files`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load files."));
+  }
+  const data = await res.json();
+  const raw: HubFile[] = Array.isArray(data.files) ? data.files : [];
+  // hub_files.size_bytes is a Postgres BIGINT, which node-postgres deserializes
+  // as a JS string (not a number) to avoid precision loss — the real wire
+  // value here is "442912", not 442912. Left as-is, `reduce((sum, f) => sum +
+  // f.size_bytes)` silently does string concatenation instead of addition
+  // (0 + "442912" coerces to string), producing one huge digit-string across
+  // every file that overflows to Infinity the moment anything divides it —
+  // exactly what showed up as "∞ TB" on the Storage screen. Normalized once
+  // here, at the API boundary, same as normalizeMember() does for member
+  // fields, so every downstream consumer can trust size_bytes is a real number.
+  return raw.map((f) => ({ ...f, size_bytes: Number(f.size_bytes) || 0 }));
+}
+
+export async function deleteFile(tunnelUrl: string, token: string, fileName: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/files/${encodeURIComponent(fileName)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete that file."));
+  }
+}
+
+// The real route only accepts is_public at upload time (POST /api/files'
+// own INSERT always writes web_public: false) — reaching the "web" tier
+// from the Upload screen means uploading private-or-hub, then calling this
+// once more with 'web'. Server returns { success: true }, not the updated
+// file, so callers recompute is_public/web_public locally from the tier.
+export async function setFileVisibility(
+  tunnelUrl: string,
+  token: string,
+  fileName: string,
+  visibility: FileVisibility
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/files/${encodeURIComponent(fileName)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that file's visibility."));
+  }
+}
+
+// ── Marketplace ─────────────────────────────────────────────────────────
+
+export async function listMarketplaceListings(
+  tunnelUrl: string,
+  token: string,
+  category?: string
+): Promise<MarketplaceListing[]> {
+  const q = category && category !== 'All' ? `?category=${encodeURIComponent(category)}` : '';
+  const res = await fetch(`${tunnelUrl}/api/marketplace/listings${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load the marketplace."));
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+// All vendors, each with a server-computed listing_count — used for the
+// "Community vendors" strip (top 3 by count) and the admin stats panel.
+export async function listVendors(tunnelUrl: string, token: string): Promise<MarketplaceVendor[]> {
+  const res = await fetch(`${tunnelUrl}/api/vendors`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load vendors."));
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+// 404 means "no vendor page yet," not an error — every caller treats null as
+// "you need to create one before you can post a listing," matching the real
+// server's own gate on POST /api/marketplace/listings.
+export async function getMyVendor(tunnelUrl: string, token: string): Promise<MarketplaceVendor | null> {
+  const res = await fetch(`${tunnelUrl}/api/vendors/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load your vendor page."));
+  }
+  return res.json();
+}
+
+export async function getVendor(
+  tunnelUrl: string,
+  token: string,
+  vendorId: string
+): Promise<{ vendor: MarketplaceVendor; listings: MarketplaceListing[] }> {
+  const res = await fetch(`${tunnelUrl}/api/vendors/${encodeURIComponent(vendorId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this vendor."));
+  }
+  return res.json();
+}
+
+export type VendorInput = {
+  name: string;
+  description?: string;
+  category?: string;
+  logo_file_name?: string | null;
+  banner_mode?: 'image' | 'solid' | 'gradient' | null;
+  banner_image_file_name?: string | null;
+  banner_color?: string | null;
+  banner_gradient_from?: string | null;
+  banner_gradient_to?: string | null;
+  contact_email?: string;
+  contact_phone?: string;
+  website?: string;
+  hours?: string;
+};
+
+export async function createVendor(tunnelUrl: string, token: string, data: VendorInput): Promise<MarketplaceVendor> {
+  const res = await fetch(`${tunnelUrl}/api/vendors`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't create your vendor page."));
+  }
+  return res.json();
+}
+
+export async function updateVendor(
+  tunnelUrl: string,
+  token: string,
+  data: Partial<VendorInput> & { web_public?: boolean }
+): Promise<MarketplaceVendor> {
+  const res = await fetch(`${tunnelUrl}/api/vendors/me`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update your vendor page."));
+  }
+  return res.json();
+}
+
+export type ListingInput = {
+  title: string;
+  description?: string;
+  price?: number | null;
+  price_type?: ListingPriceType;
+  category?: string;
+  image_file_name?: string | null;
+  condition?: string | null;
+  is_active?: boolean;
+};
+
+// 403s server-side if the caller has no vendor page yet — callers should
+// check getMyVendor() first and route to vendor creation instead of relying
+// on this to fail (see app/marketplace/editor.tsx).
+export async function createListing(tunnelUrl: string, token: string, data: ListingInput): Promise<MarketplaceListing> {
+  const res = await fetch(`${tunnelUrl}/api/marketplace/listings`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post that listing."));
+  }
+  return res.json();
+}
+
+export async function updateListing(
+  tunnelUrl: string,
+  token: string,
+  listingId: string,
+  data: Partial<ListingInput>
+): Promise<MarketplaceListing> {
+  const res = await fetch(`${tunnelUrl}/api/marketplace/listings/${encodeURIComponent(listingId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that listing."));
+  }
+  return res.json();
+}
+
+export async function deleteListing(tunnelUrl: string, token: string, listingId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/marketplace/listings/${encodeURIComponent(listingId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that listing."));
+  }
+}
+
+export async function getMarketplaceBannerConfig(tunnelUrl: string, token: string): Promise<MarketplaceBannerConfig> {
+  const res = await fetch(`${tunnelUrl}/api/marketplace-config`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load the marketplace banner."));
+  }
+  return res.json();
+}
+
+// Admin-only server-side (403 for non-admins) — gate the UI entry point on
+// session.isAdmin too, same convention as app/(tabs)/profile.tsx's admin row.
+export async function updateMarketplaceBannerConfig(
+  tunnelUrl: string,
+  token: string,
+  config: Partial<MarketplaceBannerConfig>
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/marketplace-config`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't save the banner."));
+  }
+}

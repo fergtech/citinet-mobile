@@ -1,98 +1,410 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { router, useFocusEffect, type Href } from 'expo-router';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useScrollToTop } from '@react-navigation/native';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
+import { FeaturedCarousel } from '@/components/featured-carousel';
+import { fileVisibilityMeta } from '@/components/files/file-row';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { PostRow } from '@/components/post-row';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { Brand } from '@/constants/theme';
+import { getFeatured, getPosts, getUpcomingEvents, listAtlasPins, listFiles, toggleLike, toggleRsvp, votePoll } from '@/lib/api/hubService';
+import { AtlasPin, FeaturedItem, HubFile, HubPost } from '@/lib/api/types';
+import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
+import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
+import { useHubCenter } from '@/lib/atlas/hub-center';
+import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
+import { useSession } from '@/lib/session/session-context';
+import { isPastEvent } from '@/lib/ui/format-event';
+import { applyVote } from '@/lib/ui/poll';
+import { timeAgo } from '@/lib/ui/time-ago';
+
+// Each Home section is a bounded preview with a "View more" link to its own
+// full screen, not an inline expand — keeps the dashboard glanceable and keeps
+// later sections reachable no matter how much content an earlier one has.
+function LatestAtlasRow({ pin, meters }: { pin: AtlasPin; meters: number | null }) {
+  const meta = ATLAS_CATEGORIES[pin.category];
+
+  return (
+    <Pressable
+      style={styles.atlasLatestRow}
+      onPress={() => router.push({ pathname: '/atlas/[id]', params: { id: pin.id } })}>
+      <View style={[styles.atlasLatestIcon, { backgroundColor: meta.color }]}>
+        <IconSymbol name={meta.icon} size={20} color="#fff" />
+      </View>
+      <View style={styles.atlasLatestContent}>
+        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
+          {pin.title}
+        </ThemedText>
+        <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
+          {meta.label} · {timeAgo(pin.created_at)}
+          {meters !== null ? ` · ${formatDistanceMiles(meters)}` : ''}
+        </ThemedText>
+        {!!pin.description?.trim() && (
+          <ThemedText style={styles.atlasLatestDescription} numberOfLines={3}>
+            {pin.description}
+          </ThemedText>
+        )}
+      </View>
+    </Pressable>
+  );
+}
+
+// The single latest file visible beyond just its owner — is_public (hub) or
+// web_public (anyone with the link) — mirrors LatestAtlasRow above: a
+// minimal, non-interactive preview row (no star toggle, that's Files' own
+// list's job) that just proves this feature is alive from Home too.
+function LatestFileRow({ file }: { file: HubFile }) {
+  const kind = fileKind(file.file_name, file.mime_type);
+  const meta = FILE_KIND_META[kind];
+  const vis = fileVisibilityMeta(file);
+
+  return (
+    <Pressable
+      style={styles.atlasLatestRow}
+      onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}>
+      <View style={[styles.atlasLatestIcon, { backgroundColor: meta.color }]}>
+        <IconSymbol name={meta.icon} size={20} color="#fff" />
+      </View>
+      <View style={styles.atlasLatestContent}>
+        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={1}>
+          {file.file_name}
+        </ThemedText>
+        <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
+          {vis.label} · {formatBytes(file.size_bytes)} · {timeAgo(file.uploaded_at)}
+        </ThemedText>
+      </View>
+    </Pressable>
+  );
+}
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const { session } = useSession();
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
+  const hubCenter = useHubCenter();
+  const [posts, setPosts] = useState<HubPost[]>([]);
+  const [events, setEvents] = useState<HubPost[]>([]);
+  const [featured, setFeatured] = useState<FeaturedItem[]>([]);
+  const [atlasPins, setAtlasPins] = useState<AtlasPin[]>([]);
+  const [files, setFiles] = useState<HubFile[]>([]);
+  // Dismissing a featured card only clears it for this session (plain component
+  // state, never persisted) — it comes back next time the user signs in.
+  const [dismissedFeaturedIds, setDismissedFeaturedIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    if (!session) return;
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      getPosts(session.hub.tunnelUrl, session.token),
+      getUpcomingEvents(session.hub.tunnelUrl, session.token),
+      getFeatured(session.hub.tunnelUrl, session.token),
+      listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
+      listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
+    ])
+      .then(([nextPosts, nextEvents, nextFeatured, nextPins, nextFiles]) => {
+        setPosts(nextPosts);
+        setEvents(nextEvents);
+        setFeatured(nextFeatured);
+        setAtlasPins(nextPins);
+        setFiles(nextFiles);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
+      .finally(() => setLoading(false));
+  }, [session]);
+
+  // Focus-based, not mount-only: a like/reply/save made on Post Detail, Feed,
+  // Events, or Atlas doesn't touch Home's own state (each screen fetches its
+  // own copy), so without this, coming back to Home kept showing whatever was
+  // true when it first mounted until a manual pull-to-refresh. Every tab
+  // screen in this app follows the same rule now — see Messages/Discover for
+  // the same fix, and the project memory entry on this whole pass.
+  useFocusEffect(load);
+
+  // Re-tapping the Home tab while already on it scrolls back to the top.
+  const scrollRef = useRef<ScrollView>(null);
+  useScrollToTop(scrollRef);
+
+  // Only iOS's tab bar floats over content (see app/(tabs)/_layout.tsx) —
+  // compensate so the last section doesn't end up hidden behind the glass.
+  const tabBarHeight = useBottomTabBarHeight();
+  const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
+
+  function handleToggleLike(post: HubPost) {
+    if (!session) return;
+    const wasLiked = post.my_liked;
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === post.id ? { ...p, my_liked: !wasLiked, like_count: p.like_count + (wasLiked ? -1 : 1) } : p
+      )
+    );
+    toggleLike(session.hub.tunnelUrl, session.token, post.id).catch(() => {
+      setPosts((prev) =>
+        prev.map((p) => (p.id === post.id ? { ...p, my_liked: wasLiked, like_count: post.like_count } : p))
+      );
+    });
+  }
+
+  function handleDismissFeatured(id: string) {
+    setDismissedFeaturedIds((prev) => new Set(prev).add(id));
+  }
+
+  const nearestPins = useMemo(() => {
+    return [...atlasPins]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [atlasPins]);
+
+  const latestPin = nearestPins[0] ?? null;
+
+  // Home only surfaces a file everyone (or anyone with the link) can actually
+  // see — a private file only its owner can open would be a dead-end tease
+  // for every other neighbor looking at Home. listFiles() already scopes the
+  // response to "mine + is_public" (see hubService), so this only needs to
+  // additionally require is_public/web_public to exclude the caller's own
+  // still-private uploads.
+  const latestPublicFile = useMemo(() => {
+    const visible = files.filter((f) => f.is_public || f.web_public);
+    return [...visible].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime())[0] ?? null;
+  }, [files]);
+
+  const latestPost = useMemo(
+    () => [...posts].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null,
+    [posts]
+  );
+
+  const featuredEvent = useMemo(() => {
+    const upcoming = events
+      .filter((event) => event.event_date && !isPastEvent(event.event_date))
+      .sort((a, b) => new Date(a.event_date!).getTime() - new Date(b.event_date!).getTime());
+    if (upcoming.length > 0) return upcoming[0];
+
+    const upcomingIds = new Set(events.map((event) => event.id));
+    return posts
+      .filter((post) => post.category === 'EVENT' && post.event_date && !upcomingIds.has(post.id))
+      .sort((a, b) => new Date(b.event_date!).getTime() - new Date(a.event_date!).getTime())[0] ?? null;
+  }, [events, posts]);
+
+  function handleVotePoll(post: HubPost, optionIndex: number) {
+    if (!session) return;
+    const previousPoll = post.poll;
+    setPosts((prev) => prev.map((item) => (item.id === post.id ? applyVote(item, optionIndex) : item)));
+    votePoll(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
+      setPosts((prev) => prev.map((item) => (item.id === post.id ? { ...item, poll: previousPoll } : item)));
+    });
+  }
+
+  // featuredEvent is derived (useMemo) from posts/events, not its own state
+  // — updating both source lists here is what makes the memo recompute with
+  // the new my_rsvp/rsvp_count, same "apply everywhere it could be" pattern
+  // app/events.tsx uses for its own upcoming/past split.
+  function handleToggleRsvp(event: HubPost) {
+    if (!session) return;
+    const wasGoing = event.my_rsvp;
+    const apply = (list: HubPost[]) =>
+      list.map((e) => (e.id === event.id ? { ...e, my_rsvp: !wasGoing, rsvp_count: e.rsvp_count + (wasGoing ? -1 : 1) } : e));
+    setPosts(apply);
+    setEvents(apply);
+    toggleRsvp(session.hub.tunnelUrl, session.token, event.id).catch(() => {
+      const rollback = (list: HubPost[]) =>
+        list.map((e) => (e.id === event.id ? { ...e, my_rsvp: wasGoing, rsvp_count: event.rsvp_count } : e));
+      setPosts(rollback);
+      setEvents(rollback);
+    });
+  }
+
+  if (!session) return null;
+
+  const visibleFeatured = featured.filter((item) => !dismissedFeaturedIds.has(item.id));
+
+  return (
+    <ThemedView style={styles.container}>
+      <View style={styles.header}>
+        <ThemedText type="title" style={styles.headerTitle}>
+          {session.hub.name}
         </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      </View>
+
+      {loading && <ActivityIndicator style={styles.spinner} />}
+      {error && <ThemedText style={styles.error}>{error}</ThemedText>}
+
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={{ paddingBottom: 24 + extraBottomInset }}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
+        <FeaturedCarousel
+          items={visibleFeatured}
+          tunnelUrl={session.hub.tunnelUrl}
+          token={session.token}
+          onDismiss={handleDismissFeatured}
+        />
+
+        {featuredEvent && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <ThemedText style={styles.sectionLabel}>Events</ThemedText>
+              <Pressable onPress={() => router.push('/events')}>
+                <ThemedText style={[styles.seeAll, { color: Brand }]}>View all</ThemedText>
+              </Pressable>
+            </View>
+            <PostRow
+              post={featuredEvent}
+              tunnelUrl={session.hub.tunnelUrl}
+              token={session.token}
+              onToggleLike={handleToggleLike}
+              onVotePoll={handleVotePoll}
+              onToggleRsvp={handleToggleRsvp}
+            />
+          </View>
+        )}
+
+        {latestPin && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <ThemedText style={styles.sectionLabel}>From the Atlas</ThemedText>
+              <Pressable onPress={() => router.push('/atlas' as Href)}>
+                <ThemedText style={[styles.seeAll, { color: Brand }]}>See all</ThemedText>
+              </Pressable>
+            </View>
+            <LatestAtlasRow
+              pin={latestPin}
+              meters={hubCenter ? distanceMeters(hubCenter[0], hubCenter[1], latestPin.latitude, latestPin.longitude) : null}
+            />
+          </View>
+        )}
+
+        {latestPublicFile && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <ThemedText style={styles.sectionLabel}>Files</ThemedText>
+              <Pressable onPress={() => router.push('/files' as Href)}>
+                <ThemedText style={[styles.seeAll, { color: Brand }]}>See all</ThemedText>
+              </Pressable>
+            </View>
+            <LatestFileRow file={latestPublicFile} />
+          </View>
+        )}
+
+        <View style={styles.section}>
+          <ThemedText style={styles.sectionLabel}>Discussions</ThemedText>
+          {latestPost && (
+            <PostRow
+              post={latestPost}
+              tunnelUrl={session.hub.tunnelUrl}
+              token={session.token}
+              onToggleLike={handleToggleLike}
+              onVotePoll={handleVotePoll}
+              onToggleRsvp={handleToggleRsvp}
+            />
+          )}
+          {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
+          {posts.length > 1 && (
+            <Pressable onPress={() => router.push('/feed')} style={styles.viewMore}>
+              <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>View more</ThemedText>
+            </Pressable>
+          )}
+        </View>
+
+      </ScrollView>
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
   },
-  stepContainer: {
-    gap: 8,
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 12,
+  },
+  headerTitle: {
+    fontSize: 22,
+  },
+  spinner: {
+    marginTop: 24,
+  },
+  error: {
+    color: '#b0392f',
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  section: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    opacity: 0.6,
+    textTransform: 'uppercase',
     marginBottom: 8,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  seeAll: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  atlasLatestRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginHorizontal: -20,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: '#8884',
+  },
+  atlasLatestIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  atlasLatestContent: {
+    flex: 1,
+    gap: 4,
+  },
+  atlasLatestTitle: {
+    fontSize: 16,
+    lineHeight: 21,
+  },
+  atlasLatestMeta: {
+    opacity: 0.6,
+    fontSize: 12.5,
+  },
+  atlasLatestDescription: {
+    fontSize: 14,
+    lineHeight: 19,
+    opacity: 0.8,
+  },
+  rowMeta: {
+    opacity: 0.6,
+    fontSize: 13,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 12,
+  },
+  viewMore: {
+    paddingVertical: 14,
+  },
+  viewMoreLabel: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
