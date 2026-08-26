@@ -1,13 +1,12 @@
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
 
 import { AuthBackground } from '@/components/auth-background';
 import { BrandGradient } from '@/components/brand-gradient';
-import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getHubInfo } from '@/lib/api/hubService';
