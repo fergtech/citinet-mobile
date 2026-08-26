@@ -30,28 +30,38 @@ type Props = {
   onToggleLike: (post: HubPost) => void;
   onVotePoll: (post: HubPost, optionIndex: number) => void;
   onToggleRsvp: (post: HubPost) => void;
+  // Experiment (Home's Events section, for now): drops the avatar+name
+  // header entirely and moves attribution to a small "@username · time"
+  // byline near the bottom, above the RSVP/like/comment row — mirrors how
+  // FeaturedCarousel already attributes its cards. Opt-in so every other
+  // PostRow usage (Discussions, Feed, the standalone Events screen) keeps
+  // the current header treatment until/unless this lands well enough to
+  // extend further.
+  compactAuthor?: boolean;
 };
 
-export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp }: Props) {
+export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp, compactAuthor }: Props) {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
 
+  function handleAuthorPress(e: { stopPropagation: () => void }) {
+    e.stopPropagation();
+    if (session) goToProfile(post.author_id, session.userId);
+  }
+
   return (
     <Pressable style={styles.row} onPress={() => router.push({ pathname: '/post/[id]', params: { id: post.id } })}>
-      <Pressable
-        style={styles.header}
-        onPress={(e) => {
-          e.stopPropagation();
-          if (session) goToProfile(post.author_id, session.userId);
-        }}>
-        <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={36} />
-        <View style={styles.headerText}>
-          <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
-          <ThemedText style={styles.meta}>
-            {post.category.charAt(0) + post.category.slice(1).toLowerCase()} · {timeAgo(post.created_at)}
-          </ThemedText>
-        </View>
-      </Pressable>
+      {!compactAuthor && (
+        <Pressable style={styles.header} onPress={handleAuthorPress}>
+          <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={36} />
+          <View style={styles.headerText}>
+            <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
+            <ThemedText style={styles.meta}>
+              {post.category.charAt(0) + post.category.slice(1).toLowerCase()} · {timeAgo(post.created_at)}
+            </ThemedText>
+          </View>
+        </Pressable>
+      )}
       {post.category === 'EVENT' && post.event_date && (
         <View style={styles.eventLine}>
           <IconSymbol name="calendar" size={13} color={Brand} />
@@ -78,6 +88,13 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
       {post.category === 'POLL' && post.poll && <PollCard post={post} onVote={onVotePoll} />}
       {post.category === 'EVENT' && post.event_location && (
         <EventAtlasLink location={post.event_location} eventTitle={post.title} eventId={post.id} />
+      )}
+      {compactAuthor && (
+        <Pressable onPress={handleAuthorPress} hitSlop={6} style={styles.compactAuthorWrap}>
+          <ThemedText style={styles.compactAuthor}>
+            @{post.author_username ?? 'citinet'} · {timeAgo(post.created_at)}
+          </ThemedText>
+        </Pressable>
       )}
       {post.category === 'EVENT' && <EventRsvpButton post={post} onToggle={onToggleRsvp} />}
       <View style={styles.footer}>
@@ -139,6 +156,13 @@ const styles = StyleSheet.create({
   },
   mediaWrap: {
     marginTop: 4,
+  },
+  compactAuthorWrap: {
+    alignSelf: 'flex-start',
+  },
+  compactAuthor: {
+    fontSize: 12.5,
+    opacity: 0.6,
   },
   footer: {
     flexDirection: 'row',

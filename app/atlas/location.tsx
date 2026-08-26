@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 
 import { LeafletMap } from '@/components/atlas/leaflet-map';
@@ -153,121 +153,132 @@ export default function LocationPreviewScreen() {
   return (
     <ThemedView style={styles.flex}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
-          <IconSymbol name="chevron.left" size={24} color={Colors[colorScheme].text} />
-        </Pressable>
-        <ThemedText type="defaultSemiBold" style={styles.title}>
-          Location
-        </ThemedText>
-        <View style={{ width: 24 }} />
-      </View>
-
-      {resolving ? (
-        <ActivityIndicator style={styles.spinner} />
-      ) : (
-        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-          {actionError && <ThemedText style={styles.error}>{actionError}</ThemedText>}
-
-          <View style={styles.banner}>
-            {coords ? (
-              <>
-                <LeafletMap pins={[]} center={coords} zoom={16} style={StyleSheet.absoluteFill} />
-                {/* Decorative close-up, not an interactive map — same
-                    reasoning as Pin Detail's own map-fallback banner: a
-                    WebView inside a ScrollView will fight the outer scroll
-                    gesture unless taps/drags are captured here instead of
-                    reaching it. */}
-                <View style={StyleSheet.absoluteFill} />
-              </>
-            ) : (
-              <View style={[StyleSheet.absoluteFill, styles.bannerFallback]}>
-                <IconSymbol name="mappin.and.ellipse" size={26} color={Colors[colorScheme].icon} />
-                <ThemedText style={styles.bannerFallbackLabel}>Location not found nearby</ThemedText>
-              </View>
-            )}
-          </View>
-
-          <ThemedText type="title" style={styles.pinTitle}>
-            {displayTitle}
+          <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
+            <IconSymbol name="chevron.left" size={24} color={Colors[colorScheme].text} />
+          </Pressable>
+          <ThemedText type="defaultSemiBold" style={styles.title}>
+            Location
           </ThemedText>
-          {displaySubtitle && <ThemedText style={styles.subMeta}>{displaySubtitle}</ThemedText>}
+          <View style={{ width: 24 }} />
+        </View>
 
-          {!!eventId && (
-            <Pressable
-              style={styles.eventBackLink}
-              onPress={() => router.push({ pathname: '/post/[id]', params: { id: eventId } })}>
-              <IconSymbol name="calendar" size={14} color={Brand} />
-              <ThemedText style={[styles.eventBackLinkLabel, { color: Brand }]}>View the event post</ThemedText>
-            </Pressable>
-          )}
+        {resolving ? (
+          <ActivityIndicator style={styles.spinner} />
+        ) : (
+          // keyboardShouldPersistTaps="handled" below (needed so a suggestion
+          // row's own tap still works while the keyboard is up) suppresses the
+          // ScrollView's normal tap-elsewhere-dismisses-keyboard default, so
+          // this Pressable puts that back explicitly — same pattern as
+          // files/index, atlas/index, marketplace/index, notes/index.
+          <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+          <ScrollView
+            contentContainerStyle={styles.body}
+            keyboardShouldPersistTaps="handled"
+            automaticallyAdjustKeyboardInsets
+            contentInsetAdjustmentBehavior="automatic">
+            {actionError && <ThemedText style={styles.error}>{actionError}</ThemedText>}
 
-          <View style={styles.actions}>
-            <Pressable style={[styles.actionButton, !coords && styles.actionButtonDisabled]} disabled={!coords} onPress={handleDirections}>
-              <IconSymbol name="arrow.triangle.turn.up.right.diamond.fill" size={17} color={Colors[colorScheme].text} />
-              <ThemedText style={styles.actionLabel}>Directions</ThemedText>
-            </Pressable>
-            <Pressable style={[styles.actionButton, !coords && styles.actionButtonDisabled]} disabled={!coords} onPress={handleShare}>
-              <IconSymbol name="square.and.arrow.up" size={17} color={Colors[colorScheme].text} />
-              <ThemedText style={styles.actionLabel}>Share</ThemedText>
-            </Pressable>
-          </View>
-
-          {notFound && (
-            <View style={styles.recovery}>
-              <ThemedText style={styles.recoveryHint}>
-                We couldn&apos;t automatically place this near the hub. Search for the real spot below.
-              </ThemedText>
-              <View style={styles.searchRow}>
-                <IconSymbol name="magnifyingglass" size={17} color={Colors[colorScheme].icon} />
-                <TextInput
-                  value={manualQuery}
-                  onChangeText={setManualQuery}
-                  onSubmitEditing={handleSubmitManualSearch}
-                  onFocus={() => setShowSuggestions(suggestions.length > 0)}
-                  returnKeyType="search"
-                  placeholder="Search for this place"
-                  placeholderTextColor={Colors[colorScheme].icon}
-                  style={[styles.searchInput, { color: Colors[colorScheme].text }]}
-                />
-              </View>
-              {showSuggestions && (
-                <View style={styles.suggestionsBox}>
-                  {suggestions.map((result) => (
-                    <Pressable key={result.place_id} style={styles.suggestionRow} onPress={() => selectSuggestion(result)}>
-                      <IconSymbol name="mappin.and.ellipse" size={15} color={Colors[colorScheme].icon} />
-                      <View style={styles.suggestionText}>
-                        <ThemedText numberOfLines={1} type="defaultSemiBold" style={styles.suggestionTitle}>
-                          {shortLabel(result)}
-                        </ThemedText>
-                        <ThemedText numberOfLines={1} style={styles.suggestionSubtitle}>
-                          {result.display_name}
-                        </ThemedText>
-                      </View>
-                    </Pressable>
-                  ))}
+            <View style={styles.banner}>
+              {coords ? (
+                <>
+                  <LeafletMap pins={[]} center={coords} zoom={16} style={StyleSheet.absoluteFill} />
+                  {/* Decorative close-up, not an interactive map — same
+                      reasoning as Pin Detail's own map-fallback banner: a
+                      WebView inside a ScrollView will fight the outer scroll
+                      gesture unless taps/drags are captured here instead of
+                      reaching it. */}
+                  <View style={StyleSheet.absoluteFill} />
+                </>
+              ) : (
+                <View style={[StyleSheet.absoluteFill, styles.bannerFallback]}>
+                  <IconSymbol name="mappin.and.ellipse" size={26} color={Colors[colorScheme].icon} />
+                  <ThemedText style={styles.bannerFallbackLabel}>Location not found nearby</ThemedText>
                 </View>
               )}
             </View>
-          )}
 
-          <Pressable style={styles.createPinButton} onPress={handleCreatePin}>
-            <IconSymbol name="plus" size={16} color="#fff" />
-            <ThemedText style={styles.createPinLabel} lightColor="#fff" darkColor="#fff">
-              Add this to the Atlas
+            <ThemedText type="title" style={styles.pinTitle}>
+              {displayTitle}
             </ThemedText>
-          </Pressable>
-          <ThemedText style={styles.createPinHint}>
-            {coords
-              ? "This isn't a saved pin yet — add it so neighbors can find it here too."
-              : "Drop it on the map yourself in the editor — we just couldn't place it automatically."}
-          </ThemedText>
+            {displaySubtitle && <ThemedText style={styles.subMeta}>{displaySubtitle}</ThemedText>}
 
-          <Pressable onPress={() => router.push('/atlas' as Href)} style={styles.viewMapLink}>
-            <ThemedText style={[styles.viewMapLinkLabel, { color: Brand }]}>View full Atlas map</ThemedText>
+            {!!eventId && (
+              <Pressable
+                style={styles.eventBackLink}
+                onPress={() => router.push({ pathname: '/post/[id]', params: { id: eventId } })}>
+                <IconSymbol name="calendar" size={14} color={Brand} />
+                <ThemedText style={[styles.eventBackLinkLabel, { color: Brand }]}>View the event post</ThemedText>
+              </Pressable>
+            )}
+
+            <View style={styles.actions}>
+              <Pressable style={[styles.actionButton, !coords && styles.actionButtonDisabled]} disabled={!coords} onPress={handleDirections}>
+                <IconSymbol name="arrow.triangle.turn.up.right.diamond.fill" size={17} color={Colors[colorScheme].text} />
+                <ThemedText style={styles.actionLabel}>Directions</ThemedText>
+              </Pressable>
+              <Pressable style={[styles.actionButton, !coords && styles.actionButtonDisabled]} disabled={!coords} onPress={handleShare}>
+                <IconSymbol name="square.and.arrow.up" size={17} color={Colors[colorScheme].text} />
+                <ThemedText style={styles.actionLabel}>Share</ThemedText>
+              </Pressable>
+            </View>
+
+            {notFound && (
+              <View style={styles.recovery}>
+                <ThemedText style={styles.recoveryHint}>
+                  We couldn&apos;t automatically place this near the hub. Search for the real spot below.
+                </ThemedText>
+                <View style={styles.searchRow}>
+                  <IconSymbol name="magnifyingglass" size={17} color={Colors[colorScheme].icon} />
+                  <TextInput
+                    value={manualQuery}
+                    onChangeText={setManualQuery}
+                    onSubmitEditing={handleSubmitManualSearch}
+                    onFocus={() => setShowSuggestions(suggestions.length > 0)}
+                    returnKeyType="search"
+                    placeholder="Search for this place"
+                    placeholderTextColor={Colors[colorScheme].icon}
+                    style={[styles.searchInput, { color: Colors[colorScheme].text }]}
+                  />
+                </View>
+                {showSuggestions && (
+                  <View style={styles.suggestionsBox}>
+                    {suggestions.map((result) => (
+                      <Pressable key={result.place_id} style={styles.suggestionRow} onPress={() => selectSuggestion(result)}>
+                        <IconSymbol name="mappin.and.ellipse" size={15} color={Colors[colorScheme].icon} />
+                        <View style={styles.suggestionText}>
+                          <ThemedText numberOfLines={1} type="defaultSemiBold" style={styles.suggestionTitle}>
+                            {shortLabel(result)}
+                          </ThemedText>
+                          <ThemedText numberOfLines={1} style={styles.suggestionSubtitle}>
+                            {result.display_name}
+                          </ThemedText>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+
+            <Pressable style={styles.createPinButton} onPress={handleCreatePin}>
+              <IconSymbol name="plus" size={16} color="#fff" />
+              <ThemedText style={styles.createPinLabel} lightColor="#fff" darkColor="#fff">
+                Add this to the Atlas
+              </ThemedText>
+            </Pressable>
+            <ThemedText style={styles.createPinHint}>
+              {coords
+                ? "This isn't a saved pin yet — add it so neighbors can find it here too."
+                : "Drop it on the map yourself in the editor — we just couldn't place it automatically."}
+            </ThemedText>
+
+            <Pressable onPress={() => router.push('/atlas' as Href)} style={styles.viewMapLink}>
+              <ThemedText style={[styles.viewMapLinkLabel, { color: Brand }]}>View full Atlas map</ThemedText>
+            </Pressable>
+          </ScrollView>
           </Pressable>
-        </ScrollView>
-      )}
-    </ThemedView>
+        )}
+      </ThemedView>
   );
 }
 

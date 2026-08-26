@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 
+import { AuthBackground } from '@/components/auth-background';
 import { BrandGradient } from '@/components/brand-gradient';
+import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -10,15 +12,45 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSession } from '@/lib/session/session-context';
 
 export default function LoginScreen() {
-  const { hubId, hubSlug, hubName, tunnelUrl, location } = useLocalSearchParams<{
+  const {
+    hubId,
+    hubSlug,
+    hubName,
+    tunnelUrl,
+    location,
+    hubIconMode,
+    hubIconSymbol,
+    hubIconBgMode,
+    hubIconGradientFrom,
+    hubIconGradientTo,
+    hubIconSolidColor,
+    hubIconImageFileName,
+  } = useLocalSearchParams<{
     hubId: string;
     hubSlug: string;
     hubName: string;
     tunnelUrl: string;
     location: string;
+    hubIconMode: string;
+    hubIconSymbol: string;
+    hubIconBgMode: string;
+    hubIconGradientFrom: string;
+    hubIconGradientTo: string;
+    hubIconSolidColor: string;
+    hubIconImageFileName: string;
   }>();
   const colorScheme = useColorScheme() ?? 'light';
   const { signIn } = useSession();
+
+  const hubIcon = {
+    hub_icon_mode: hubIconMode,
+    hub_icon_symbol: hubIconSymbol,
+    hub_icon_bg_mode: hubIconBgMode,
+    hub_icon_gradient_from: hubIconGradientFrom,
+    hub_icon_gradient_to: hubIconGradientTo,
+    hub_icon_solid_color: hubIconSolidColor,
+    hub_icon_image_file_name: hubIconImageFileName,
+  };
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -39,58 +71,104 @@ export default function LoginScreen() {
   }
 
   return (
-    <ThemedView style={styles.container}>
-      <ThemedText type="title" style={styles.heading}>
-        Log in to {hubName}
-      </ThemedText>
-      <ThemedText style={styles.subheading}>Enter your account for this hub.</ThemedText>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ThemedView style={[styles.container, styles.transparentBg]}>
+        <AuthBackground />
+        {/* Dismisses the keyboard on any tap that isn't itself a touchable
+            (the fields, the button) — there's no ScrollView here to get this
+            for free the way most other screens' default keyboardShouldPersistTaps
+            behavior does. */}
+        <Pressable style={styles.tapToDismiss} onPress={Keyboard.dismiss}>
+      {/* A card, not edge-to-edge, because the content underneath is a moving
+          video, not the app's own themed background — inputs/text need a
+          stable, opaque-enough surface to stay legible over arbitrary footage. */}
+      <View style={[styles.card, { backgroundColor: colorScheme === 'dark' ? 'rgba(21,23,24,0.82)' : 'rgba(255,255,255,0.88)' }]}>
+        <View style={styles.identity}>
+          <HubIcon
+            hub={hubIcon}
+            tunnelUrl={tunnelUrl}
+            size={44}
+            style={styles.hubIcon}
+            fallback={<HubLetterFallback letter={hubName?.charAt(0).toUpperCase() ?? '?'} size={44} />}
+          />
+          <ThemedText type="title" style={[styles.heading, styles.centerText]}>
+            Log in to {hubName}
+          </ThemedText>
+          <ThemedText style={[styles.subheading, styles.centerText]}>Enter your account for this hub.</ThemedText>
+        </View>
 
-      <ThemedText style={styles.label}>Username</ThemedText>
-      <TextInput
-        value={username}
-        onChangeText={setUsername}
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder="username"
-        placeholderTextColor={Colors[colorScheme].icon}
-        style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
-      />
+        <ThemedText style={styles.label}>Username</ThemedText>
+        <TextInput
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder="username"
+          placeholderTextColor={Colors[colorScheme].icon}
+          style={[styles.input, { color: Colors[colorScheme].text }]}
+        />
 
-      <ThemedText style={styles.label}>Password</ThemedText>
-      <TextInput
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-        placeholder="password"
-        placeholderTextColor={Colors[colorScheme].icon}
-        style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
-      />
+        <ThemedText style={styles.label}>Password</ThemedText>
+        <TextInput
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          placeholder="password"
+          placeholderTextColor={Colors[colorScheme].icon}
+          style={[styles.input, { color: Colors[colorScheme].text }]}
+        />
 
-      {error && <ThemedText style={styles.error}>{error}</ThemedText>}
+        {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
-      <Pressable
-        onPress={handleSubmit}
-        disabled={submitting || !username || !password}
-        style={[styles.button, { opacity: submitting || !username || !password ? 0.5 : 1 }]}>
-        <BrandGradient style={styles.buttonFill}>
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <ThemedText style={styles.buttonLabel} lightColor="#fff" darkColor="#fff">
-              Log in
-            </ThemedText>
-          )}
-        </BrandGradient>
-      </Pressable>
-    </ThemedView>
+        <Pressable
+          onPress={handleSubmit}
+          disabled={submitting || !username || !password}
+          style={[styles.button, { opacity: submitting || !username || !password ? 0.5 : 1 }]}>
+          <BrandGradient style={styles.buttonFill}>
+            {submitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <ThemedText style={styles.buttonLabel} lightColor="#fff" darkColor="#fff">
+                Log in
+              </ThemedText>
+            )}
+          </BrandGradient>
+        </Pressable>
+      </View>
+        </Pressable>
+      </ThemedView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     paddingHorizontal: 20,
-    paddingTop: 12,
+  },
+  transparentBg: {
+    backgroundColor: 'transparent',
+  },
+  tapToDismiss: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  card: {
+    borderRadius: 20,
+    padding: 20,
+  },
+  identity: {
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  hubIcon: {
+    marginBottom: 10,
+  },
+  centerText: {
+    textAlign: 'center',
   },
   heading: {
     marginBottom: 4,
@@ -107,7 +185,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    borderWidth: 1,
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,

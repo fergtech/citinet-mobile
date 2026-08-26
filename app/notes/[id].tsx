@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 
@@ -185,8 +185,9 @@ export default function NoteEditorScreen() {
   const vis = VISIBILITY_META[visibility];
 
   return (
-    <ThemedView style={styles.flex}>
-      <View style={styles.header}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ThemedView style={styles.flex}>
+        <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Cancel" accessibilityRole="button">
           <ThemedText style={styles.cancel}>Cancel</ThemedText>
         </Pressable>
@@ -267,8 +268,9 @@ export default function NoteEditorScreen() {
             />
           </View>
         </>
-      )}
-    </ThemedView>
+        )}
+      </ThemedView>
+    </KeyboardAvoidingView>
   );
 }
 

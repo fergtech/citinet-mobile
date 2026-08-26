@@ -1,13 +1,13 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { router, useFocusEffect, type Href } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 
 import { FileRow } from '@/components/files/file-row';
 import { ScreenHeader } from '@/components/screen-header';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Colors } from '@/constants/theme';
+import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { listFiles, listMembers } from '@/lib/api/hubService';
 import { HubFile, HubMember } from '@/lib/api/types';
@@ -25,13 +25,19 @@ export default function FilesListScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
   const { isStarred, toggleStarred } = useStarredFiles();
+  // Home's "Latest upload" preview only surfaces is_public/web_public files
+  // (see index.tsx's latestPublicFile), so its "See all" deep-links straight
+  // into the matching Shared tab instead of dropping the viewer on All.
+  const { tab: initialTab } = useLocalSearchParams<{ tab?: string }>();
 
   const [files, setFiles] = useState<HubFile[]>([]);
   const [members, setMembers] = useState<Map<string, HubMember>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<FilterTab>('all');
+  const [tab, setTab] = useState<FilterTab>(() =>
+    initialTab === 'mine' || initialTab === 'shared' || initialTab === 'starred' ? initialTab : 'all'
+  );
   const [sort, setSort] = useState<SortKey>('recent');
 
   const load = useCallback(() => {
@@ -138,7 +144,7 @@ export default function FilesListScreen() {
                 <Pressable
                   key={f.id}
                   onPress={() => setTab(f.id)}
-                  style={[styles.chip, active && { backgroundColor: Colors[colorScheme].tint }]}>
+                  style={[styles.chip, active && { backgroundColor: Brand }]}>
                   <ThemedText style={styles.chipLabel} lightColor={active ? '#fff' : undefined} darkColor={active ? '#fff' : undefined}>
                     {f.label}
                   </ThemedText>
@@ -170,6 +176,8 @@ export default function FilesListScreen() {
             <FileRow
               file={item}
               starred={isStarred(item.file_id)}
+              tunnelUrl={session.hub.tunnelUrl}
+              token={session.token}
               onPress={() => router.push({ pathname: '/files/[id]', params: { id: item.file_id } })}
               onToggleStar={() => toggleStarred(item.file_id)}
             />

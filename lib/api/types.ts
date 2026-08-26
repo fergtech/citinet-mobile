@@ -1,4 +1,22 @@
-export type RegistryHub = {
+// Admin-customizable hub identity, synced from a hub's own settings into the
+// public registry (see citinet web's hubIconRegistryFields) — mirrored here so
+// the hub directory/login flow can render the same custom icon the web portal
+// does, before ever talking to the hub itself. `hub_icon_mode: 'image'` means
+// a real uploaded file (hub_icon_image_file_name, served from the hub's own
+// tunnel_url); any other value (or these fields being absent entirely, for a
+// hub whose admin never touched the customizer) falls back to the
+// symbol+color badge — see components/hub-icon.tsx.
+export type HubIconFields = {
+  hub_icon_mode?: string;
+  hub_icon_symbol?: string;
+  hub_icon_bg_mode?: string;
+  hub_icon_gradient_from?: string;
+  hub_icon_gradient_to?: string;
+  hub_icon_solid_color?: string;
+  hub_icon_image_file_name?: string;
+};
+
+export type RegistryHub = HubIconFields & {
   id: string;
   name: string;
   slug: string;
@@ -320,3 +338,216 @@ export type HubFile = {
 // is_web_public) — PATCH /api/files/:filename takes this exact field name
 // and derives is_public/web_public server-side itself.
 export type FileVisibility = 'private' | 'hub' | 'web';
+
+// ── Initiatives ──────────────────────────────────────────────────────
+// Field shapes below are inferred from the mobile design handoff
+// (design_handoff_initiatives/README.md — a port spec for citinet web's
+// already-built InitiativesScreen/initiativesService), corrected against a
+// real GET /api/initiatives/:id response captured live from a hub (2026-08-25)
+// — see below for what changed. Everything past that single confirmed
+// response (the list endpoint's shape, /join's response body, /team,
+// /activity, roles, resources, checklist, notes) is still best-effort/
+// unconfirmed; treat those parts of hubService.ts's Initiatives section
+// accordingly.
+//
+// Real shape vs. the original guess, for the record:
+// - No member_count/task_count/tasks_done_count/organizer_id/organizer_username
+//   /latest_update/joined fields exist — derive those from the embedded
+//   tasks/members/updates arrays and viewerIsMember/viewerIsCreator/created_by
+//   instead (see lib/initiatives/meta.ts's deriveInitiativeStats).
+// - `category` is a lowercase free-form string ("infrastructure"), not the
+//   capitalized four-value enum assumed before.
+// - `color` is a real field — a named color ("blue"), independent of
+//   category, not something derived from it.
+// - Task status is `'todo' | 'in-progress' | 'done'` (hyphenated), not the
+//   four-value not_started/in_progress/blocked/complete set assumed before —
+//   no evidence of a `blocked` concept on a task at all yet.
+// - Same banner_mode/banner_color/banner_gradient_from/banner_gradient_to/
+//   banner_image_file_name shape as MarketplaceVendor's banner, not the
+//   generic category-color gradient the design handoff described.
+export type InitiativeTaskStatus = 'todo' | 'in-progress' | 'done';
+
+// Embedded in GET /api/initiatives/:id's `tasks` array — confirmed shape.
+// The standalone /tasks list and a task's own detail endpoint may return
+// richer objects (description, assignee, checklist counts); that's still
+// unconfirmed — see InitiativeTask below for the speculative fuller shape.
+export type InitiativeTaskSummary = {
+  id: string;
+  title: string;
+  status: InitiativeTaskStatus;
+  created_by: string;
+};
+
+// Embedded in GET /api/initiatives/:id's `members` array — confirmed shape.
+// `role` is a free-text label ("Project lead", "Member"), not a link to an
+// InitiativeRole record — that's a separate open/filled volunteer-role
+// system (see InitiativeRole below), unrelated to this field.
+export type InitiativeMemberSummary = {
+  id: string;
+  name: string;
+  role: string | null;
+  joinedAt: string;
+};
+
+// Shape unconfirmed — the sample response's `updates` array was empty, so
+// nothing here is verified. Kept loose/optional on purpose; read
+// defensively (see lib/initiatives/meta.ts) rather than trusting any of
+// these fields to be present.
+export type InitiativeUpdate = {
+  id: string;
+  body?: string;
+  text?: string;
+  author_id?: string | null;
+  author_username?: string | null;
+  createdBy?: string | null;
+  created_at?: string;
+  createdAt?: string;
+  reply_count?: number;
+};
+
+export type InitiativeBannerMode = 'image' | 'solid' | 'gradient' | null;
+
+// Confirmed against a live GET /api/initiatives/:id response — see the note
+// above for exactly how this differs from the original design-handoff guess.
+export type Initiative = {
+  id: string;
+  initiative_id: string;
+  title: string;
+  goal: string;
+  description: string | null;
+  category: string;
+  status: string;
+  color: string;
+  progress: number;
+  space_id: string | null;
+  space_slug: string | null;
+  space_name: string | null;
+  created_by: string;
+  createdBy: string;
+  created_at: string;
+  createdAt: string;
+  updated_at: string;
+  viewerIsMember: boolean;
+  viewerIsCreator: boolean;
+  open_roles_count: number;
+  banner_mode: InitiativeBannerMode;
+  banner_color: string | null;
+  banner_gradient_from: string | null;
+  banner_gradient_to: string | null;
+  banner_image_file_name: string | null;
+  tasks: InitiativeTaskSummary[];
+  members: InitiativeMemberSummary[];
+  updates: InitiativeUpdate[];
+};
+
+// The viewer's own row must read "You" as soon as they hold a named role —
+// derive that client-side by comparing user_id to session.userId (same
+// pattern this app already uses for AtlasPin/goToProfile), not by trusting a
+// server-provided flag, per the handoff's explicit note that this was a real
+// bug in the prototype.
+export type InitiativeTeamMember = {
+  user_id: string;
+  username: string;
+  display_name: string | null;
+  role: string | null;
+  task_count: number;
+  tasks_done_count: number;
+};
+
+export type InitiativeRole = {
+  id: string;
+  initiative_id: string;
+  name: string;
+  skills: string | null;
+  filled: boolean;
+  holder_user_id: string | null;
+  holder_username: string | null;
+  holder_display_name: string | null;
+};
+
+// Speculative fuller shape for a standalone task (dedicated Tasks screen /
+// task detail, neither built yet) — description/assignee/blocked/checklist
+// counts are all unconfirmed; only `status`'s three real values (above) and
+// `id`/`title`/`created_by` are proven, from the embedded summary.
+export type InitiativeTask = {
+  id: string;
+  initiative_id: string;
+  title: string;
+  description: string | null;
+  status: InitiativeTaskStatus;
+  blocked: boolean;
+  blocked_reason: string | null;
+  assignee_user_id: string | null;
+  assignee_username: string | null;
+  creator_id: string;
+  checklist_total_count: number;
+  checklist_done_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskMeta = {
+  has_checklist: boolean;
+  checklist_total_count: number;
+  checklist_done_count: number;
+  blocked: boolean;
+  blocked_reason: string | null;
+};
+
+export type ChecklistItem = {
+  id: string;
+  task_id: string;
+  label: string;
+  done: boolean;
+  created_at: string;
+};
+
+export type TaskNoteReply = {
+  id: string;
+  note_id: string;
+  author_id: string | null;
+  author_username: string | null;
+  body: string;
+  created_at: string;
+};
+
+export type TaskNote = {
+  id: string;
+  task_id: string;
+  author_id: string | null;
+  author_username: string | null;
+  body: string;
+  created_at: string;
+  replies: TaskNoteReply[];
+};
+
+export type InitiativeResourceKind = 'material' | 'file' | 'link';
+
+// Materials use the real single `provided` boolean (+ one provider) per the
+// handoff's confirmed divergence note, not a pledged/needed count — there's
+// no quantity column backing that on the server, so it isn't modeled here.
+export type InitiativeResource = {
+  id: string;
+  initiative_id: string;
+  kind: InitiativeResourceKind;
+  name: string | null;
+  quantity_note: string | null;
+  provided: boolean;
+  provider_user_id: string | null;
+  provider_username: string | null;
+  file_name: string | null;
+  file_size_bytes: number | null;
+  file_owner_username: string | null;
+  link_label: string | null;
+  link_url: string | null;
+  created_at: string;
+};
+
+export type InitiativeActivityEntry = {
+  id: string;
+  initiative_id: string;
+  kind: string;
+  actor_username: string | null;
+  text: string;
+  created_at: string;
+};

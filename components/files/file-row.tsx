@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import { HubMedia } from '@/components/hub-media';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { Brand, Colors } from '@/constants/theme';
@@ -17,11 +18,15 @@ export function fileVisibilityMeta(file: HubFile): { icon: 'lock.fill' | 'person
 export function FileRow({
   file,
   starred,
+  tunnelUrl,
+  token,
   onPress,
   onToggleStar,
 }: {
   file: HubFile;
   starred: boolean;
+  tunnelUrl: string;
+  token: string;
   onPress: () => void;
   onToggleStar: () => void;
 }) {
@@ -29,13 +34,25 @@ export function FileRow({
   const kind = fileKind(file.file_name, file.mime_type);
   const meta = FILE_KIND_META[kind];
   const vis = fileVisibilityMeta(file);
+  // Only image/video decode into an actual thumbnail — everything else keeps the type icon.
+  const hasPreview = kind === 'image' || kind === 'video';
 
   return (
     <View style={styles.row}>
       <Pressable onPress={onPress} style={styles.tapArea}>
-        <View style={[styles.tile, { backgroundColor: meta.color }]}>
-          <IconSymbol name={meta.icon} size={18} color="#fff" />
-        </View>
+        {hasPreview ? (
+          <HubMedia
+            fileName={file.file_name}
+            tunnelUrl={tunnelUrl}
+            token={token}
+            previewSeconds={4}
+            style={styles.thumb}
+          />
+        ) : (
+          <View style={[styles.tile, { backgroundColor: meta.color }]}>
+            <IconSymbol name={meta.icon} size={18} color="#fff" />
+          </View>
+        )}
         <View style={styles.text}>
           <ThemedText type="defaultSemiBold" numberOfLines={1} style={styles.name}>
             {file.file_name}
@@ -75,6 +92,12 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  thumb: {
+    width: 40,
+    height: 40,
+    aspectRatio: undefined,
+    borderRadius: 10,
   },
   text: {
     flex: 1,

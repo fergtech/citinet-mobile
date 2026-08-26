@@ -4,8 +4,10 @@ import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useScrollToTop } from '@react-navigation/native';
 
+import { EventAtlasLink } from '@/components/event-atlas-link';
 import { FeaturedCarousel } from '@/components/featured-carousel';
 import { fileVisibilityMeta } from '@/components/files/file-row';
+import { HubMedia } from '@/components/hub-media';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { PostRow } from '@/components/post-row';
 import { ThemedText } from '@/components/themed-text';
@@ -18,7 +20,7 @@ import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
 import { useHubCenter } from '@/lib/atlas/hub-center';
 import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
 import { useSession } from '@/lib/session/session-context';
-import { isPastEvent } from '@/lib/ui/format-event';
+import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { applyVote } from '@/lib/ui/poll';
 import { timeAgo } from '@/lib/ui/time-ago';
 
@@ -53,31 +55,89 @@ function LatestAtlasRow({ pin, meters }: { pin: AtlasPin; meters: number | null 
   );
 }
 
-// The single latest file visible beyond just its owner — is_public (hub) or
-// web_public (anyone with the link) — mirrors LatestAtlasRow above: a
-// minimal, non-interactive preview row (no star toggle, that's Files' own
-// list's job) that just proves this feature is alive from Home too.
-function LatestFileRow({ file }: { file: HubFile }) {
-  const kind = fileKind(file.file_name, file.mime_type);
-  const meta = FILE_KIND_META[kind];
-  const vis = fileVisibilityMeta(file);
-
+// A compact preview, not the full PostRow — no icon (title carries enough
+// weight on its own, matching Discussions' equally icon-less compactAuthor
+// look), no media/RSVP-button/like-comment footer, since those (plus the old
+// 6-line body cap PostRow itself uses) were what made this section so much
+// taller than every other Home preview. Body still gets a preview, just
+// capped shorter (4 lines) now that this isn't PostRow's shared cap. The one
+// exception to "no icon" is EventAtlasLink, kept as-is (icon included) since
+// it's a real, separately-actionable link to a place, not decoration.
+function LatestEventRow({ event }: { event: HubPost }) {
   return (
     <Pressable
       style={styles.atlasLatestRow}
-      onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}>
-      <View style={[styles.atlasLatestIcon, { backgroundColor: meta.color }]}>
-        <IconSymbol name={meta.icon} size={20} color="#fff" />
-      </View>
+      onPress={() => router.push({ pathname: '/post/[id]', params: { id: event.id } })}>
       <View style={styles.atlasLatestContent}>
-        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={1}>
-          {file.file_name}
+        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
+          {event.title ?? 'Event'}
         </ThemedText>
         <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-          {vis.label} · {formatBytes(file.size_bytes)} · {timeAgo(file.uploaded_at)}
+          {event.event_date ? formatEventWhen(event.event_date) : 'Date TBA'}
+          {event.rsvp_count > 0 ? ` · ${event.rsvp_count} going` : ''}
         </ThemedText>
+        {!!event.body?.trim() && (
+          <ThemedText style={styles.atlasLatestDescription} numberOfLines={4}>
+            {event.body}
+          </ThemedText>
+        )}
+        {!!event.event_location && (
+          <EventAtlasLink location={event.event_location} eventTitle={event.title} eventId={event.id} />
+        )}
       </View>
     </Pressable>
+  );
+}
+
+// The latest file visible beyond just its owner — is_public (hub) or
+// web_public (anyone with the link) — same shape as LatestAtlasRow, with a
+// matching trailing "See all" row underneath rather than a same-line chip.
+function FileHomeRow({ file, tunnelUrl, token }: { file: HubFile; tunnelUrl: string; token: string }) {
+  const kind = fileKind(file.file_name, file.mime_type);
+  const meta = FILE_KIND_META[kind];
+  const vis = fileVisibilityMeta(file);
+  // Only image/video can actually be rendered as a thumbnail (expo-image/expo-video
+  // both need a real visual asset to decode) — everything else keeps the type icon.
+  const hasPreview = kind === 'image' || kind === 'video';
+
+  return (
+    <>
+      <Pressable
+        style={styles.atlasLatestRow}
+        onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}>
+        {hasPreview ? (
+          <HubMedia
+            fileName={file.file_name}
+            tunnelUrl={tunnelUrl}
+            token={token}
+            previewSeconds={4}
+            style={styles.atlasLatestThumb}
+          />
+        ) : (
+          <View style={[styles.atlasLatestIcon, { backgroundColor: meta.color }]}>
+            <IconSymbol name={meta.icon} size={20} color="#fff" />
+          </View>
+        )}
+        <View style={styles.atlasLatestContent}>
+          <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={1}>
+            {file.file_name}
+          </ThemedText>
+          <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
+            {vis.label} · {formatBytes(file.size_bytes)} · {timeAgo(file.uploaded_at)}
+          </ThemedText>
+        </View>
+      </Pressable>
+      <Pressable style={styles.atlasLatestRow} onPress={() => router.push('/files?tab=shared' as Href)}>
+        <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+          <IconSymbol name="externaldrive.fill" size={18} color={Brand} />
+        </View>
+        <View style={styles.atlasLatestContent}>
+          <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+            See all files
+          </ThemedText>
+        </View>
+      </Pressable>
+    </>
   );
 }
 
@@ -245,47 +305,49 @@ export default function HomeScreen() {
 
         {featuredEvent && (
           <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <ThemedText style={styles.sectionLabel}>Events</ThemedText>
-              <Pressable onPress={() => router.push('/events')}>
-                <ThemedText style={[styles.seeAll, { color: Brand }]}>View all</ThemedText>
-              </Pressable>
-            </View>
-            <PostRow
-              post={featuredEvent}
-              tunnelUrl={session.hub.tunnelUrl}
-              token={session.token}
-              onToggleLike={handleToggleLike}
-              onVotePoll={handleVotePoll}
-              onToggleRsvp={handleToggleRsvp}
-            />
+            <ThemedText style={styles.sectionLabel}>Events</ThemedText>
+            <LatestEventRow event={featuredEvent} />
+            <Pressable style={styles.atlasLatestRow} onPress={() => router.push('/events')}>
+              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+                <IconSymbol name="calendar" size={18} color={Brand} />
+              </View>
+              <View style={styles.atlasLatestContent}>
+                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                  See all events
+                </ThemedText>
+              </View>
+            </Pressable>
           </View>
         )}
 
         {latestPin && (
           <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <ThemedText style={styles.sectionLabel}>From the Atlas</ThemedText>
-              <Pressable onPress={() => router.push('/atlas' as Href)}>
-                <ThemedText style={[styles.seeAll, { color: Brand }]}>See all</ThemedText>
-              </Pressable>
-            </View>
+            <ThemedText style={styles.sectionLabel}>From the Atlas</ThemedText>
             <LatestAtlasRow
               pin={latestPin}
               meters={hubCenter ? distanceMeters(hubCenter[0], hubCenter[1], latestPin.latitude, latestPin.longitude) : null}
             />
+            {/* Trailing "See all" row instead of the header link — same
+                concept as Discover's in-list "See all" cards/rows, just a
+                single row here since this section only ever previews one
+                pin (no real list to append to). */}
+            <Pressable style={styles.atlasLatestRow} onPress={() => router.push('/atlas' as Href)}>
+              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+                <IconSymbol name="chevron.right" size={18} color={Brand} />
+              </View>
+              <View style={styles.atlasLatestContent}>
+                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                  See all Atlas pins
+                </ThemedText>
+              </View>
+            </Pressable>
           </View>
         )}
 
         {latestPublicFile && (
           <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <ThemedText style={styles.sectionLabel}>Files</ThemedText>
-              <Pressable onPress={() => router.push('/files' as Href)}>
-                <ThemedText style={[styles.seeAll, { color: Brand }]}>See all</ThemedText>
-              </Pressable>
-            </View>
-            <LatestFileRow file={latestPublicFile} />
+            <ThemedText style={styles.sectionLabel}>Latest upload to {session.hub.name}</ThemedText>
+            <FileHomeRow file={latestPublicFile} tunnelUrl={session.hub.tunnelUrl} token={session.token} />
           </View>
         )}
 
@@ -299,12 +361,20 @@ export default function HomeScreen() {
               onToggleLike={handleToggleLike}
               onVotePoll={handleVotePoll}
               onToggleRsvp={handleToggleRsvp}
+              compactAuthor
             />
           )}
           {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
           {posts.length > 1 && (
-            <Pressable onPress={() => router.push('/feed')} style={styles.viewMore}>
-              <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>View more</ThemedText>
+            <Pressable style={styles.atlasLatestRow} onPress={() => router.push('/feed')}>
+              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+                <IconSymbol name="message.fill" size={18} color={Brand} />
+              </View>
+              <View style={styles.atlasLatestContent}>
+                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                  See all discussions
+                </ThemedText>
+              </View>
             </Pressable>
           )}
         </View>
@@ -345,16 +415,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 8,
   },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  seeAll: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
   atlasLatestRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -372,6 +432,12 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  atlasLatestThumb: {
+    width: 38,
+    height: 38,
+    aspectRatio: undefined,
+    borderRadius: 11,
   },
   atlasLatestContent: {
     flex: 1,
@@ -399,12 +465,5 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     rowGap: 12,
-  },
-  viewMore: {
-    paddingVertical: 14,
-  },
-  viewMoreLabel: {
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

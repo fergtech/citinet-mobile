@@ -126,14 +126,17 @@ export default function AccountSettingsScreen() {
       {loadError && <ThemedText style={styles.error}>{loadError}</ThemedText>}
 
       {!loading && (
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView
+          contentContainerStyle={styles.body}
+          automaticallyAdjustKeyboardInsets
+          contentInsetAdjustmentBehavior="automatic">
           <ThemedText style={styles.sectionLabel}>Profile</ThemedText>
           <View style={styles.section}>
             <ThemedText style={styles.fieldLabel}>Display name</ThemedText>
             <TextInput
               value={displayName}
               onChangeText={setDisplayName}
-              style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, { color: Colors[colorScheme].text }]}
               placeholderTextColor={Colors[colorScheme].icon}
             />
             <ThemedText style={styles.fieldLabel}>Headline</ThemedText>
@@ -142,7 +145,7 @@ export default function AccountSettingsScreen() {
               onChangeText={setHeadline}
               placeholder="A short line about you"
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, { color: Colors[colorScheme].text }]}
             />
             <ThemedText style={styles.fieldLabel}>Bio</ThemedText>
             <TextInput
@@ -151,7 +154,7 @@ export default function AccountSettingsScreen() {
               multiline
               placeholder="Tell your neighbors about yourself"
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, styles.textArea, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, styles.textArea, { color: Colors[colorScheme].text }]}
             />
             <ThemedText style={styles.fieldLabel}>Website</ThemedText>
             <TextInput
@@ -161,7 +164,7 @@ export default function AccountSettingsScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, { color: Colors[colorScheme].text }]}
             />
 
             {saveError && <ThemedText style={styles.error}>{saveError}</ThemedText>}
@@ -182,7 +185,7 @@ export default function AccountSettingsScreen() {
               placeholder="Current password"
               secureTextEntry
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, { color: Colors[colorScheme].text }]}
             />
             <TextInput
               value={newPassword}
@@ -190,7 +193,7 @@ export default function AccountSettingsScreen() {
               placeholder="New password"
               secureTextEntry
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, { color: Colors[colorScheme].text }]}
             />
             <TextInput
               value={confirmPassword}
@@ -198,7 +201,7 @@ export default function AccountSettingsScreen() {
               placeholder="Confirm new password"
               secureTextEntry
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon + '55' }]}
+              style={[styles.input, { color: Colors[colorScheme].text }]}
             />
             {pwError && <ThemedText style={styles.error}>{pwError}</ThemedText>}
             <Pressable
@@ -226,7 +229,7 @@ export default function AccountSettingsScreen() {
                   placeholder="Password"
                   secureTextEntry
                   placeholderTextColor={Colors[colorScheme].icon}
-                  style={[styles.input, { color: Colors[colorScheme].text, borderColor: '#b0392f55' }]}
+                  style={[styles.input, { color: Colors[colorScheme].text, backgroundColor: '#b0392f1a' }]}
                 />
                 {deleteError && <ThemedText style={styles.error}>{deleteError}</ThemedText>}
                 <Pressable
@@ -283,7 +286,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   input: {
-    borderWidth: 1,
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,

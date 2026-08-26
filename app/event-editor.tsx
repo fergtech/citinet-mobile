@@ -141,7 +141,10 @@ export default function EventEditorScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView
+        contentContainerStyle={styles.body}
+        automaticallyAdjustKeyboardInsets
+        contentInsetAdjustmentBehavior="automatic">
         {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
         <ThemedText style={styles.sectionLabel}>Photo</ThemedText>
@@ -171,20 +174,50 @@ export default function EventEditorScreen() {
 
         <ThemedText style={styles.sectionLabel}>Date & time</ThemedText>
         <View style={styles.dateTimeRow}>
-          <Pressable onPress={() => setShowDatePicker(true)} style={styles.dateTimeChip}>
-            <IconSymbol name="calendar" size={15} color={Colors[colorScheme].icon} />
-            <ThemedText style={styles.dateTimeLabel}>{formatDate(eventDate)}</ThemedText>
+          <Pressable
+            onPress={() => setShowDatePicker(true)}
+            style={[styles.dateTimeChip, { backgroundColor: colorScheme === 'dark' ? '#2c2c2e' : '#eef0f3' }]}>
+            <IconSymbol name="calendar" size={15} color={colorScheme === 'dark' ? '#fff' : '#11181C'} />
+            <ThemedText style={styles.dateTimeLabel} lightColor="#11181C" darkColor="#fff">
+              {formatDate(eventDate)}
+            </ThemedText>
           </Pressable>
-          <Pressable onPress={() => setShowTimePicker(true)} style={styles.dateTimeChip}>
-            <IconSymbol name="clock.fill" size={15} color={Colors[colorScheme].icon} />
-            <ThemedText style={styles.dateTimeLabel}>{formatTime(eventDate)}</ThemedText>
+          <Pressable
+            onPress={() => setShowTimePicker(true)}
+            style={[styles.dateTimeChip, { backgroundColor: colorScheme === 'dark' ? '#2c2c2e' : '#eef0f3' }]}>
+            <IconSymbol name="clock.fill" size={15} color={colorScheme === 'dark' ? '#fff' : '#11181C'} />
+            <ThemedText style={styles.dateTimeLabel} lightColor="#11181C" darkColor="#fff">
+              {formatTime(eventDate)}
+            </ThemedText>
           </Pressable>
         </View>
-        {showDatePicker && (
-          <DateTimePicker value={eventDate} mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} onChange={onChangeDate} />
-        )}
-        {showTimePicker && (
-          <DateTimePicker value={eventDate} mode="time" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={onChangeTime} />
+        {/* iOS's inline day-cell text ignores textColor/themeVariant entirely —
+            confirmed even against a hardcoded solid dark background, so it's not
+            a theme-mismatch, it's the renderer itself (a known
+            @react-native-community/datetimepicker limitation with display="inline").
+            spinner is the one display mode documented to actually respect these
+            props, so the date picker uses it too now, matching the time picker. */}
+        {(showDatePicker || showTimePicker) && (
+          <View style={styles.pickerCard}>
+            {showDatePicker && (
+              <DateTimePicker
+                value={eventDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                themeVariant="dark"
+                onChange={onChangeDate}
+              />
+            )}
+            {showTimePicker && (
+              <DateTimePicker
+                value={eventDate}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                themeVariant="dark"
+                onChange={onChangeTime}
+              />
+            )}
+          </View>
         )}
         {Platform.OS === 'ios' && (showDatePicker || showTimePicker) && (
           <Pressable
@@ -308,8 +341,7 @@ const styles = StyleSheet.create({
   },
   input: {
     fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -326,12 +358,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#8884',
   },
   dateTimeLabel: {
     fontSize: 13.5,
     fontWeight: '600',
+  },
+  // #1c1c1e matches iOS's own system dark grouped-background color, so the
+  // picker reads as an intentional dark card rather than a mismatched patch.
+  pickerCard: {
+    backgroundColor: '#1c1c1e',
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginTop: 4,
   },
   doneButton: {
     alignSelf: 'flex-end',
@@ -345,8 +383,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     minHeight: 90,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,

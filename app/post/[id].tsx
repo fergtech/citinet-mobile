@@ -23,7 +23,7 @@ import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { createReply, getPost, listAttendees, listReplies, toggleLike, toggleRsvp, votePoll } from '@/lib/api/hubService';
 import { EventAttendee, HubPost, HubPostReply } from '@/lib/api/types';
-import { formatEventWhen } from '@/lib/ui/format-event';
+import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { applyVote } from '@/lib/ui/poll';
 import { useSession } from '@/lib/session/session-context';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
@@ -48,7 +48,21 @@ function buildReplyTree(replies: HubPostReply[]): ReplyNode[] {
   return roots;
 }
 
-const MAX_INDENT_DEPTH = 4;
+function countDescendants(node: ReplyNode): number {
+  return node.children.reduce((sum, child) => sum + 1 + countDescendants(child), 0);
+}
+
+// Beyond this nesting level, a reply's own children default to collapsed
+// behind a "Show N replies" toggle — deep threads (5-6+ levels) otherwise
+// turn into an unreadable, unbroken wall on a phone-width screen. The first
+// few levels stay expanded since that's where most real back-and-forth lives.
+const AUTO_COLLAPSE_DEPTH = 3;
+
+// Shrinks slightly with depth — a cheap, immediate size cue for "this is
+// nested further" that doesn't depend on reading indentation alone.
+function avatarSizeForDepth(depth: number): number {
+  return depth === 0 ? 28 : depth === 1 ? 25 : 22;
+}
 
 function CommentNode({
   node,
@@ -64,13 +78,20 @@ function CommentNode({
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
   const { session } = useSession();
-  const indent = Math.min(depth, MAX_INDENT_DEPTH) * 16;
+  const [expanded, setExpanded] = useState(depth + 1 < AUTO_COLLAPSE_DEPTH);
+  const hasChildren = node.children.length > 0;
+  const descendantCount = hasChildren && !expanded ? countDescendants(node) : 0;
 
   return (
-    <View style={{ marginLeft: indent }}>
+    <View>
       <View style={styles.commentRow}>
         <Pressable onPress={() => session && goToProfile(node.author_id, session.userId)}>
-          <HubAvatar userId={node.author_id} displayName={node.author_username ?? '?'} tunnelUrl={tunnelUrl} size={28} />
+          <HubAvatar
+            userId={node.author_id}
+            displayName={node.author_username ?? '?'}
+            tunnelUrl={tunnelUrl}
+            size={avatarSizeForDepth(depth)}
+          />
         </Pressable>
         <View style={styles.commentBody}>
           <Pressable onPress={() => session && goToProfile(node.author_id, session.userId)}>
@@ -79,7 +100,11 @@ function CommentNode({
             </ThemedText>
           </Pressable>
           {node.reply_to_username && (
-            <ThemedText style={styles.replyingTo}>replying to @{node.reply_to_username}</ThemedText>
+            <View style={styles.replyingToPill}>
+              <ThemedText style={styles.replyingTo}>
+                ↳ replying to <ThemedText style={[styles.replyingToName, { color: tint }]}>@{node.reply_to_username}</ThemedText>
+              </ThemedText>
+            </View>
           )}
           <ThemedText style={styles.commentText}>{node.body}</ThemedText>
           <View style={styles.commentMetaRow}>
@@ -90,9 +115,26 @@ function CommentNode({
           </View>
         </View>
       </View>
-      {node.children.map((child) => (
-        <CommentNode key={child.id} node={child} depth={depth + 1} tunnelUrl={tunnelUrl} onReply={onReply} />
-      ))}
+      {hasChildren &&
+        (expanded ? (
+          // The left border is the thread connector line itself — its height
+          // is just whatever this View's content naturally renders to, so it
+          // automatically spans exactly this node's replies, nesting further
+          // right (a new border, one level in) for each deeper level.
+          <View style={[styles.childrenWrap, { borderLeftColor: Colors[colorScheme].icon + '33' }]}>
+            {node.children.map((child) => (
+              <CommentNode key={child.id} node={child} depth={depth + 1} tunnelUrl={tunnelUrl} onReply={onReply} />
+            ))}
+          </View>
+        ) : (
+          <View style={[styles.childrenWrap, { borderLeftColor: Colors[colorScheme].icon + '33' }]}>
+            <Pressable onPress={() => setExpanded(true)} style={styles.showMoreButton}>
+              <ThemedText style={[styles.showMoreLabel, { color: tint }]}>
+                Show {descendantCount} more {descendantCount === 1 ? 'reply' : 'replies'}
+              </ThemedText>
+            </Pressable>
+          </View>
+        ))}
     </View>
   );
 }
@@ -218,10 +260,7 @@ export default function PostDetailScreen() {
   if (!session) return null;
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={styles.flex}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
@@ -293,7 +332,11 @@ export default function PostDetailScreen() {
                     {post.rsvp_count > 0 && (
                       <Pressable onPress={handleToggleAttendees} hitSlop={8}>
                         <ThemedText style={[styles.attendeesLink, { color: Brand }]}>
-                          {showAttendees ? 'Hide attendees' : "See who's going"}
+                          {showAttendees
+                            ? 'Hide attendees'
+                            : post.event_date && isPastEvent(post.event_date)
+                              ? 'See who went'
+                              : "See who's going"}
                         </ThemedText>
                       </Pressable>
                     )}
@@ -394,6 +437,22 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  // The border-left is the thread connector line — offset to roughly align
+  // with the avatar column above it, so a reply visibly hangs off its parent
+  // rather than just sitting indented with nothing tying it back.
+  childrenWrap: {
+    marginLeft: 13,
+    paddingLeft: 15,
+    borderLeftWidth: 2,
+    marginBottom: 4,
+  },
+  showMoreButton: {
+    paddingVertical: 8,
+  },
+  showMoreLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
   eventLine: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -463,10 +522,17 @@ const styles = StyleSheet.create({
   commentAuthor: {
     fontSize: 14,
   },
+  replyingToPill: {
+    alignSelf: 'flex-start',
+    marginTop: 1,
+  },
   replyingTo: {
     fontSize: 12,
     opacity: 0.6,
-    fontStyle: 'italic',
+  },
+  replyingToName: {
+    fontWeight: '600',
+    opacity: 1,
   },
   commentText: {
     fontSize: 14.5,

@@ -14,13 +14,14 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getPosts, getUpcomingEvents, listAtlasPins, listFiles, listMarketplaceListings, listMembers, search, toggleLike } from '@/lib/api/hubService';
+import { getPosts, getUpcomingEvents, listAtlasPins, listFiles, listInitiatives, listMarketplaceListings, listMembers, search, toggleLike } from '@/lib/api/hubService';
 import { getHubs } from '@/lib/api/registryService';
-import { AtlasPin, HubFile, HubMember, HubPost, MarketplaceListing, RegistryHub, SearchResults } from '@/lib/api/types';
+import { AtlasPin, HubFile, HubMember, HubPost, Initiative, MarketplaceListing, RegistryHub, SearchResults } from '@/lib/api/types';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
 import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
 import { useHubCenter } from '@/lib/atlas/hub-center';
 import { useStarredFiles } from '@/lib/files/starred-files';
+import { initiativeCategoryMeta, initiativeColor, initiativeStatusMeta, initiativeTaskCounts } from '@/lib/initiatives/meta';
 import { categoryMeta } from '@/lib/marketplace/categories';
 import { useSession } from '@/lib/session/session-context';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
@@ -88,6 +89,36 @@ function HubRow({ hub }: { hub: RegistryHub }) {
   );
 }
 
+function InitiativeDiscoverRow({ initiative }: { initiative: Initiative }) {
+  const category = initiativeCategoryMeta(initiative.category);
+  const status = initiativeStatusMeta(initiative.status);
+  const color = initiativeColor(initiative.color);
+  const counts = initiativeTaskCounts(initiative);
+  return (
+    <Pressable
+      style={styles.initiativeRow}
+      // `as Href` — app/initiatives/[id].tsx doesn't exist yet; drop the cast
+      // once the detail screen is built.
+      onPress={() => router.push({ pathname: '/initiatives/[id]', params: { id: initiative.id } } as Href)}>
+      <View style={[styles.initiativeTile, { backgroundColor: color }]}>
+        <IconSymbol name={category.icon} size={16} color="#fff" />
+      </View>
+      <View style={styles.memberText}>
+        <View style={styles.initiativeStatusLine}>
+          <View style={[styles.initiativeStatusDot, { backgroundColor: status.color }]} />
+          <ThemedText style={[styles.initiativeStatusLabel, { color: status.color }]}>{status.label}</ThemedText>
+        </View>
+        <ThemedText type="defaultSemiBold" numberOfLines={1}>
+          {initiative.title}
+        </ThemedText>
+        <ThemedText numberOfLines={1} style={styles.rowMeta}>
+          {counts.done} of {counts.total} tasks done
+        </ThemedText>
+      </View>
+    </Pressable>
+  );
+}
+
 function EventRow({ event, tint }: { event: HubPost; tint: string }) {
   return (
     <View style={styles.eventRow}>
@@ -131,6 +162,7 @@ export default function DiscoverScreen() {
   const [atlasPins, setAtlasPins] = useState<AtlasPin[]>([]);
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [files, setFiles] = useState<HubFile[]>([]);
+  const [initiatives, setInitiatives] = useState<Initiative[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,8 +190,9 @@ export default function DiscoverScreen() {
       listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
       listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
       listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
+      listInitiatives(session.hub.tunnelUrl, session.token).catch(() => []),
     ])
-      .then(([nextPosts, nextMembers, nextEvents, nextHubs, nextPins, nextListings, nextFiles]) => {
+      .then(([nextPosts, nextMembers, nextEvents, nextHubs, nextPins, nextListings, nextFiles, nextInitiatives]) => {
         setPosts([...nextPosts].sort(byEngagement));
         setMembers(nextMembers.filter((m) => m.user_id !== session.userId));
         setEvents(nextEvents);
@@ -167,6 +200,7 @@ export default function DiscoverScreen() {
         setAtlasPins(nextPins);
         setListings(nextListings);
         setFiles(nextFiles);
+        setInitiatives(nextInitiatives);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
       .finally(() => setLoading(false));
@@ -266,6 +300,14 @@ export default function DiscoverScreen() {
   const recentFiles = useMemo(
     () => [...files].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, PREVIEW_COUNT),
     [files]
+  );
+
+  // Most recently updated first — most likely to have fresh activity worth
+  // surfacing, same "here's what you might have missed" framing as the
+  // other previews above.
+  const recentInitiatives = useMemo(
+    () => [...initiatives].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, PREVIEW_COUNT),
+    [initiatives]
   );
 
   // Same gap as Atlas pins/listings: GET /api/search has no notion of files
@@ -478,6 +520,8 @@ export default function DiscoverScreen() {
                     key={file.file_id}
                     file={file}
                     starred={isStarred(file.file_id)}
+                    tunnelUrl={session.hub.tunnelUrl}
+                    token={session.token}
                     onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}
                     onToggleStar={() => toggleStarred(file.file_id)}
                   />
@@ -490,13 +534,13 @@ export default function DiscoverScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>Trending posts</ThemedText>
-                {posts.length > PREVIEW_COUNT && (
-                  <Pressable onPress={() => setActiveTab('posts')}>
-                    <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>All posts</ThemedText>
-                  </Pressable>
-                )}
+                {/* Hidden — superseded by the trailing "See all" card. */}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trendingStrip}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.edgeToEdgeScroll}
+                contentContainerStyle={styles.trendingStrip}>
                 {posts.slice(0, PREVIEW_COUNT).map((p) => (
                   <PostGridCard
                     key={p.id}
@@ -507,6 +551,17 @@ export default function DiscoverScreen() {
                     style={styles.trendingCard}
                   />
                 ))}
+                {posts.length > PREVIEW_COUNT && (
+                  <Pressable style={[styles.trendingCard, styles.seeAllCard]} onPress={() => setActiveTab('posts')}>
+                    <View style={styles.seeAllIcon}>
+                      <IconSymbol name="chevron.right" size={18} color={Brand} />
+                    </View>
+                    <ThemedText type="defaultSemiBold" style={[styles.seeAllLabel, { color: Brand }]}>
+                      See all
+                    </ThemedText>
+                    <ThemedText style={styles.rowMeta}>{posts.length} posts</ThemedText>
+                  </Pressable>
+                )}
               </ScrollView>
               {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
             </View>
@@ -514,15 +569,13 @@ export default function DiscoverScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>Events</ThemedText>
-                <Pressable onPress={() => router.push('/events')}>
-                  <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>View all events</ThemedText>
-                </Pressable>
+                {/* Hidden — superseded by the trailing "See all" row below. */}
               </View>
               {events.slice(0, PREVIEW_COUNT).map((e) => (
                 <EventRow key={e.id} event={e} tint={tint} />
               ))}
               {!loading && events.length === 0 && <ThemedText style={styles.rowMeta}>No upcoming events.</ThemedText>}
-              {/* Unlike every sibling section's "View more" (only shown past
+              {/* Unlike every sibling section's trailing card (only shown past
                   PREVIEW_COUNT, purely for pagination), this one is always
                   visible — this section only ever loads *upcoming* events
                   (getUpcomingEvents), so an empty/short list here doesn't mean
@@ -530,18 +583,28 @@ export default function DiscoverScreen() {
                   to the real standalone Events screen (Upcoming/Past tabs),
                   not Discover's own same-data "Events" browse tab, since
                   that's the only place past events are actually derivable. */}
+              <Pressable style={styles.seeAllRow} onPress={() => router.push('/events')}>
+                <View style={styles.seeAllRowIcon}>
+                  <IconSymbol name="calendar" size={16} color={Brand} />
+                </View>
+                <ThemedText type="defaultSemiBold" style={[styles.seeAllRowLabel, { color: Brand }]}>
+                  See all events
+                </ThemedText>
+                <IconSymbol name="chevron.right" size={16} color={Brand} />
+              </Pressable>
             </View>
 
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>Atlas</ThemedText>
-                {atlasPins.length > PREVIEW_COUNT && (
-                  <Pressable onPress={() => router.push('/atlas' as Href)}>
-                    <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>All pins</ThemedText>
-                  </Pressable>
-                )}
+                {/* Hidden — superseded by the trailing "See all" card at the
+                    end of the strip below, same destination/condition. */}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.atlasStrip}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.edgeToEdgeScroll}
+                contentContainerStyle={styles.atlasStrip}>
                 {nearestAtlasPins.map((pin) => (
                   <AtlasPinCard
                     key={pin.id}
@@ -551,6 +614,20 @@ export default function DiscoverScreen() {
                     style={styles.atlasCard}
                   />
                 ))}
+                {/* Experiment: an in-list "See all" card instead of only the
+                    header's link — same destination/condition as that link,
+                    just reachable by scrolling to the end of the strip too. */}
+                {atlasPins.length > PREVIEW_COUNT && (
+                  <Pressable style={[styles.atlasCard, styles.seeAllCard]} onPress={() => router.push('/atlas' as Href)}>
+                    <View style={styles.seeAllIcon}>
+                      <IconSymbol name="chevron.right" size={18} color={Brand} />
+                    </View>
+                    <ThemedText type="defaultSemiBold" style={[styles.seeAllLabel, { color: Brand }]}>
+                      See all
+                    </ThemedText>
+                    <ThemedText style={styles.rowMeta}>{atlasPins.length} pins</ThemedText>
+                  </Pressable>
+                )}
               </ScrollView>
               {!loading && atlasPins.length === 0 && <ThemedText style={styles.rowMeta}>No pins yet.</ThemedText>}
             </View>
@@ -558,13 +635,13 @@ export default function DiscoverScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>Marketplace</ThemedText>
-                {listings.length > PREVIEW_COUNT && (
-                  <Pressable onPress={() => router.push('/marketplace' as Href)}>
-                    <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>View more</ThemedText>
-                  </Pressable>
-                )}
+                {/* Hidden — superseded by the trailing "See all" card. */}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.marketplaceStrip}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.edgeToEdgeScroll}
+                contentContainerStyle={styles.marketplaceStrip}>
                 {recentListings.map((listing) => (
                   <ListingCard
                     key={listing.id}
@@ -575,46 +652,109 @@ export default function DiscoverScreen() {
                     style={styles.marketplaceCard}
                   />
                 ))}
+                {listings.length > PREVIEW_COUNT && (
+                  <Pressable style={[styles.marketplaceCard, styles.seeAllCard]} onPress={() => router.push('/marketplace' as Href)}>
+                    <View style={styles.seeAllIcon}>
+                      <IconSymbol name="chevron.right" size={18} color={Brand} />
+                    </View>
+                    <ThemedText type="defaultSemiBold" style={[styles.seeAllLabel, { color: Brand }]}>
+                      See all
+                    </ThemedText>
+                    <ThemedText style={styles.rowMeta}>{listings.length} listings</ThemedText>
+                  </Pressable>
+                )}
               </ScrollView>
               {!loading && listings.length === 0 && <ThemedText style={styles.rowMeta}>Nothing listed yet.</ThemedText>}
             </View>
 
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
+                <ThemedText style={styles.sectionLabel}>Initiatives</ThemedText>
+                {/* Hidden — superseded by the trailing "See all" row. */}
+              </View>
+              {recentInitiatives.map((initiative) => (
+                <InitiativeDiscoverRow key={initiative.id} initiative={initiative} />
+              ))}
+              {!loading && initiatives.length === 0 && <ThemedText style={styles.rowMeta}>No initiatives yet — anyone in the hub can start one.</ThemedText>}
+              {/* Unlike every sibling section's trailing row (only shown past
+                  PREVIEW_COUNT, purely for pagination), this one is always
+                  visible — the list screen is currently the only way to reach
+                  Initiatives at all (no Home card or Space chip yet), and it
+                  adds real functionality (status/category filters) worth
+                  reaching even with a handful of initiatives. */}
+              <Pressable style={styles.seeAllRow} onPress={() => router.push('/initiatives' as Href)}>
+                <View style={styles.seeAllRowIcon}>
+                  <IconSymbol name="target" size={16} color={Brand} />
+                </View>
+                <ThemedText type="defaultSemiBold" style={[styles.seeAllRowLabel, { color: Brand }]}>
+                  See all initiatives
+                </ThemedText>
+                <IconSymbol name="chevron.right" size={16} color={Brand} />
+              </Pressable>
+            </View>
+
+            <View style={styles.section}>
+              <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>Files</ThemedText>
-                {files.length > PREVIEW_COUNT && (
-                  <Pressable onPress={() => router.push('/files' as Href)}>
-                    <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>All files</ThemedText>
-                  </Pressable>
-                )}
+                {/* Hidden — superseded by the trailing "See all" row. */}
               </View>
               {recentFiles.map((file) => (
                 <FileRow
                   key={file.file_id}
                   file={file}
                   starred={isStarred(file.file_id)}
+                  tunnelUrl={session.hub.tunnelUrl}
+                  token={session.token}
                   onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}
                   onToggleStar={() => toggleStarred(file.file_id)}
                 />
               ))}
               {!loading && files.length === 0 && <ThemedText style={styles.rowMeta}>No files in the hub yet.</ThemedText>}
+              {files.length > PREVIEW_COUNT && (
+                <Pressable style={styles.seeAllRow} onPress={() => router.push('/files' as Href)}>
+                  <View style={styles.seeAllRowIcon}>
+                    <IconSymbol name="externaldrive.fill" size={16} color={Brand} />
+                  </View>
+                  <ThemedText type="defaultSemiBold" style={[styles.seeAllRowLabel, { color: Brand }]}>
+                    See all files
+                  </ThemedText>
+                  <IconSymbol name="chevron.right" size={16} color={Brand} />
+                </Pressable>
+              )}
             </View>
 
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>People</ThemedText>
-                {members.length > PREVIEW_COUNT && (
-                  <Pressable onPress={() => setActiveTab('people')}>
-                    <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>View more</ThemedText>
-                  </Pressable>
-                )}
+                {/* Hidden — superseded by the trailing "See all" card. */}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.peopleStrip}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.edgeToEdgeScroll}
+                contentContainerStyle={styles.peopleStrip}>
                 {members.slice(0, PREVIEW_COUNT).map((m) => (
                   <View key={m.user_id} style={styles.horizontalRowItem}>
                     <MemberRow member={m} tunnelUrl={session.hub.tunnelUrl} />
                   </View>
                 ))}
+                {members.length > PREVIEW_COUNT && (
+                  <View style={styles.horizontalRowItem}>
+                    <Pressable style={styles.memberRow} onPress={() => setActiveTab('people')}>
+                      <View style={styles.seeAllRowIcon}>
+                        <IconSymbol name="chevron.right" size={16} color={Brand} />
+                      </View>
+                      <View style={styles.memberText}>
+                        <ThemedText type="defaultSemiBold" style={{ color: Brand }}>
+                          See all
+                        </ThemedText>
+                        <ThemedText numberOfLines={1} style={styles.rowMeta}>
+                          {members.length} neighbors
+                        </ThemedText>
+                      </View>
+                    </Pressable>
+                  </View>
+                )}
               </ScrollView>
               {!loading && members.length === 0 && <ThemedText style={styles.rowMeta}>No other neighbors yet.</ThemedText>}
             </View>
@@ -622,18 +762,35 @@ export default function DiscoverScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <ThemedText style={styles.sectionLabel}>Other hubs</ThemedText>
-                {hubs.length > PREVIEW_COUNT && (
-                  <Pressable onPress={() => setActiveTab('hubs')}>
-                    <ThemedText style={[styles.viewMoreLabel, { color: Brand }]}>View more</ThemedText>
-                  </Pressable>
-                )}
+                {/* Hidden — superseded by the trailing "See all" card. */}
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hubsStrip}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.edgeToEdgeScroll}
+                contentContainerStyle={styles.hubsStrip}>
                 {hubs.slice(0, PREVIEW_COUNT).map((h) => (
                   <View key={h.id} style={styles.horizontalRowItem}>
                     <HubRow hub={h} />
                   </View>
                 ))}
+                {hubs.length > PREVIEW_COUNT && (
+                  <View style={styles.horizontalRowItem}>
+                    <Pressable style={styles.hubRow} onPress={() => setActiveTab('hubs')}>
+                      <View style={styles.seeAllRowIcon}>
+                        <IconSymbol name="chevron.right" size={16} color={Brand} />
+                      </View>
+                      <View style={styles.memberText}>
+                        <ThemedText type="defaultSemiBold" style={{ color: Brand }}>
+                          See all
+                        </ThemedText>
+                        <ThemedText numberOfLines={1} style={styles.rowMeta}>
+                          {hubs.length} hubs
+                        </ThemedText>
+                      </View>
+                    </Pressable>
+                  </View>
+                )}
               </ScrollView>
               {!loading && hubs.length === 0 && <ThemedText style={styles.rowMeta}>No other hubs listed yet.</ThemedText>}
             </View>
@@ -774,6 +931,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 24,
   },
+  // Cancels the parent section's 20px padding so the strip's own scrollable
+  // bounds run edge-to-edge (draggable from the screen edge) while the
+  // header above it keeps its padding — contentContainerStyle below adds the
+  // same 20px back as content padding, so the cards still start/end level
+  // with the header instead of touching the screen edge themselves.
+  // Cancels the parent section's 20px padding so a horizontal strip's cards
+  // run flush against the screen edges (both visually and as scroll bounds)
+  // while the header above it keeps its own padding. Shared by every
+  // horizontal strip section.
+  edgeToEdgeScroll: {
+    marginHorizontal: -20,
+  },
   sectionLabel: {
     fontSize: 12,
     fontWeight: '600',
@@ -821,6 +990,28 @@ const styles = StyleSheet.create({
   },
   atlasCard: {
     width: 140,
+  },
+  // Matches AtlasPinCard's own card shell (padding/radius/gap) since this
+  // Pressable isn't going through that component — just centered and tinted
+  // with Brand instead of a category color, to read as an action, not a pin.
+  seeAllCard: {
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: Brand + '14',
+    gap: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seeAllIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: Brand + '22',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seeAllLabel: {
+    fontSize: 13.5,
   },
   marketplaceStrip: {
     gap: 10,
@@ -880,10 +1071,64 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#8884',
   },
+  initiativeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#8884',
+  },
+  initiativeTile: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  initiativeStatusLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 1,
+  },
+  initiativeStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 5,
+  },
+  initiativeStatusLabel: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
   eventTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+  },
+  // Vertical-list counterpart to seeAllCard — same Brand tint/icon-badge
+  // language, laid out as a normal disclosure row instead of a card.
+  seeAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    marginTop: 2,
+  },
+  seeAllRowIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: Brand + '22',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seeAllRowLabel: {
+    flex: 1,
+    fontSize: 14.5,
   },
   postRow: {
     paddingVertical: 10,

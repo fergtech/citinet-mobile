@@ -70,7 +70,7 @@ export function EventAtlasLink({ location, eventTitle, eventId }: Props) {
         <IconSymbol name="mappin.and.ellipse" size={18} color={Brand} />
       </View>
       <View style={styles.content}>
-        <ThemedText type="defaultSemiBold" numberOfLines={1}>
+        <ThemedText type="defaultSemiBold" numberOfLines={2} adjustsFontSizeToFit>
           {location}
         </ThemedText>
         <ThemedText style={styles.meta} numberOfLines={1}>
@@ -85,7 +85,9 @@ export function EventAtlasLink({ location, eventTitle, eventId }: Props) {
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
+    // flex-start (not center) so the icon and chevron stay aligned with the
+    // first line when a long location name wraps to two lines.
+    alignItems: 'flex-start',
     gap: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
