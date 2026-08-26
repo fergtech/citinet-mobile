@@ -32,14 +32,7 @@ export default function HubSelectScreen() {
 
   useEffect(() => {
     getHubs()
-      .then((result) => {
-        // TEMP DEBUG — remove once the missing-icon regression is diagnosed.
-        if (__DEV__) {
-          const hub1 = result.find((h) => h.slug === 'hub1');
-          console.log('[hub-select] getHubs() hub1 entry:', hub1);
-        }
-        setHubs(result);
-      })
+      .then(setHubs)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);

@@ -52,11 +52,6 @@ export default function LoginScreen() {
     hub_icon_image_file_name: hubIconImageFileName,
   };
 
-  // TEMP DEBUG — remove once the missing-icon regression is diagnosed.
-  if (__DEV__) {
-    console.log('[login] hub icon params received:', { tunnelUrl, hubIcon });
-  }
-
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
