@@ -1,4 +1,4 @@
-import { Image } from 'expo-image';
+import { Image, type ImageStyle } from 'expo-image';
 import type { ReactNode } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
@@ -70,7 +70,13 @@ export function HubIcon({ hub, tunnelUrl, size, style, fallback }: Props) {
 
   if (hub?.hub_icon_mode === 'image' && hub.hub_icon_image_file_name && tunnelUrl) {
     const url = `${tunnelUrl.replace(/\/$/, '')}/api/public/files/${encodeURIComponent(hub.hub_icon_image_file_name)}`;
-    return <Image source={{ uri: url }} style={[badgeStyle, style]} contentFit="cover" />;
+    // Props.style is typed as StyleProp<ViewStyle> for the View/LinearGradient
+    // badge variants below (its far more common use here) -- expo-image wants
+    // StyleProp<ImageStyle> instead, which is identical except a narrower
+    // `overflow` ('visible' | 'hidden', no 'scroll'). Cast rather than widen
+    // Props.style itself, which would just move the mismatch onto those other
+    // call sites; nothing here ever needs overflow: 'scroll' on an icon badge.
+    return <Image source={{ uri: url }} style={[badgeStyle, style as StyleProp<ImageStyle>]} contentFit="cover" />;
   }
 
   if (!hasCustomIcon(hub)) {
