@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
+import { NativeModules } from 'react-native';
 import Zeroconf, { Service } from 'react-native-zeroconf';
 
 import { getHubInfo, getHubStatus } from '@/lib/api/hubService';
 import type { RegistryHub } from '@/lib/api/types';
+
+/**
+ * react-native-zeroconf is a native module -- its RNZeroconf binding is
+ * simply absent under Expo Go (which only ships a fixed set of pre-linked
+ * modules), so both Zeroconf#scan and #stop call straight into `null` and
+ * throw uncaught, crashing the whole app (not just this feature) the moment
+ * this hook mounts. Checking this before ever touching Zeroconf lets nearby
+ * discovery degrade to "not available" instead -- needs a custom dev client
+ * (expo-dev-client + eas build / prebuild), not plain `expo start`.
+ */
+export const isNearbyDiscoveryAvailable = NativeModules.RNZeroconf != null;
 
 // Must match the type/protocol the hub advertises with (api/mdnsAdvertise.js
 // in citinet-web: bonjour.publish({ type: 'citinet', protocol: 'tcp', ... })).
@@ -67,6 +79,14 @@ export function useNearbyHubs(): RegistryHub[] {
   const identityFetchedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (!isNearbyDiscoveryAvailable) {
+      console.warn(
+        '[nearbyHubs] react-native-zeroconf has no native binding in this build (e.g. Expo Go) -- ' +
+          'nearby hub discovery is disabled. Build a development client to enable it.'
+      );
+      return;
+    }
+
     const zeroconf = new Zeroconf();
 
     const applyEnrichment = (id: string, patch: Partial<Enrichment>) => {

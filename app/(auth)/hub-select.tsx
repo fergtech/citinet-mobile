@@ -12,7 +12,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getHubInfo } from '@/lib/api/hubService';
 import { getHubs } from '@/lib/api/registryService';
 import { RegistryHub } from '@/lib/api/types';
-import { useNearbyHubs } from '@/lib/discovery/nearbyHubs';
+import { isNearbyDiscoveryAvailable, useNearbyHubs } from '@/lib/discovery/nearbyHubs';
 
 export default function HubSelectScreen() {
   const colorScheme = useColorScheme() ?? 'light';
@@ -163,6 +163,12 @@ export default function HubSelectScreen() {
         </View>
       )}
 
+      {__DEV__ && !isNearbyDiscoveryAvailable && (
+        <ThemedText style={styles.devNote}>
+          Nearby hub discovery needs a development build — disabled in Expo Go.
+        </ThemedText>
+      )}
+
       <TextInput
         value={query}
         onChangeText={setQuery}
@@ -267,6 +273,12 @@ const styles = StyleSheet.create({
     opacity: 0.6,
     textTransform: 'uppercase',
     marginBottom: 6,
+  },
+  devNote: {
+    fontSize: 12,
+    opacity: 0.5,
+    fontStyle: 'italic',
+    marginBottom: 12,
   },
   nearbySection: {
     marginBottom: 16,
