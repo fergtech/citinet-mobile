@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Used to find Citinet hubs on your local network so you can connect directly without the internet.",
+        "NSBonjourServices": ["_citinet._tcp."]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +22,12 @@
         "monochromeImage": "./assets/images/icon-512x512.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_MULTICAST_STATE"
+      ]
     },
     "web": {
       "output": "static",
