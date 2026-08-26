@@ -10,8 +10,10 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { getHubInfo } from '@/lib/api/hubService';
 import { getHubs } from '@/lib/api/registryService';
 import { RegistryHub } from '@/lib/api/types';
+import { useNearbyHubs } from '@/lib/discovery/nearbyHubs';
 
 export default function HubSelectScreen() {
   const colorScheme = useColorScheme() ?? 'light';
@@ -22,6 +24,12 @@ export default function HubSelectScreen() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const nearbyHubs = useNearbyHubs();
+
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualAddress, setManualAddress] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   useEffect(() => {
     getHubs()
@@ -36,29 +44,95 @@ export default function HubSelectScreen() {
     return hub.name.toLowerCase().includes(needle) || hub.location?.toLowerCase().includes(needle);
   });
 
-  const selectedHub = hubs.find((hub) => hub.id === selectedId) ?? null;
+  const selectedHub = hubs.find((hub) => hub.id === selectedId) ?? nearbyHubs.find((hub) => hub.id === selectedId) ?? null;
 
-  function handleContinue() {
-    if (!selectedHub) return;
+  function navigateToLogin(hub: RegistryHub) {
     router.push({
       pathname: '/(auth)/login',
       params: {
-        hubId: selectedHub.id,
-        hubSlug: selectedHub.slug,
-        hubName: selectedHub.name,
-        tunnelUrl: selectedHub.tunnel_url,
-        location: selectedHub.location ?? '',
-        // Carried along so login.tsx can render the same custom hub icon
-        // without a second registry round-trip — see components/hub-icon.tsx.
-        hubIconMode: selectedHub.hub_icon_mode ?? '',
-        hubIconSymbol: selectedHub.hub_icon_symbol ?? '',
-        hubIconBgMode: selectedHub.hub_icon_bg_mode ?? '',
-        hubIconGradientFrom: selectedHub.hub_icon_gradient_from ?? '',
-        hubIconGradientTo: selectedHub.hub_icon_gradient_to ?? '',
-        hubIconSolidColor: selectedHub.hub_icon_solid_color ?? '',
-        hubIconImageFileName: selectedHub.hub_icon_image_file_name ?? '',
+        hubId: hub.id,
+        hubSlug: hub.slug,
+        hubName: hub.name,
+        tunnelUrl: hub.tunnel_url,
+        location: hub.location ?? '',
+        hubIconMode: hub.hub_icon_mode ?? '',
+        hubIconSymbol: hub.hub_icon_symbol ?? '',
+        hubIconBgMode: hub.hub_icon_bg_mode ?? '',
+        hubIconGradientFrom: hub.hub_icon_gradient_from ?? '',
+        hubIconGradientTo: hub.hub_icon_gradient_to ?? '',
+        hubIconSolidColor: hub.hub_icon_solid_color ?? '',
+        hubIconImageFileName: hub.hub_icon_image_file_name ?? '',
       },
     });
+  }
+
+  function handleContinue() {
+    if (!selectedHub) return;
+    navigateToLogin(selectedHub);
+  }
+
+  async function handleManualConnect() {
+    const address = manualAddress.trim();
+    if (!address) return;
+    setManualBusy(true);
+    setManualError(null);
+    try {
+      const tunnelUrl = /^https?:\/\//i.test(address) ? address : `http://${address}`;
+      const info = await getHubInfo(tunnelUrl);
+      navigateToLogin({
+        id: tunnelUrl,
+        name: info.hub_name,
+        slug: info.hub_slug,
+        location: info.location,
+        tunnel_url: tunnelUrl,
+      });
+    } catch (err) {
+      setManualError(err instanceof Error ? err.message : "Couldn't reach that address.");
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
+  function hubMetaLine(item: RegistryHub): string {
+    const parts: string[] = [];
+    if (item.location) parts.push(item.location);
+    if (typeof item.member_count === 'number') parts.push(`${item.member_count} neighbors`);
+    // online_now/uptime only ever come from live heartbeat enrichment
+    // (Layer 3) -- registry-sourced Directory entries never have them, so
+    // this naturally only shows on enriched Nearby rows.
+    if (typeof item.online_now === 'number') {
+      parts.push(item.online_now > 0 ? `${item.online_now} online now` : 'online');
+    }
+    return parts.join(' · ');
+  }
+
+  function renderHubRow(item: RegistryHub) {
+    const selected = item.id === selectedId;
+    const live = typeof item.online_now === 'number';
+    return (
+      <Pressable
+        key={item.id}
+        onPress={() => setSelectedId(item.id)}
+        style={[styles.row, selected && { backgroundColor: tint + '15' }]}>
+        <View style={styles.avatarWrap}>
+          <BrandGradient style={styles.avatar}>
+            <ThemedText style={styles.avatarText} lightColor="#fff" darkColor="#fff">
+              {item.name.charAt(0).toUpperCase()}
+            </ThemedText>
+          </BrandGradient>
+          {live && <View style={styles.liveDot} />}
+        </View>
+        <View style={styles.rowText}>
+          <ThemedText type="defaultSemiBold">{item.name}</ThemedText>
+          <ThemedText style={styles.rowMeta}>{hubMetaLine(item)}</ThemedText>
+        </View>
+        <IconSymbol
+          name={selected ? 'checkmark.circle.fill' : 'circle'}
+          size={22}
+          color={selected ? tint : Colors[colorScheme].icon}
+        />
+      </Pressable>
+    );
   }
 
   return (
@@ -83,65 +157,81 @@ export default function HubSelectScreen() {
         </ThemedText>
         <ThemedText style={styles.subheading}>Search by name or pick from the list.</ThemedText>
 
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search hubs"
-          placeholderTextColor={Colors[colorScheme].icon}
-          style={[styles.searchInput, { color: Colors[colorScheme].text }]}
-        />
+      {nearbyHubs.length > 0 && (
+        <View style={styles.nearbySection}>
+          <ThemedText style={styles.sectionLabel}>Nearby</ThemedText>
+          {nearbyHubs.map(renderHubRow)}
+        </View>
+      )}
+
+      <TextInput
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Search hubs"
+        placeholderTextColor={Colors[colorScheme].icon}
+        style={[styles.searchInput, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
+      />
 
         {loading && <ActivityIndicator style={styles.spinner} />}
         {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
-        <FlatList
-          data={filtered}
-          keyExtractor={(hub) => hub.id}
-          style={styles.listBox}
-          contentContainerStyle={styles.list}
-          renderItem={({ item }) => {
-            const selected = item.id === selectedId;
-            return (
-              <Pressable
-                onPress={() => setSelectedId(item.id)}
-                style={[styles.row, selected && { backgroundColor: tint + '15' }]}>
-                <HubIcon
-                  hub={item}
-                  tunnelUrl={item.tunnel_url}
-                  size={44}
-                  style={styles.avatar}
-                  fallback={<HubLetterFallback letter={item.name.charAt(0).toUpperCase()} size={44} />}
-                />
-                <View style={styles.rowText}>
-                  <ThemedText type="defaultSemiBold">{item.name}</ThemedText>
-                  <ThemedText style={styles.rowMeta}>
-                    {item.location}
-                    {typeof item.member_count === 'number' ? ` · ${item.member_count} neighbors` : ''}
-                  </ThemedText>
-                </View>
-                <IconSymbol
-                  name={selected ? 'checkmark.circle.fill' : 'circle'}
-                  size={22}
-                  color={selected ? tint : Colors[colorScheme].icon}
-                />
-              </Pressable>
-            );
-          }}
-          ListEmptyComponent={
-            !loading ? <ThemedText style={styles.rowMeta}>No hubs match your search.</ThemedText> : null
-          }
-        />
+      <ThemedText style={styles.sectionLabel}>Directory</ThemedText>
+      <FlatList
+        data={filtered}
+        keyExtractor={(hub) => hub.id}
+        style={styles.listBox}
+        contentContainerStyle={styles.list}
+        renderItem={({ item }) => renderHubRow(item)}
+        ListEmptyComponent={
+          !loading ? <ThemedText style={styles.rowMeta}>No hubs match your search.</ThemedText> : null
+        }
+      />
 
-        <Pressable
-          onPress={handleContinue}
-          disabled={!selectedHub}
-          style={[styles.continueButton, { opacity: selectedHub ? 1 : 0.4 }]}>
-          <BrandGradient style={styles.continueFill}>
-            <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
-              Continue
-            </ThemedText>
-          </BrandGradient>
-        </Pressable>
+      <Pressable
+        onPress={handleContinue}
+        disabled={!selectedHub}
+        style={[styles.continueButton, { opacity: selectedHub ? 1 : 0.4 }]}>
+        <BrandGradient style={styles.continueFill}>
+          <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
+            Continue
+          </ThemedText>
+        </BrandGradient>
+      </Pressable>
+
+      <Pressable onPress={() => setManualOpen((v) => !v)} style={styles.manualToggle}>
+        <ThemedText style={[styles.manualToggleLabel, { color: tint }]}>
+          {manualOpen ? 'Hide manual entry' : 'Enter hub address manually'}
+        </ThemedText>
+      </Pressable>
+
+      {manualOpen && (
+        <View style={styles.manualSection}>
+          <TextInput
+            value={manualAddress}
+            onChangeText={setManualAddress}
+            placeholder="192.168.1.50:9090"
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholderTextColor={Colors[colorScheme].icon}
+            style={[styles.searchInput, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
+          />
+          {manualError && <ThemedText style={styles.error}>{manualError}</ThemedText>}
+          <Pressable
+            onPress={handleManualConnect}
+            disabled={manualBusy || !manualAddress.trim()}
+            style={[styles.continueButton, { opacity: manualBusy || !manualAddress.trim() ? 0.4 : 1 }]}>
+            <BrandGradient style={styles.continueFill}>
+              {manualBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
+                  Connect
+                </ThemedText>
+              )}
+            </BrandGradient>
+          </Pressable>
+        </View>
+      )}
       </View>
       </ThemedView>
     </KeyboardAvoidingView>
@@ -171,6 +261,28 @@ const styles = StyleSheet.create({
   subheading: {
     marginBottom: 16,
     opacity: 0.7,
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    opacity: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  nearbySection: {
+    marginBottom: 16,
+  },
+  manualToggle: {
+    alignSelf: 'center',
+    paddingVertical: 12,
+  },
+  manualToggleLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  manualSection: {
+    marginTop: 4,
+    marginBottom: 12,
   },
   searchInput: {
     backgroundColor: '#8881',
@@ -205,12 +317,30 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#8884',
   },
+  avatarWrap: {
+    position: 'relative',
+  },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  avatarText: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  liveDot: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22c55e',
+    borderWidth: 2,
+    borderColor: '#8884',
   },
   rowText: {
     flex: 1,

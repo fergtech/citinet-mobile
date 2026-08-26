@@ -31,6 +31,55 @@ export async function loginUser(
   return res.json();
 }
 
+export type HubInfo = {
+  hub_name: string;
+  hub_slug: string;
+  member_count: number;
+  location: string;
+  description: string;
+};
+
+/**
+ * Unauthenticated probe against a hub's real GET /api/info — confirms a
+ * given address is actually a reachable Citinet hub (not just "something
+ * answered") and returns its real name/slug (DB-config-aware, not a guess
+ * from the URL). Used to validate a manually-entered local address before
+ * letting the user continue, and to confirm/enrich an mDNS-discovered
+ * result before listing it as connectable.
+ */
+export async function getHubInfo(tunnelUrl: string): Promise<HubInfo> {
+  let res: Response;
+  try {
+    res = await fetch(`${tunnelUrl}/api/info`);
+  } catch {
+    throw new Error("Couldn't reach a hub at that address. Check it's correct and try again.");
+  }
+  if (!res.ok) {
+    throw new Error("That doesn't look like a Citinet hub.");
+  }
+  return res.json();
+}
+
+export type HubStatus = {
+  online: boolean;
+  uptime: string;
+  user_count: number;
+  online_now: number;
+  node_name: string;
+};
+
+/**
+ * Unauthenticated probe against GET /api/status — the hub's live "heartbeat"
+ * (uptime, currently-active member count), separate from getHubInfo()'s
+ * mostly-static identity data since this is meant to be re-polled
+ * periodically while a hub is visible on screen, not fetched once.
+ */
+export async function getHubStatus(tunnelUrl: string): Promise<HubStatus> {
+  const res = await fetch(`${tunnelUrl}/api/status`);
+  if (!res.ok) throw new Error(`Status check failed (${res.status})`);
+  return res.json();
+}
+
 export async function getPosts(tunnelUrl: string, token: string): Promise<HubPost[]> {
   const res = await fetch(`${tunnelUrl}/api/posts`, {
     headers: { Authorization: `Bearer ${token}` },

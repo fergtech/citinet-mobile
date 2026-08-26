@@ -25,6 +25,12 @@ export type RegistryHub = HubIconFields & {
   tunnel_url: string;
   member_count?: number;
   online?: boolean;
+  /** Heartbeat signal (GET /api/status) — how many members are active right
+   * now, distinct from member_count's all-time total. Populated live for
+   * mDNS-discovered "Nearby" hubs; absent for registry-sourced entries. */
+  online_now?: number;
+  /** Human-readable uptime string from GET /api/status (e.g. "2d 4h"). */
+  uptime?: string;
 };
 
 export type LoginResponse = {
