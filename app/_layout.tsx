@@ -72,6 +72,7 @@ function RootNavigator() {
         <Stack.Screen name="initiatives/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/team" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/tasks" options={{ headerShown: false }} />
+        <Stack.Screen name="initiatives/[id]/tasks/[taskId]" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/roles" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/resources" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />

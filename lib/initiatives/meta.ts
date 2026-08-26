@@ -1,6 +1,6 @@
 import type { IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
-import { Initiative, InitiativeTask, InitiativeTaskStatus, InitiativeUpdate, TaskMeta } from '@/lib/api/types';
+import { Initiative, InitiativeTaskStatus, InitiativeTaskSummary, InitiativeUpdate, TaskMeta } from '@/lib/api/types';
 
 // Category is a lowercase free-form string on the real server ("infrastructure"),
 // not the capitalized four-value enum the design handoff implied — keyed
@@ -83,17 +83,54 @@ export function taskStatusMeta(status: string): { label: string; color: string }
   return TASK_STATUS_META[status as InitiativeTaskStatus] ?? TASK_STATUS_META.todo;
 }
 
-// Speculative — for the fuller InitiativeTask shape (dedicated Tasks/task
-// detail screens, neither built yet), not the confirmed embedded summary.
-// The design handoff's "checklist progress overrides manual status" rule has
-// no evidence in the real embedded data (no checklist fields on a task at
-// all yet), so this no longer tries to derive anything — it's just `status`,
-// with `blocked` (itself unconfirmed) as the one override kept from the
-// original design intent. Revisit once the real /tasks contract is known.
-export function effectiveTaskStatus(task: InitiativeTask, meta?: TaskMeta | null): InitiativeTaskStatus {
-  const blocked = meta ? meta.blocked : task.blocked;
-  if (blocked) return 'todo';
-  return task.status;
+// The four-value status shown in the task detail view (app/initiatives/[id]/
+// tasks/[taskId].tsx) — a display concept, not a real column. Confirmed
+// against citinet web's own InitiativeCard.tsx (TASK_STATUS_META/
+// effectiveTaskStatus): `blocked` always wins, then a task with checklist
+// items derives todo/in-progress/done purely from checklist completion
+// (matching the server's own recomputeTaskStatusFromChecklist), and only a
+// checklist-less task falls back to its plain `status` column.
+export type TaskDisplayStatus = 'not-started' | 'in-progress' | 'blocked' | 'done';
+
+export const TASK_DISPLAY_STATUS_META: Record<TaskDisplayStatus, { label: string; color: string }> = {
+  'not-started': { label: 'Not started', color: '#64748b' },
+  'in-progress': { label: 'In progress', color: Brand },
+  blocked: { label: 'Blocked', color: '#dc2626' },
+  done: { label: 'Done', color: '#059669' },
+};
+
+export function effectiveTaskStatus(
+  task: InitiativeTaskSummary,
+  meta?: TaskMeta | null,
+  checklist?: { done: boolean }[] | null
+): TaskDisplayStatus {
+  if (meta?.blocked) return 'blocked';
+  const total = checklist?.length ?? meta?.checklist_total ?? 0;
+  if (total === 0) {
+    if (task.status === 'done') return 'done';
+    if (task.status === 'in-progress') return 'in-progress';
+    return 'not-started';
+  }
+  const done = checklist ? checklist.filter((c) => c.done).length : meta?.checklist_done ?? 0;
+  if (done === total) return 'done';
+  if (done === 0) return 'not-started';
+  return 'in-progress';
+}
+
+// A task can only be status-cycled manually (from the tasks list) when the
+// viewer created or is assigned to it, AND it has no checklist — a checklist
+// present means the server derives status automatically and 409s a manual
+// PATCH (see updateTaskStatus's note in hubService.ts).
+export function canCycleTaskStatus(task: InitiativeTaskSummary, meta: TaskMeta | undefined, viewerId: string): boolean {
+  const ownsTask = task.created_by === viewerId || meta?.assignee_user_id === viewerId;
+  const hasChecklist = (meta?.checklist_total ?? 0) > 0;
+  return ownsTask && !hasChecklist;
+}
+
+export function nextTaskStatus(status: InitiativeTaskStatus): InitiativeTaskStatus {
+  if (status === 'todo') return 'in-progress';
+  if (status === 'in-progress') return 'done';
+  return 'todo';
 }
 
 // None of Initiative's top-level counts survived contact with a real

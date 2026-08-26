@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -8,22 +8,27 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { listInitiativeResources, provideResource, unprovideResource } from '@/lib/api/hubService';
+import { getInitiative, listInitiativeResources, provideResource, unprovideResource } from '@/lib/api/hubService';
 import { InitiativeResource } from '@/lib/api/types';
 import { formatBytes } from '@/lib/files/kind';
 import { useSession } from '@/lib/session/session-context';
 
-// Same caveat as roles.tsx: nothing about resources is embedded in
-// GET /api/initiatives/:id, so this hits the separate, unconfirmed
-// /resources endpoint — listInitiativeResources degrades to an empty list
-// on a shape mismatch rather than crashing, so an empty screen here could
-// mean either "no resources" or "wrong field names."
+// Real field shapes confirmed against api/server.js's hub_initiative_resources
+// table (see types.ts's InitiativeResource) — item/qty/provided_by_name/
+// file_display_name/url, not the name/quantity_note/provider_username/
+// file_name/link_url guess this screen originally rendered, which is why
+// every row used to show the "Item" fallback regardless of what was actually
+// pledged. "I can provide this" is further gated to initiative members here
+// (viewerIsMember, fetched alongside the resource list) — the server itself
+// doesn't require membership on the provide route, so this is a deliberate
+// product choice, not a server-enforced rule.
 export default function InitiativeResourcesScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const [resources, setResources] = useState<InitiativeResource[]>([]);
+  const [viewerIsMember, setViewerIsMember] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actingOn, setActingOn] = useState<string | null>(null);
@@ -32,8 +37,14 @@ export default function InitiativeResourcesScreen() {
     if (!session || !id) return;
     setLoading(true);
     setError(null);
-    listInitiativeResources(session.hub.tunnelUrl, session.token, id)
-      .then(setResources)
+    Promise.all([
+      listInitiativeResources(session.hub.tunnelUrl, session.token, id),
+      getInitiative(session.hub.tunnelUrl, session.token, id),
+    ])
+      .then(([nextResources, initiative]) => {
+        setResources(nextResources);
+        setViewerIsMember(initiative.viewerIsMember);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load resources."))
       .finally(() => setLoading(false));
   }, [session, id]);
@@ -68,15 +79,15 @@ export default function InitiativeResourcesScreen() {
           <View style={styles.section}>
             <ThemedText style={styles.sectionLabel}>Materials</ThemedText>
             {materials.map((item) => {
-              const isMine = !!item.provider_user_id && item.provider_user_id === session.userId;
+              const isMine = !!item.provided_by_user_id && item.provided_by_user_id === session.userId;
               const busy = actingOn === item.id;
               return (
                 <View key={item.id} style={styles.materialRow}>
                   <View style={styles.materialText}>
                     <ThemedText type="defaultSemiBold" style={styles.materialName}>
-                      {item.name ?? 'Item'}
+                      {item.item}
                     </ThemedText>
-                    {!!item.quantity_note && <ThemedText style={styles.rowMeta}>{item.quantity_note}</ThemedText>}
+                    {!!item.qty && <ThemedText style={styles.rowMeta}>{item.qty}</ThemedText>}
                   </View>
                   {item.provided ? (
                     isMine ? (
@@ -84,14 +95,16 @@ export default function InitiativeResourcesScreen() {
                         <ThemedText style={styles.outlineButtonLabel}>Not me after all</ThemedText>
                       </Pressable>
                     ) : (
-                      <ThemedText style={styles.rowMeta}>Provided by {item.provider_username ?? 'a neighbor'}</ThemedText>
+                      <ThemedText style={styles.rowMeta}>Provided by {item.provided_by_name ?? 'a neighbor'}</ThemedText>
                     )
-                  ) : (
+                  ) : viewerIsMember ? (
                     <Pressable style={[styles.provideButton, busy && { opacity: 0.6 }]} disabled={busy} onPress={() => toggleProvided(item)}>
                       <ThemedText style={styles.provideButtonLabel} lightColor="#fff" darkColor="#fff">
                         I can provide this
                       </ThemedText>
                     </Pressable>
+                  ) : (
+                    <ThemedText style={styles.rowMeta}>Join to help provide this</ThemedText>
                   )}
                 </View>
               );
@@ -103,20 +116,22 @@ export default function InitiativeResourcesScreen() {
           <View style={styles.section}>
             <ThemedText style={styles.sectionLabel}>Attached files</ThemedText>
             {files.map((item) => (
-              <View key={item.id} style={styles.fileRow}>
+              <Pressable
+                key={item.id}
+                style={styles.fileRow}
+                disabled={!item.file_id}
+                onPress={() => item.file_id && router.push(`/files/${encodeURIComponent(item.file_id)}` as unknown as Href)}>
                 <View style={styles.fileTile}>
                   <IconSymbol name="doc.fill" size={16} color={Colors[colorScheme].icon} />
                 </View>
                 <View style={styles.materialText}>
                   <ThemedText type="defaultSemiBold" numberOfLines={1}>
-                    {item.file_name ?? 'File'}
+                    {item.file_display_name ?? item.item}
                   </ThemedText>
-                  <ThemedText style={styles.rowMeta} numberOfLines={1}>
-                    {item.file_size_bytes ? `${formatBytes(item.file_size_bytes)} · ` : ''}
-                    {item.file_owner_username ?? ''}
-                  </ThemedText>
+                  {!!item.file_size_bytes && <ThemedText style={styles.rowMeta}>{formatBytes(item.file_size_bytes)}</ThemedText>}
                 </View>
-              </View>
+                {!!item.file_id && <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />}
+              </Pressable>
             ))}
           </View>
         )}
@@ -125,16 +140,16 @@ export default function InitiativeResourcesScreen() {
           <View style={styles.section}>
             <ThemedText style={styles.sectionLabel}>External links</ThemedText>
             {links.map((item) => (
-              <Pressable key={item.id} style={styles.linkRow} onPress={() => item.link_url && Linking.openURL(item.link_url)}>
+              <Pressable key={item.id} style={styles.linkRow} onPress={() => item.url && Linking.openURL(item.url)}>
                 <View style={styles.fileTile}>
                   <IconSymbol name="link" size={16} color={Colors[colorScheme].icon} />
                 </View>
                 <View style={styles.materialText}>
                   <ThemedText type="defaultSemiBold" numberOfLines={1}>
-                    {item.link_label ?? 'Link'}
+                    {item.item}
                   </ThemedText>
                   <ThemedText style={styles.rowMeta} numberOfLines={1}>
-                    {item.link_url}
+                    {item.url}
                   </ThemedText>
                 </View>
                 <IconSymbol name="arrow.up.right.square" size={16} color={Colors[colorScheme].icon} />

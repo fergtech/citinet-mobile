@@ -1,38 +1,58 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Brand } from '@/constants/theme';
-import { getInitiative } from '@/lib/api/hubService';
-import { Initiative, InitiativeTaskSummary } from '@/lib/api/types';
-import { TASK_STATUS_ORDER, taskStatusMeta } from '@/lib/initiatives/meta';
+import { Brand, Colors } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { assignTask, getInitiative, getInitiativeTaskMeta, unassignTask, updateTaskStatus } from '@/lib/api/hubService';
+import { Initiative, InitiativeTaskSummary, TaskMeta } from '@/lib/api/types';
+import { canCycleTaskStatus, effectiveTaskStatus, nextTaskStatus, TASK_DISPLAY_STATUS_META, TASK_STATUS_ORDER, taskStatusMeta } from '@/lib/initiatives/meta';
 import { useSession } from '@/lib/session/session-context';
 
 type StatusFilter = 'All' | string;
 
-// Built entirely from the `tasks` array already embedded in
-// GET /api/initiatives/:id — confirmed live. A dedicated task-detail screen
-// (with assignee/checklist/notes) isn't built yet, and the standalone
-// /tasks list endpoint hubService.ts exposes is unconfirmed, so rows here
-// are display-only for now rather than tapping into something unverified.
+function taskDetailRoute(initiativeId: string, taskId: string): Href {
+  return `/initiatives/${initiativeId}/tasks/${taskId}` as unknown as Href;
+}
+
+// Built from the `tasks` array embedded in GET /api/initiatives/:id, plus
+// GET /:id/task-meta for assignee/checklist/blocked — both confirmed against
+// api/server.js. Tapping a row opens the real task-detail screen (status,
+// checklist, notes). The status pill itself cycles status inline for
+// checklist-less tasks the viewer owns (mirroring citinet web's TasksPane);
+// an unclaimed task nobody has been assigned to shows "Claim this task" —
+// claiming makes the viewer the assignee, which is what unlocks checklist
+// edits on the detail screen (assertTaskOwner server-side requires the
+// caller be the creator or the assignee).
 export default function InitiativeTasksScreen() {
+  const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const [initiative, setInitiative] = useState<Initiative | null>(null);
+  const [taskMeta, setTaskMeta] = useState<Record<string, TaskMeta>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
+  const [cyclingId, setCyclingId] = useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!session || !id) return;
     setLoading(true);
     setError(null);
-    getInitiative(session.hub.tunnelUrl, session.token, id)
-      .then(setInitiative)
+    Promise.all([
+      getInitiative(session.hub.tunnelUrl, session.token, id),
+      getInitiativeTaskMeta(session.hub.tunnelUrl, session.token, id).catch(() => []),
+    ])
+      .then(([nextInitiative, metaList]) => {
+        setInitiative(nextInitiative);
+        setTaskMeta(Object.fromEntries(metaList.map((m) => [m.task_id, m])));
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load tasks."))
       .finally(() => setLoading(false));
   }, [session, id]);
@@ -45,6 +65,37 @@ export default function InitiativeTasksScreen() {
     const tasks = initiative?.tasks ?? [];
     return statusFilter === 'All' ? tasks : tasks.filter((t) => t.status === statusFilter);
   }, [initiative, statusFilter]);
+
+  function cycleStatus(task: InitiativeTaskSummary) {
+    if (!session || !initiative || cyclingId) return;
+    const next = nextTaskStatus(task.status);
+    setCyclingId(task.id);
+    setInitiative({ ...initiative, tasks: initiative.tasks.map((t) => (t.id === task.id ? { ...t, status: next } : t)) });
+    updateTaskStatus(session.hub.tunnelUrl, session.token, task.id, next, initiative.id, task.title)
+      .catch((err) => {
+        setInitiative((prev) => (prev ? { ...prev, tasks: prev.tasks.map((t) => (t.id === task.id ? task : t)) } : prev));
+        setError(err instanceof Error ? err.message : "Couldn't update that task.");
+      })
+      .finally(() => setCyclingId(null));
+  }
+
+  function claimTask(task: InitiativeTaskSummary) {
+    if (!session || !id || claimingId) return;
+    setClaimingId(task.id);
+    assignTask(session.hub.tunnelUrl, session.token, task.id, id, true)
+      .then(load)
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't claim that task."))
+      .finally(() => setClaimingId(null));
+  }
+
+  function releaseTask(task: InitiativeTaskSummary) {
+    if (!session || !id || claimingId) return;
+    setClaimingId(task.id);
+    unassignTask(session.hub.tunnelUrl, session.token, task.id, id)
+      .then(load)
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't release that task."))
+      .finally(() => setClaimingId(null));
+  }
 
   if (!session) return null;
 
@@ -84,21 +135,57 @@ export default function InitiativeTasksScreen() {
             </ScrollView>
           }
           renderItem={({ item }: { item: InitiativeTaskSummary }) => {
-            const meta = taskStatusMeta(item.status);
+            const meta = taskMeta[item.id];
+            const disp = effectiveTaskStatus(item, meta);
+            const dispMeta = TASK_DISPLAY_STATUS_META[disp];
             const creator = creatorNames.get(item.created_by);
+            const canCycle = !!initiative && canCycleTaskStatus(item, meta, session.userId);
+            const unclaimed = !meta?.assignee_user_id && item.created_by !== session.userId;
+            const claimedByMe = meta?.assignee_user_id === session.userId;
             return (
-              <View style={styles.row}>
-                <View style={[styles.dot, { backgroundColor: meta.color }]} />
+              <Pressable
+                style={styles.row}
+                onPress={() => initiative && router.push(taskDetailRoute(initiative.id, item.id))}>
                 <View style={styles.rowText}>
                   <ThemedText type="defaultSemiBold" numberOfLines={2}>
                     {item.title}
                   </ThemedText>
-                  <ThemedText style={styles.rowMeta}>
-                    <ThemedText style={[styles.rowMeta, { color: meta.color, fontWeight: '600' }]}>{meta.label}</ThemedText>
-                    {creator ? ` · by ${creator}` : ''}
-                  </ThemedText>
+                  <View style={styles.rowMetaLine}>
+                    <Pressable
+                      hitSlop={6}
+                      disabled={!canCycle || cyclingId === item.id}
+                      onPress={() => cycleStatus(item)}
+                      style={[styles.statusPill, { backgroundColor: dispMeta.color }, !canCycle && styles.statusPillStatic]}>
+                      <ThemedText style={styles.statusPillLabel} lightColor="#fff" darkColor="#fff">
+                        {dispMeta.label}
+                      </ThemedText>
+                    </Pressable>
+                    {!!meta?.checklist_total && (
+                      <ThemedText style={styles.rowMeta}>
+                        {meta.checklist_done}/{meta.checklist_total} steps
+                      </ThemedText>
+                    )}
+                    {creator ? <ThemedText style={styles.rowMeta}>by {creator}</ThemedText> : null}
+                  </View>
                 </View>
-              </View>
+                {unclaimed && (
+                  <Pressable
+                    style={[styles.claimButton, claimingId === item.id && { opacity: 0.6 }]}
+                    disabled={claimingId === item.id}
+                    onPress={() => claimTask(item)}>
+                    <ThemedText style={styles.claimButtonLabel}>{claimingId === item.id ? 'Claiming…' : 'Claim this task'}</ThemedText>
+                  </Pressable>
+                )}
+                {claimedByMe && (
+                  <Pressable
+                    style={[styles.releaseButton, claimingId === item.id && { opacity: 0.6 }]}
+                    disabled={claimingId === item.id}
+                    onPress={() => releaseTask(item)}>
+                    <ThemedText style={styles.releaseButtonLabel}>{claimingId === item.id ? 'Releasing…' : 'Release'}</ThemedText>
+                  </Pressable>
+                )}
+                <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
+              </Pressable>
             );
           }}
           ListEmptyComponent={
@@ -153,23 +240,56 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
     paddingVertical: 12,
   },
-  dot: {
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    marginTop: 5,
-  },
   rowText: {
     flex: 1,
-    gap: 3,
+    gap: 6,
+  },
+  rowMetaLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  statusPill: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  statusPillStatic: {
+    opacity: 0.55,
+  },
+  statusPillLabel: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   rowMeta: {
     fontSize: 11.5,
     opacity: 0.55,
+  },
+  claimButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: Brand,
+  },
+  claimButtonLabel: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  releaseButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#8881',
+  },
+  releaseButtonLabel: {
+    fontSize: 11.5,
+    fontWeight: '600',
   },
   empty: {
     opacity: 0.6,

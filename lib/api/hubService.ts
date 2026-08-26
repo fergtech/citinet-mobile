@@ -1,4 +1,4 @@
-import { AtlasPin, AtlasPinCategory, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTask, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AtlasPin, AtlasPinCategory, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -1046,12 +1046,15 @@ export async function updateMarketplaceBannerConfig(
 }
 
 // ── Initiatives ──────────────────────────────────────────────────────
-// Endpoint paths follow this file's existing REST conventions (plural
-// resource under /api, list/detail scoped by the parent id, mutations on a
-// child addressed directly by its own id) and the function list the design
-// handoff confirms already exists in citinet web's initiativesService — but
-// unlike every section above, these haven't been checked against a live
-// api/server.js. Treat as best-effort pending verification against a real hub.
+// listInitiatives/getInitiative/joinInitiative/getInitiativeTeam/
+// getInitiativeActivity/getInitiativeShareLink/inviteToInitiative below
+// follow this file's existing REST conventions and haven't individually been
+// re-checked against api/server.js beyond the confirmed GET /:id shape (see
+// types.ts) — treat those as best-effort. Everything from the Tasks section
+// onward (tasks, checklist, notes, roles, resources) has been corrected
+// against api/server.js's real routes directly, since the original guesses
+// there were wrong on several endpoint paths, HTTP methods, and body/response
+// field names — see each function's own note for what changed.
 
 export async function listInitiatives(tunnelUrl: string, token: string, spaceId?: string): Promise<Initiative[]> {
   const params = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : '';
@@ -1145,25 +1148,22 @@ export async function inviteToInitiative(
 }
 
 // Tasks
-
-export async function listInitiativeTasks(tunnelUrl: string, token: string, initiativeId: string): Promise<InitiativeTask[]> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/tasks`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load tasks."));
-  }
-  const data = await res.json();
-  return Array.isArray(data.tasks) ? data.tasks : [];
-}
+//
+// There is no `/api/initiatives/:id/tasks` route on the real server at all —
+// tasks only ever come back embedded in GET /api/initiatives/:id (see
+// InitiativeTaskSummary). The real create/update/delete routes are addressed
+// as "goals" (POST /:id/goals, PATCH and DELETE /goals/:goalId) — a legacy
+// name from the external-provider proxy this hub was originally built
+// against — even though everywhere else (checklist, notes, blocked, meta)
+// uses "tasks"/taskId. Both address the same hub_initiative_local_tasks row.
 
 export async function addTask(
   tunnelUrl: string,
   token: string,
   initiativeId: string,
-  data: { title: string; description?: string }
-): Promise<InitiativeTask> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/tasks`, {
+  data: { title: string; assignee_user_id?: string; due_date?: string }
+): Promise<InitiativeTaskSummary> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/goals`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -1174,26 +1174,41 @@ export async function addTask(
   return res.json();
 }
 
-export async function getTaskMeta(tunnelUrl: string, token: string, taskId: string): Promise<TaskMeta> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/meta`, {
+// One call for every task in the initiative — GET /:id/task-meta, not a
+// per-task endpoint (there isn't one). A task with no assignee/due-date and
+// no checklist items has no row in the response at all; callers should treat
+// a missing entry the same as an all-null/zero one, not as an error.
+export async function getInitiativeTaskMeta(tunnelUrl: string, token: string, initiativeId: string): Promise<TaskMeta[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/task-meta`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load this task."));
+    throw new Error(await readErrorMessage(res, "Couldn't load task details."));
   }
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data.taskMeta) ? data.taskMeta : [];
 }
 
+// initiativeId/title are only used to log a real activity-feed entry
+// ("completed <title>") when status flips to 'done' — the server has no way
+// to look up a goal's parent initiative or title on its own (no "get one
+// goal" route), so the caller supplies both; they're stripped before this
+// ever reaches an external provider. Returns 409 if the task has checklist
+// items — its status follows checklist completion instead (see
+// recomputeTaskStatusFromChecklist server-side); callers should only offer
+// manual status changes when a task has no checklist.
 export async function updateTaskStatus(
   tunnelUrl: string,
   token: string,
   taskId: string,
-  status: InitiativeTask['status']
-): Promise<InitiativeTask> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/status`, {
+  status: InitiativeTaskSummary['status'],
+  initiativeId: string,
+  title: string
+): Promise<InitiativeTaskSummary> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/goals/${encodeURIComponent(taskId)}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, _initiativeId: initiativeId, _title: title }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't update that task's status."));
@@ -1201,17 +1216,19 @@ export async function updateTaskStatus(
   return res.json();
 }
 
+// `blocked` is the one manual override a checklist can't infer — gated
+// server-side to the task's creator/assignee, same as checklist writes.
 export async function setTaskBlocked(
   tunnelUrl: string,
   token: string,
   taskId: string,
   blocked: boolean,
-  reason?: string
-): Promise<InitiativeTask> {
+  initiativeId: string
+): Promise<TaskMeta> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/blocked`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ blocked, reason }),
+    body: JSON.stringify({ blocked, initiative_id: initiativeId }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't update that task."));
@@ -1219,11 +1236,21 @@ export async function setTaskBlocked(
   return res.json();
 }
 
-export async function assignTask(tunnelUrl: string, token: string, taskId: string, userId?: string): Promise<InitiativeTask> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/assign`, {
-    method: 'POST',
+// Assignment lives on the same "goal meta" route as due_date, addressed by
+// PATCH .../goals/:taskId/meta (not a dedicated /assign endpoint). Passing
+// assignSelf=false with no explicit user clears the assignment — used by
+// unassignTask below.
+export async function assignTask(
+  tunnelUrl: string,
+  token: string,
+  taskId: string,
+  initiativeId: string,
+  assignSelf: boolean
+): Promise<TaskMeta> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/goals/${encodeURIComponent(taskId)}/meta`, {
+    method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(userId ? { user_id: userId } : {}),
+    body: JSON.stringify({ initiative_id: initiativeId, assign_self: assignSelf }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't assign that task."));
@@ -1231,19 +1258,13 @@ export async function assignTask(tunnelUrl: string, token: string, taskId: strin
   return res.json();
 }
 
-export async function unassignTask(tunnelUrl: string, token: string, taskId: string): Promise<InitiativeTask> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/unassign`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't unassign that task."));
-  }
-  return res.json();
+/** Self-service "not for me" — also usable by the task creator to clear someone else's assignment. */
+export async function unassignTask(tunnelUrl: string, token: string, taskId: string, initiativeId: string): Promise<TaskMeta> {
+  return assignTask(tunnelUrl, token, taskId, initiativeId, false);
 }
 
 export async function deleteTask(tunnelUrl: string, token: string, taskId: string): Promise<void> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}`, {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/goals/${encodeURIComponent(taskId)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -1265,16 +1286,19 @@ export async function getChecklist(tunnelUrl: string, token: string, taskId: str
   return Array.isArray(data.checklist) ? data.checklist : [];
 }
 
+// Gated server-side to the task's creator/assignee (assertTaskOwner) — a 403
+// here means the caller isn't either.
 export async function addChecklistItem(
   tunnelUrl: string,
   token: string,
   taskId: string,
-  label: string
+  initiativeId: string,
+  text: string
 ): Promise<ChecklistItem> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/checklist`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label }),
+    body: JSON.stringify({ text, initiative_id: initiativeId }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't add that step."));
@@ -1286,7 +1310,7 @@ export async function updateChecklistItem(
   tunnelUrl: string,
   token: string,
   itemId: string,
-  patch: { label?: string; done?: boolean }
+  patch: { text?: string; done?: boolean }
 ): Promise<ChecklistItem> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/checklist/${encodeURIComponent(itemId)}`, {
     method: 'PATCH',
@@ -1325,11 +1349,11 @@ export async function getTaskNotes(tunnelUrl: string, token: string, taskId: str
   return Array.isArray(data.notes) ? data.notes : [];
 }
 
-export async function postTaskNote(tunnelUrl: string, token: string, taskId: string, body: string): Promise<TaskNote> {
+export async function postTaskNote(tunnelUrl: string, token: string, taskId: string, initiativeId: string, content: string): Promise<TaskNote> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/notes`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify({ content, initiative_id: initiativeId }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't post that note."));
@@ -1337,11 +1361,11 @@ export async function postTaskNote(tunnelUrl: string, token: string, taskId: str
   return res.json();
 }
 
-export async function replyToNote(tunnelUrl: string, token: string, noteId: string, body: string): Promise<TaskNoteReply> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/notes/${encodeURIComponent(noteId)}/reply`, {
+export async function replyToNote(tunnelUrl: string, token: string, noteId: string, content: string): Promise<TaskNoteReply> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/notes/${encodeURIComponent(noteId)}/replies`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify({ content }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't post that reply."));
@@ -1360,7 +1384,7 @@ export async function deleteTaskNote(tunnelUrl: string, token: string, noteId: s
 }
 
 export async function deleteNoteReply(tunnelUrl: string, token: string, replyId: string): Promise<void> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/notes/replies/${encodeURIComponent(replyId)}`, {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/note-replies/${encodeURIComponent(replyId)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -1382,11 +1406,12 @@ export async function listInitiativeRoles(tunnelUrl: string, token: string, init
   return Array.isArray(data.roles) ? data.roles : [];
 }
 
-// Volunteering for a role also joins the caller to the initiative (member
-// count + Contributors should update immediately) — the server is expected
-// to handle that atomically; this doesn't make a second joinInitiative call.
+// Claiming a role also joins the caller to the initiative (member count +
+// Contributors update immediately) — the server does this atomically
+// server-side, so this doesn't make a second joinInitiative call. The real
+// route is /claim, not /volunteer as originally guessed.
 export async function volunteerForRole(tunnelUrl: string, token: string, roleId: string): Promise<InitiativeRole> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}/volunteer`, {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}/claim`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -1396,8 +1421,9 @@ export async function volunteerForRole(tunnelUrl: string, token: string, roleId:
   return res.json();
 }
 
+// Real route is /unclaim, not /step-down as originally guessed.
 export async function stepDownFromRole(tunnelUrl: string, token: string, roleId: string): Promise<InitiativeRole> {
-  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}/step-down`, {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}/unclaim`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -1424,9 +1450,13 @@ export async function listInitiativeResources(
   return Array.isArray(data.resources) ? data.resources : [];
 }
 
+// Real route is PATCH, not POST as originally guessed. The server itself
+// places no membership check on this route — any authenticated member of the
+// hub can call it — so gating "I can provide this" to initiative members is
+// purely a client-side UI decision, not something the API enforces.
 export async function provideResource(tunnelUrl: string, token: string, resourceId: string): Promise<InitiativeResource> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/resources/${encodeURIComponent(resourceId)}/provide`, {
-    method: 'POST',
+    method: 'PATCH',
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -1435,9 +1465,11 @@ export async function provideResource(tunnelUrl: string, token: string, resource
   return res.json();
 }
 
+// Real route is PATCH, not POST as originally guessed. Self-service only —
+// the server 403s unless the caller is the one who pledged it.
 export async function unprovideResource(tunnelUrl: string, token: string, resourceId: string): Promise<InitiativeResource> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/resources/${encodeURIComponent(resourceId)}/unprovide`, {
-    method: 'POST',
+    method: 'PATCH',
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {

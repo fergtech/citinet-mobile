@@ -94,6 +94,7 @@ export default function InitiativesScreen() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('All');
+  const [onlyMine, setOnlyMine] = useState(false);
 
   const load = useCallback(() => {
     if (!session) return;
@@ -109,10 +110,11 @@ export default function InitiativesScreen() {
 
   const filtered = useMemo(() => {
     let next = initiatives;
+    if (onlyMine) next = next.filter((i) => i.viewerIsMember);
     if (statusFilter !== 'All') next = next.filter((i) => i.status === statusFilter);
     if (categoryFilter !== 'All') next = next.filter((i) => i.category === categoryFilter);
     return next;
-  }, [initiatives, statusFilter, categoryFilter]);
+  }, [initiatives, onlyMine, statusFilter, categoryFilter]);
 
   if (!session) return null;
 
@@ -134,6 +136,15 @@ export default function InitiativesScreen() {
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListHeaderComponent={
           <View style={styles.filters}>
+            <Pressable
+              onPress={() => setOnlyMine((v) => !v)}
+              style={[styles.mineToggle, onlyMine && { backgroundColor: Brand }]}>
+              <IconSymbol name="person.fill" size={13} color={onlyMine ? '#fff' : Colors[colorScheme].icon} />
+              <ThemedText style={styles.chipLabel} lightColor={onlyMine ? '#fff' : undefined} darkColor={onlyMine ? '#fff' : undefined}>
+                My initiatives
+              </ThemedText>
+            </Pressable>
+
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
               <Pressable
                 onPress={() => setStatusFilter('All')}
@@ -192,7 +203,11 @@ export default function InitiativesScreen() {
           </View>
         }
         ListEmptyComponent={
-          !loading ? <ThemedText style={styles.empty}>No initiatives match those filters yet.</ThemedText> : null
+          !loading ? (
+            <ThemedText style={styles.empty}>
+              {onlyMine ? "You haven't joined any initiatives that match these filters." : 'No initiatives match those filters yet.'}
+            </ThemedText>
+          ) : null
         }
         ListFooterComponent={
           filtered.length > 0 ? (
@@ -228,6 +243,17 @@ const styles = StyleSheet.create({
   },
   filters: {
     paddingBottom: 4,
+  },
+  mineToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    height: 32,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    backgroundColor: '#8881',
+    marginBottom: 10,
   },
   chipsRow: {
     flexDirection: 'row',

@@ -346,15 +346,16 @@ export type HubFile = {
 export type FileVisibility = 'private' | 'hub' | 'web';
 
 // ── Initiatives ──────────────────────────────────────────────────────
-// Field shapes below are inferred from the mobile design handoff
+// Field shapes below started as inferences from the mobile design handoff
 // (design_handoff_initiatives/README.md — a port spec for citinet web's
-// already-built InitiativesScreen/initiativesService), corrected against a
-// real GET /api/initiatives/:id response captured live from a hub (2026-08-25)
-// — see below for what changed. Everything past that single confirmed
-// response (the list endpoint's shape, /join's response body, /team,
-// /activity, roles, resources, checklist, notes) is still best-effort/
-// unconfirmed; treat those parts of hubService.ts's Initiatives section
-// accordingly.
+// already-built InitiativesScreen/initiativesService), then a real GET
+// /api/initiatives/:id response captured live from a hub (2026-08-25). As of
+// 2026-08-26, the task-meta/checklist/notes/resources/roles shapes below are
+// also confirmed — read directly against citinet-web's api/server.js routes
+// and its own src/app/services/initiativesService.ts, the client already
+// exercising them (not everything in that repo is itself bug-free — see
+// hubService.ts's per-route notes — but the request/response *shapes* used
+// here are read straight from server.js's SQL, not guessed).
 //
 // Real shape vs. the original guess, for the record:
 // - No member_count/task_count/tasks_done_count/organizer_id/organizer_username
@@ -366,17 +367,19 @@ export type FileVisibility = 'private' | 'hub' | 'web';
 // - `color` is a real field — a named color ("blue"), independent of
 //   category, not something derived from it.
 // - Task status is `'todo' | 'in-progress' | 'done'` (hyphenated), not the
-//   four-value not_started/in_progress/blocked/complete set assumed before —
-//   no evidence of a `blocked` concept on a task at all yet.
+//   four-value not_started/in_progress/blocked/complete set assumed before.
+//   `blocked` is real, but lives on TaskMeta (hub_initiative_task_meta), not
+//   on the task itself — see TaskMeta below.
 // - Same banner_mode/banner_color/banner_gradient_from/banner_gradient_to/
 //   banner_image_file_name shape as MarketplaceVendor's banner, not the
 //   generic category-color gradient the design handoff described.
 export type InitiativeTaskStatus = 'todo' | 'in-progress' | 'done';
 
 // Embedded in GET /api/initiatives/:id's `tasks` array — confirmed shape.
-// The standalone /tasks list and a task's own detail endpoint may return
-// richer objects (description, assignee, checklist counts); that's still
-// unconfirmed — see InitiativeTask below for the speculative fuller shape.
+// There is no separate "get one task" or "list tasks" endpoint on the real
+// server (no `/api/initiatives/:id/tasks` route exists at all) — a task's
+// fuller detail is this summary plus its TaskMeta row (assignee/due-date/
+// blocked/checklist counts), checklist, and notes, each fetched separately.
 export type InitiativeTaskSummary = {
   id: string;
   title: string;
@@ -460,93 +463,106 @@ export type InitiativeTeamMember = {
   tasks_done_count: number;
 };
 
+// Confirmed against api/server.js's real hub_initiative_roles row (RETURNING *
+// off the POST /:id/roles insert) — `name`/`skills`/`holder_*` from the
+// original design-handoff guess don't exist on the live table at all.
 export type InitiativeRole = {
   id: string;
   initiative_id: string;
-  name: string;
-  skills: string | null;
+  role: string;
+  skill: string | null;
   filled: boolean;
-  holder_user_id: string | null;
-  holder_username: string | null;
-  holder_display_name: string | null;
+  filled_by_user_id: string | null;
+  filled_by_name: string | null;
+  created_by: string | null;
+  created_at: string;
 };
 
-// Speculative fuller shape for a standalone task (dedicated Tasks screen /
-// task detail, neither built yet) — description/assignee/blocked/checklist
-// counts are all unconfirmed; only `status`'s three real values (above) and
-// `id`/`title`/`created_by` are proven, from the embedded summary.
-export type InitiativeTask = {
-  id: string;
+// There is no standalone "get one task" endpoint on the real server — a task
+// is always either the embedded InitiativeTaskSummary (from GET
+// /api/initiatives/:id) or, for the fuller detail view, that summary plus
+// this initiative-wide meta row (GET /api/initiatives/:id/task-meta returns
+// `{ taskMeta: TaskMeta[] }`, one entry per task that has either an
+// assignee/due-date or a checklist item — a task with neither has no row at
+// all, not a row with nulls). Confirmed against hub_initiative_task_meta +
+// the checklist COUNT join in that route.
+export type TaskMeta = {
+  task_id: string;
   initiative_id: string;
-  title: string;
-  description: string | null;
-  status: InitiativeTaskStatus;
-  blocked: boolean;
-  blocked_reason: string | null;
   assignee_user_id: string | null;
-  assignee_username: string | null;
-  creator_id: string;
-  checklist_total_count: number;
-  checklist_done_count: number;
+  assignee_name: string | null;
+  due_date: string | null;
+  blocked: boolean;
+  checklist_total: number;
+  checklist_done: number;
+};
+
+// Matches hub_initiative_task_checklist's real columns (RETURNING * off every
+// insert/update route) — the field is `text`, not `label` as originally
+// guessed.
+export type ChecklistItem = {
+  id: string;
+  task_id: string;
+  initiative_id: string;
+  text: string;
+  done: boolean;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 };
 
-export type TaskMeta = {
-  has_checklist: boolean;
-  checklist_total_count: number;
-  checklist_done_count: number;
-  blocked: boolean;
-  blocked_reason: string | null;
-};
-
-export type ChecklistItem = {
-  id: string;
-  task_id: string;
-  label: string;
-  done: boolean;
-  created_at: string;
-};
-
+// Matches hub_initiative_task_note_replies' real columns — `content`, not
+// `body`; `author_name`, not `author_username` (the server writes the acting
+// username straight into author_name, there's no separate display-name join).
 export type TaskNoteReply = {
   id: string;
   note_id: string;
   author_id: string | null;
-  author_username: string | null;
-  body: string;
+  author_name: string;
+  content: string;
   created_at: string;
 };
 
+// Matches hub_initiative_task_notes' real columns, same content/author_name
+// correction as TaskNoteReply above.
 export type TaskNote = {
   id: string;
   task_id: string;
+  initiative_id: string;
   author_id: string | null;
-  author_username: string | null;
-  body: string;
+  author_name: string;
+  content: string;
   created_at: string;
   replies: TaskNoteReply[];
 };
 
 export type InitiativeResourceKind = 'material' | 'file' | 'link';
 
-// Materials use the real single `provided` boolean (+ one provider) per the
-// handoff's confirmed divergence note, not a pledged/needed count — there's
-// no quantity column backing that on the server, so it isn't modeled here.
+// Confirmed against hub_initiative_resources' real columns (api/server.js) —
+// the original guess's name/quantity_note/provider_*/file_name/link_* fields
+// don't exist. A material's label lives in `item` (also doubles as a link's
+// display label — POST .../resources falls back to the raw url when no item
+// is given); its pledge is the single `provided` boolean +
+// `provided_by_user_id`/`provided_by_name`. `file_display_name`/
+// `file_mime_type`/`file_size_bytes` are only present on the LEFT JOIN in
+// GET .../resources, not on the bare row a provide/unprovide PATCH returns.
 export type InitiativeResource = {
   id: string;
   initiative_id: string;
   kind: InitiativeResourceKind;
-  name: string | null;
-  quantity_note: string | null;
+  item: string;
+  qty: string | null;
   provided: boolean;
-  provider_user_id: string | null;
-  provider_username: string | null;
-  file_name: string | null;
+  provided_by_user_id: string | null;
+  provided_by_name: string | null;
+  created_by: string | null;
+  file_id: string | null;
+  file_display_name: string | null;
+  file_mime_type: string | null;
   file_size_bytes: number | null;
-  file_owner_username: string | null;
-  link_label: string | null;
-  link_url: string | null;
+  url: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 export type InitiativeActivityEntry = {

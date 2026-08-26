@@ -80,7 +80,7 @@ export default function InitiativeRolesScreen() {
           </ThemedText>
         }
         renderItem={({ item }) => {
-          const isMine = !!session && item.holder_user_id === session.userId;
+          const isMine = !!session && item.filled_by_user_id === session.userId;
           const busy = actingOn === item.id;
           return (
             <View style={styles.row}>
@@ -91,9 +91,9 @@ export default function InitiativeRolesScreen() {
                 </ThemedText>
               </View>
               <ThemedText type="defaultSemiBold" style={styles.roleName}>
-                {item.name}
+                {item.role}
               </ThemedText>
-              {!!item.skills && <ThemedText style={styles.skills}>{item.skills}</ThemedText>}
+              {!!item.skill && <ThemedText style={styles.skills}>{item.skill}</ThemedText>}
 
               {!item.filled && (
                 <Pressable style={[styles.volunteerButton, busy && { opacity: 0.6 }]} disabled={busy} onPress={() => handleVolunteer(item.id)}>
@@ -108,9 +108,7 @@ export default function InitiativeRolesScreen() {
                   <ThemedText style={styles.stepDownLabel}>You claimed this — step down</ThemedText>
                 </Pressable>
               )}
-              {item.filled && !isMine && (
-                <ThemedText style={styles.holder}>{item.holder_display_name ?? item.holder_username ?? 'Filled'}</ThemedText>
-              )}
+              {item.filled && !isMine && <ThemedText style={styles.holder}>{item.filled_by_name ?? 'Filled'}</ThemedText>}
             </View>
           );
         }}
