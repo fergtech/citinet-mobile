@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
   // deliberate frame — text-only cards (no media to sit behind) stay
   // content-sized instead of inheriting this and leaving empty space.
   cardMedia: {
-    aspectRatio: 4 / 5,
+    aspectRatio: 8 / 5,
   },
   dismiss: {
     position: 'absolute',
@@ -195,14 +195,14 @@ const styles = StyleSheet.create({
     aspectRatio: undefined,
     borderRadius: 0,
   },
-  // Spans about half the card so the gradient has room to fade in
-  // gradually rather than starting at a hard edge right above the text.
+  // Spans the full card height so the shorter media card still has room
+  // to lay out title/caption/author without clipping against the top edge.
   scrim: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    top: '50%',
+    top: 0,
     zIndex: 1,
     justifyContent: 'flex-end',
     padding: 12,

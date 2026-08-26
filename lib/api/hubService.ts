@@ -1,4 +1,4 @@
-import { AtlasPin, AtlasPinCategory, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, SearchResults } from './types';
+import { AtlasPin, AtlasPinCategory, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTask, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -979,4 +979,405 @@ export async function updateMarketplaceBannerConfig(
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't save the banner."));
   }
+}
+
+// ── Initiatives ──────────────────────────────────────────────────────
+// Endpoint paths follow this file's existing REST conventions (plural
+// resource under /api, list/detail scoped by the parent id, mutations on a
+// child addressed directly by its own id) and the function list the design
+// handoff confirms already exists in citinet web's initiativesService — but
+// unlike every section above, these haven't been checked against a live
+// api/server.js. Treat as best-effort pending verification against a real hub.
+
+export async function listInitiatives(tunnelUrl: string, token: string, spaceId?: string): Promise<Initiative[]> {
+  const params = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : '';
+  const res = await fetch(`${tunnelUrl}/api/initiatives${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load initiatives."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.initiatives) ? data.initiatives : [];
+}
+
+export async function getInitiative(tunnelUrl: string, token: string, initiativeId: string): Promise<Initiative> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this initiative."));
+  }
+  return res.json();
+}
+
+export async function joinInitiative(tunnelUrl: string, token: string, initiativeId: string): Promise<Initiative> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/join`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't join this initiative."));
+  }
+  return res.json();
+}
+
+export async function getInitiativeTeam(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string
+): Promise<InitiativeTeamMember[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/team`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load contributors."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.team) ? data.team : [];
+}
+
+export async function getInitiativeActivity(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  limit = 5
+): Promise<InitiativeActivityEntry[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/activity?limit=${limit}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load recent activity."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.activity) ? data.activity : [];
+}
+
+export async function getInitiativeShareLink(tunnelUrl: string, token: string, initiativeId: string): Promise<string> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/share-link`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't get a share link."));
+  }
+  const data = await res.json();
+  return data.url ?? data.link ?? '';
+}
+
+export async function inviteToInitiative(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  userId: string
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/invite`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't send that invite."));
+  }
+}
+
+// Tasks
+
+export async function listInitiativeTasks(tunnelUrl: string, token: string, initiativeId: string): Promise<InitiativeTask[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/tasks`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load tasks."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.tasks) ? data.tasks : [];
+}
+
+export async function addTask(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  data: { title: string; description?: string }
+): Promise<InitiativeTask> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/tasks`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't add that task."));
+  }
+  return res.json();
+}
+
+export async function getTaskMeta(tunnelUrl: string, token: string, taskId: string): Promise<TaskMeta> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/meta`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this task."));
+  }
+  return res.json();
+}
+
+export async function updateTaskStatus(
+  tunnelUrl: string,
+  token: string,
+  taskId: string,
+  status: InitiativeTask['status']
+): Promise<InitiativeTask> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/status`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that task's status."));
+  }
+  return res.json();
+}
+
+export async function setTaskBlocked(
+  tunnelUrl: string,
+  token: string,
+  taskId: string,
+  blocked: boolean,
+  reason?: string
+): Promise<InitiativeTask> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/blocked`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ blocked, reason }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that task."));
+  }
+  return res.json();
+}
+
+export async function assignTask(tunnelUrl: string, token: string, taskId: string, userId?: string): Promise<InitiativeTask> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/assign`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(userId ? { user_id: userId } : {}),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't assign that task."));
+  }
+  return res.json();
+}
+
+export async function unassignTask(tunnelUrl: string, token: string, taskId: string): Promise<InitiativeTask> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/unassign`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't unassign that task."));
+  }
+  return res.json();
+}
+
+export async function deleteTask(tunnelUrl: string, token: string, taskId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete that task."));
+  }
+}
+
+// Checklist
+
+export async function getChecklist(tunnelUrl: string, token: string, taskId: string): Promise<ChecklistItem[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/checklist`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load the checklist."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.checklist) ? data.checklist : [];
+}
+
+export async function addChecklistItem(
+  tunnelUrl: string,
+  token: string,
+  taskId: string,
+  label: string
+): Promise<ChecklistItem> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/checklist`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't add that step."));
+  }
+  return res.json();
+}
+
+export async function updateChecklistItem(
+  tunnelUrl: string,
+  token: string,
+  itemId: string,
+  patch: { label?: string; done?: boolean }
+): Promise<ChecklistItem> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/checklist/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that step."));
+  }
+  return res.json();
+}
+
+export async function deleteChecklistItem(tunnelUrl: string, token: string, itemId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/checklist/${encodeURIComponent(itemId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that step."));
+  }
+}
+
+// Task notes (progress notes + discussion — the handoff describes these as
+// two visual sections of the task workspace, both backed by the same
+// getTaskNotes/postTaskNote/replyToNote list rather than a separate endpoint
+// each, per the reference implementation's function list).
+
+export async function getTaskNotes(tunnelUrl: string, token: string, taskId: string): Promise<TaskNote[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/notes`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load notes."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.notes) ? data.notes : [];
+}
+
+export async function postTaskNote(tunnelUrl: string, token: string, taskId: string, body: string): Promise<TaskNote> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/tasks/${encodeURIComponent(taskId)}/notes`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post that note."));
+  }
+  return res.json();
+}
+
+export async function replyToNote(tunnelUrl: string, token: string, noteId: string, body: string): Promise<TaskNoteReply> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/notes/${encodeURIComponent(noteId)}/reply`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post that reply."));
+  }
+  return res.json();
+}
+
+export async function deleteTaskNote(tunnelUrl: string, token: string, noteId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/notes/${encodeURIComponent(noteId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete that note."));
+  }
+}
+
+export async function deleteNoteReply(tunnelUrl: string, token: string, replyId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/notes/replies/${encodeURIComponent(replyId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete that reply."));
+  }
+}
+
+// Roles
+
+export async function listInitiativeRoles(tunnelUrl: string, token: string, initiativeId: string): Promise<InitiativeRole[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/roles`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load open roles."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.roles) ? data.roles : [];
+}
+
+// Volunteering for a role also joins the caller to the initiative (member
+// count + Contributors should update immediately) — the server is expected
+// to handle that atomically; this doesn't make a second joinInitiative call.
+export async function volunteerForRole(tunnelUrl: string, token: string, roleId: string): Promise<InitiativeRole> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}/volunteer`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't claim that role."));
+  }
+  return res.json();
+}
+
+export async function stepDownFromRole(tunnelUrl: string, token: string, roleId: string): Promise<InitiativeRole> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}/step-down`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't step down from that role."));
+  }
+  return res.json();
+}
+
+// Resources
+
+export async function listInitiativeResources(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string
+): Promise<InitiativeResource[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/resources`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load resources."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.resources) ? data.resources : [];
+}
+
+export async function provideResource(tunnelUrl: string, token: string, resourceId: string): Promise<InitiativeResource> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/resources/${encodeURIComponent(resourceId)}/provide`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't mark that as provided."));
+  }
+  return res.json();
+}
+
+export async function unprovideResource(tunnelUrl: string, token: string, resourceId: string): Promise<InitiativeResource> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/resources/${encodeURIComponent(resourceId)}/unprovide`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't undo that."));
+  }
+  return res.json();
 }

@@ -229,7 +229,10 @@ export default function ListingEditorScreen() {
         (loadingListing ? (
           <ActivityIndicator style={styles.spinner} />
         ) : (
-          <ScrollView contentContainerStyle={styles.body}>
+          <ScrollView
+            contentContainerStyle={styles.body}
+            automaticallyAdjustKeyboardInsets
+            contentInsetAdjustmentBehavior="automatic">
             {error && <ThemedText style={styles.error}>{error}</ThemedText>}
             {vendor && <ThemedText style={styles.postingAs}>Posting as {vendor.name}</ThemedText>}
 
@@ -487,8 +490,7 @@ const styles = StyleSheet.create({
   },
   input: {
     fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -516,8 +518,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
   },
@@ -534,8 +535,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     minHeight: 100,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,

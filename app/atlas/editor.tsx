@@ -236,7 +236,10 @@ export default function PinEditorScreen() {
       {loading ? (
         <ActivityIndicator style={styles.spinner} />
       ) : (
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView
+          contentContainerStyle={styles.body}
+          automaticallyAdjustKeyboardInsets
+          contentInsetAdjustmentBehavior="automatic">
           {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
           <ThemedText style={styles.sectionLabel}>Photo</ThemedText>
@@ -458,8 +461,7 @@ const styles = StyleSheet.create({
   },
   input: {
     fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -486,8 +488,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     minHeight: 100,
-    borderWidth: 1,
-    borderColor: '#8884',
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,

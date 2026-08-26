@@ -102,6 +102,18 @@ const MAPPING = {
   'star': 'star-border',
   'play.fill': 'play-arrow',
   'pause.fill': 'pause',
+  'wifi': 'wifi',
+  'antenna.radiowaves.left.and.right': 'settings-input-antenna',
+  'hammer.fill': 'build',
+  'book.fill': 'menu-book',
+  'target': 'track-changes',
+  'person.badge.plus': 'person-add',
+  'arrow.up.right.square': 'open-in-new',
+  'square': 'check-box-outline-blank',
+  'checkmark.square.fill': 'check-box',
+  'checkmark': 'check',
+  'shield.fill': 'shield',
+  'flag.fill': 'flag',
 } as IconMapping;
 
 /**

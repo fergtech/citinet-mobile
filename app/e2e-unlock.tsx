@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 
 import { BrandGradient } from '@/components/brand-gradient';
@@ -52,8 +52,9 @@ export default function E2EUnlockScreen() {
   }
 
   return (
-    <ThemedView style={styles.container}>
-      <View style={styles.header}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ThemedView style={styles.container}>
+        <View style={styles.header}>
         <ThemedText type="title" style={styles.headerTitle}>
           Unlock your messages
         </ThemedText>
@@ -62,6 +63,9 @@ export default function E2EUnlockScreen() {
         </Pressable>
       </View>
 
+      {/* Dismisses the keyboard on any tap that isn't itself a touchable —
+          there's no ScrollView here to get that for free. */}
+      <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
       <ThemedText style={styles.body}>
         Your encrypted messages are protected by a recovery phrase set up elsewhere (like the web portal) — enter it
         here to read and send them on this device too.
@@ -74,7 +78,7 @@ export default function E2EUnlockScreen() {
         placeholderTextColor={Colors[colorScheme].icon}
         autoCapitalize="none"
         autoCorrect={false}
-        style={[styles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
+        style={[styles.input, { color: Colors[colorScheme].text }]}
       />
 
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -102,11 +106,16 @@ export default function E2EUnlockScreen() {
           )}
         </BrandGradient>
       </Pressable>
-    </ThemedView>
+      </Pressable>
+      </ThemedView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     paddingHorizontal: 20,
@@ -127,7 +136,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   input: {
-    borderWidth: 1,
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,

@@ -136,10 +136,7 @@ export default function ConversationScreen() {
   if (!session) return null;
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={styles.flex}>
         <ScreenHeader
           title={title ?? 'Conversation'}

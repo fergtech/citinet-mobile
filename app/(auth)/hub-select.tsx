@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 
+import { AuthBackground } from '@/components/auth-background';
 import { BrandGradient } from '@/components/brand-gradient';
+import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -46,82 +48,122 @@ export default function HubSelectScreen() {
         hubName: selectedHub.name,
         tunnelUrl: selectedHub.tunnel_url,
         location: selectedHub.location ?? '',
+        // Carried along so login.tsx can render the same custom hub icon
+        // without a second registry round-trip — see components/hub-icon.tsx.
+        hubIconMode: selectedHub.hub_icon_mode ?? '',
+        hubIconSymbol: selectedHub.hub_icon_symbol ?? '',
+        hubIconBgMode: selectedHub.hub_icon_bg_mode ?? '',
+        hubIconGradientFrom: selectedHub.hub_icon_gradient_from ?? '',
+        hubIconGradientTo: selectedHub.hub_icon_gradient_to ?? '',
+        hubIconSolidColor: selectedHub.hub_icon_solid_color ?? '',
+        hubIconImageFileName: selectedHub.hub_icon_image_file_name ?? '',
       },
     });
   }
 
   return (
-    <ThemedView style={styles.container}>
-      <ThemedText type="title" style={styles.heading}>
-        Find your hub
-      </ThemedText>
-      <ThemedText style={styles.subheading}>Search by name or pick from the list.</ThemedText>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ThemedView style={[styles.container, styles.transparentBg]}>
+        <AuthBackground />
+      {/* A panel, not edge-to-edge, for the same reason login.tsx uses a card:
+          the content underneath is a moving video, not the app's own themed
+          background — rows/text need a stable, opaque-enough surface. Sized to
+          content (not flex: 1) and anchored to the bottom via the container's
+          justifyContent, so with only a few hubs the panel stays compact and
+          the video shows through above it, the same way login's card does —
+          the hub list itself is capped/scrollable so a long list still can't
+          push the panel to fill the screen. */}
+      <View
+        style={[
+          styles.panel,
+          { backgroundColor: colorScheme === 'dark' ? 'rgba(21,23,24,0.86)' : 'rgba(255,255,255,0.9)' },
+        ]}>
+        <ThemedText type="title" style={styles.heading}>
+          Find your hub
+        </ThemedText>
+        <ThemedText style={styles.subheading}>Search by name or pick from the list.</ThemedText>
 
-      <TextInput
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search hubs"
-        placeholderTextColor={Colors[colorScheme].icon}
-        style={[styles.searchInput, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
-      />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search hubs"
+          placeholderTextColor={Colors[colorScheme].icon}
+          style={[styles.searchInput, { color: Colors[colorScheme].text }]}
+        />
 
-      {loading && <ActivityIndicator style={styles.spinner} />}
-      {error && <ThemedText style={styles.error}>{error}</ThemedText>}
+        {loading && <ActivityIndicator style={styles.spinner} />}
+        {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
-      <FlatList
-        data={filtered}
-        keyExtractor={(hub) => hub.id}
-        contentContainerStyle={styles.list}
-        renderItem={({ item }) => {
-          const selected = item.id === selectedId;
-          return (
-            <Pressable
-              onPress={() => setSelectedId(item.id)}
-              style={[styles.row, selected && { backgroundColor: tint + '15' }]}>
-              <BrandGradient style={styles.avatar}>
-                <ThemedText style={styles.avatarText} lightColor="#fff" darkColor="#fff">
-                  {item.name.charAt(0).toUpperCase()}
-                </ThemedText>
-              </BrandGradient>
-              <View style={styles.rowText}>
-                <ThemedText type="defaultSemiBold">{item.name}</ThemedText>
-                <ThemedText style={styles.rowMeta}>
-                  {item.location}
-                  {typeof item.member_count === 'number' ? ` · ${item.member_count} neighbors` : ''}
-                </ThemedText>
-              </View>
-              <IconSymbol
-                name={selected ? 'checkmark.circle.fill' : 'circle'}
-                size={22}
-                color={selected ? tint : Colors[colorScheme].icon}
-              />
-            </Pressable>
-          );
-        }}
-        ListEmptyComponent={
-          !loading ? <ThemedText style={styles.rowMeta}>No hubs match your search.</ThemedText> : null
-        }
-      />
+        <FlatList
+          data={filtered}
+          keyExtractor={(hub) => hub.id}
+          style={styles.listBox}
+          contentContainerStyle={styles.list}
+          renderItem={({ item }) => {
+            const selected = item.id === selectedId;
+            return (
+              <Pressable
+                onPress={() => setSelectedId(item.id)}
+                style={[styles.row, selected && { backgroundColor: tint + '15' }]}>
+                <HubIcon
+                  hub={item}
+                  tunnelUrl={item.tunnel_url}
+                  size={44}
+                  style={styles.avatar}
+                  fallback={<HubLetterFallback letter={item.name.charAt(0).toUpperCase()} size={44} />}
+                />
+                <View style={styles.rowText}>
+                  <ThemedText type="defaultSemiBold">{item.name}</ThemedText>
+                  <ThemedText style={styles.rowMeta}>
+                    {item.location}
+                    {typeof item.member_count === 'number' ? ` · ${item.member_count} neighbors` : ''}
+                  </ThemedText>
+                </View>
+                <IconSymbol
+                  name={selected ? 'checkmark.circle.fill' : 'circle'}
+                  size={22}
+                  color={selected ? tint : Colors[colorScheme].icon}
+                />
+              </Pressable>
+            );
+          }}
+          ListEmptyComponent={
+            !loading ? <ThemedText style={styles.rowMeta}>No hubs match your search.</ThemedText> : null
+          }
+        />
 
-      <Pressable
-        onPress={handleContinue}
-        disabled={!selectedHub}
-        style={[styles.continueButton, { opacity: selectedHub ? 1 : 0.4 }]}>
-        <BrandGradient style={styles.continueFill}>
-          <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
-            Continue
-          </ThemedText>
-        </BrandGradient>
-      </Pressable>
-    </ThemedView>
+        <Pressable
+          onPress={handleContinue}
+          disabled={!selectedHub}
+          style={[styles.continueButton, { opacity: selectedHub ? 1 : 0.4 }]}>
+          <BrandGradient style={styles.continueFill}>
+            <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
+              Continue
+            </ThemedText>
+          </BrandGradient>
+        </Pressable>
+      </View>
+      </ThemedView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   container: {
     flex: 1,
+    justifyContent: 'flex-end',
+  },
+  transparentBg: {
+    backgroundColor: 'transparent',
+  },
+  panel: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 20,
   },
   heading: {
     marginBottom: 4,
@@ -131,7 +173,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   searchInput: {
-    borderWidth: 1,
+    backgroundColor: '#8881',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -144,6 +186,12 @@ const styles = StyleSheet.create({
   error: {
     color: '#b0392f',
     marginBottom: 12,
+  },
+  // Caps how tall the hub list can grow before it scrolls internally — without
+  // this a long hub list would keep expanding the panel (flex-sized to
+  // content) until it swallowed the whole screen, the same problem as before.
+  listBox: {
+    maxHeight: 260,
   },
   list: {
     paddingBottom: 12,
@@ -163,10 +211,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  avatarText: {
-    fontSize: 18,
-    fontWeight: '600',
   },
   rowText: {
     flex: 1,
