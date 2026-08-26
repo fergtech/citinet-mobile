@@ -19,7 +19,13 @@ export type KeyStatus =
   | { status: 'has-keys' }
   | { status: 'has-keys-new-backup'; recoveryPhrase: string }
   | { status: 'needs-recovery' }
-  | { status: 'no-backup' };
+  | { status: 'no-backup' }
+  /** getKeyBackup couldn't be checked (network/tunnel failure), not a
+   * confirmed absence. Callers MUST NOT treat this as 'no-backup' — doing so
+   * would trigger setupNewAccountKeys()'s destructive overwrite on a merely
+   * transient failure. See the comment above getPeerPublicKey/getKeyBackup
+   * in lib/api/hubService.ts for the incident this guards against. */
+  | { status: 'check-failed' };
 
 export type HubContext = { tunnelUrl: string; token: string; hubSlug: string; userId: string };
 
@@ -61,7 +67,16 @@ export async function ensureUserKeys(ctx: HubContext): Promise<KeyStatus> {
       const publicJwk = rawPublicKeyToJwk(local.ecdhPublicKey);
       await registerPublicKey(ctx.tunnelUrl, ctx.token, JSON.stringify(publicJwk));
 
-      const backup = await getKeyBackup(ctx.tunnelUrl, ctx.token);
+      // If the backup check itself fails, do nothing destructive — leave
+      // this device's already-working local keys alone rather than assuming
+      // absence and overwriting the server's backup under a fresh phrase.
+      let backup;
+      try {
+        backup = await getKeyBackup(ctx.tunnelUrl, ctx.token);
+      } catch (err) {
+        console.error('[e2e] getKeyBackup check failed, leaving local keys untouched', err);
+        return { status: 'has-keys' };
+      }
       if (!backup) {
         const recoveryPhrase = await backupCurrentKeys(ctx, local);
         return recoveryPhrase ? { status: 'has-keys-new-backup', recoveryPhrase } : { status: 'has-keys' };
@@ -72,8 +87,11 @@ export async function ensureUserKeys(ctx: HubContext): Promise<KeyStatus> {
     const backup = await getKeyBackup(ctx.tunnelUrl, ctx.token);
     return { status: backup ? 'needs-recovery' : 'no-backup' };
   } catch (err) {
-    console.error('[e2e] ensureUserKeys failed', err); // never block Messages, but never hide it either
-    return { status: 'no-backup' };
+    // Covers getKeyBackup throwing in the no-local-keys branch above, or any
+    // other unexpected failure. Must NOT default to 'no-backup' here — that
+    // status drives setupNewAccountKeys()'s destructive overwrite in callers.
+    console.error('[e2e] ensureUserKeys could not determine key state', err);
+    return { status: 'check-failed' };
   }
 }
 
@@ -134,8 +152,16 @@ export async function clearKeys(hubSlug: string, userId: string): Promise<void> 
 
 // peerId (scoped by tunnelUrl) -> resolved raw public key, or null if known-absent.
 // Avoids re-fetching GET /api/keys/{peerId} on every send in a conversation.
+// Only ever caches a CONFIRMED absence (server 404, or an unparseable key) —
+// never a failed lookup. getPeerPublicKey throws rather than returning null
+// on a network/transient failure, and that throw propagates uncaught here on
+// purpose, so a blip never gets memoized as "this peer has no key" for the
+// rest of the session (which would silently and permanently downgrade every
+// future send to this peer to plaintext, or block decrypting their messages,
+// with no way to recover short of an app restart).
 const peerKeyCache = new Map<string, Uint8Array | null>();
 
+/** Throws if the lookup itself couldn't be completed — callers must not treat that as "no key". */
 export async function resolvePeerPublicKey(
   ctx: Pick<HubContext, 'tunnelUrl' | 'token'>,
   peerId: string

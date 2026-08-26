@@ -7,7 +7,7 @@ import * as keyManager from './keyManager';
 import type { HubContext } from './keyManager';
 import { decryptNoteBody, encryptNoteBody, type NoteBody } from './notes';
 
-type E2EStatus = 'idle' | 'checking' | 'ready' | 'needs-recovery' | 'needs-setup';
+type E2EStatus = 'idle' | 'checking' | 'ready' | 'needs-recovery' | 'needs-setup' | 'check-failed';
 
 // What, if anything, the UI should interrupt the user for right now:
 // 'unlock' -> prompt for the passphrase (a backup exists, this device lacks keys).
@@ -64,13 +64,22 @@ export function E2EKeysProvider({ children }: { children: ReactNode }) {
           setStatus('ready');
         } else if (result.status === 'needs-recovery') {
           setStatus('needs-recovery');
-        } else {
+        } else if (result.status === 'no-backup') {
           setStatus('needs-setup');
+        } else {
+          // 'check-failed' — could not confirm key state (network/tunnel
+          // failure). Do NOT fall through to 'needs-setup' here: that status
+          // drives setupNewAccountKeys()'s destructive overwrite of the
+          // server's public key + backup, and firing it on a merely
+          // transient failure is exactly what caused permanent,
+          // unrecoverable message loss (see lib/api/hubService.ts's comment
+          // above getPeerPublicKey/getKeyBackup).
+          setStatus('check-failed');
         }
       })
       .catch((err) => {
         console.error('[e2e] ensure() failed', err);
-        setStatus('needs-setup');
+        setStatus('check-failed');
       });
     ensurePromiseRef.current = promise;
     return promise;
@@ -124,7 +133,19 @@ export function E2EKeysProvider({ children }: { children: ReactNode }) {
     async (conversationId: string, peerId: string | null, body: string): Promise<string | null> => {
       if (!isEncryptedBody(body)) return body;
       if (!peerId) return null;
-      const key = await getConversationKey(conversationId, peerId);
+      // getConversationKey can throw when the peer-key lookup itself fails
+      // (as opposed to returning null for a confirmed absence) — swallow that
+      // here so one message's transient lookup failure doesn't blow up the
+      // whole decrypt loop callers run over every message in a conversation;
+      // it'll self-heal on the next call since resolvePeerPublicKey never
+      // caches a failure, only a confirmed absence.
+      let key: Uint8Array | null;
+      try {
+        key = await getConversationKey(conversationId, peerId);
+      } catch (err) {
+        console.error('[e2e] decryptForConversation: peer key lookup failed', err);
+        return null;
+      }
       if (!key) return null;
       try {
         return decryptEnvelope(key, body);
@@ -138,8 +159,13 @@ export function E2EKeysProvider({ children }: { children: ReactNode }) {
   const encryptForConversation = useCallback(
     async (conversationId: string, peerId: string | null, plaintext: string): Promise<string> => {
       if (!peerId) return plaintext;
+      // Unlike decryptForConversation, this is allowed to throw: silently
+      // sending a DM as plaintext because the peer-key lookup merely failed
+      // (rather than confirming the peer has no key at all) is the exact
+      // silent-downgrade bug this fix removes. Callers (conversation/[id].tsx's
+      // handleSend) already catch and surface send failures.
       const key = await getConversationKey(conversationId, peerId);
-      if (!key) return plaintext; // no registered peer key -> plaintext, matches citinet's own silent fallback
+      if (!key) return plaintext; // confirmed no registered peer key -> plaintext, matches citinet-web's own fallback
       return encryptEnvelope(key, plaintext);
     },
     [getConversationKey]

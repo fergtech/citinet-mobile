@@ -427,10 +427,37 @@ export async function deleteAccount(tunnelUrl: string, token: string, password: 
 }
 
 // ── E2E key management ──────────────────────────────────────────────
-// Note: getPeerPublicKey/getKeyBackup deliberately return null on a non-ok
-// response instead of throwing, unlike this file's other endpoints — "no key
-// registered" / "no backup yet" are expected states on the plaintext-fallback
-// and first-time-setup paths, not error conditions callers need to try/catch.
+// getPeerPublicKey/getKeyBackup return null ONLY on a server-confirmed 404 —
+// "no key registered" / "no backup yet" is a legitimate, permanent state.
+// Any other failure (network error, non-404 status) retries with backoff and
+// then throws — it must NOT be treated the same as a confirmed absence.
+// citinet-web had this exact bug (collapsing "couldn't check" into "doesn't
+// exist"): callers used a false "no backup" to justify minting a fresh
+// keypair and overwriting the server's public key + backup (both are
+// upserts), permanently orphaning every message already encrypted to the old
+// key — no recovery phrase, old or new, could ever restore it afterward
+// (citinet-web's e2e_encryption memory has the full incident writeup, fixed
+// 2026-08-26). Same mechanism applies here since mobile and web share the
+// same hub account/key state on the server.
+async function fetchWithConfirmedAbsence<T>(
+  url: string,
+  token: string,
+  parse: (res: Response) => Promise<T>
+): Promise<T | null> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.status === 404) return null; // confirmed absence
+      if (!res.ok) throw new Error(`request failed (${res.status})`);
+      return await parse(res);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
 
 export async function registerPublicKey(tunnelUrl: string, token: string, publicKeyJwk: string): Promise<void> {
   await fetch(`${tunnelUrl}/api/keys`, {
@@ -440,17 +467,12 @@ export async function registerPublicKey(tunnelUrl: string, token: string, public
   });
 }
 
+/** Throws if the lookup itself couldn't be completed — see fetchWithConfirmedAbsence. */
 export async function getPeerPublicKey(tunnelUrl: string, token: string, userId: string): Promise<string | null> {
-  try {
-    const res = await fetch(`${tunnelUrl}/api/keys/${encodeURIComponent(userId)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
+  return fetchWithConfirmedAbsence(`${tunnelUrl}/api/keys/${encodeURIComponent(userId)}`, token, async (res) => {
     const { publicKeyJwk } = await res.json();
     return publicKeyJwk ?? null;
-  } catch {
-    return null;
-  }
+  });
 }
 
 export type KeyBackupPayload = { encrypted_payload: string; salt: string; iv: string };
@@ -464,16 +486,9 @@ export async function storeKeyBackup(tunnelUrl: string, token: string, backup: K
   return res.ok;
 }
 
+/** Throws if the check itself couldn't be completed — see fetchWithConfirmedAbsence. */
 export async function getKeyBackup(tunnelUrl: string, token: string): Promise<KeyBackupPayload | null> {
-  try {
-    const res = await fetch(`${tunnelUrl}/api/keys/backup`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as KeyBackupPayload;
-  } catch {
-    return null;
-  }
+  return fetchWithConfirmedAbsence(`${tunnelUrl}/api/keys/backup`, token, (res) => res.json() as Promise<KeyBackupPayload>);
 }
 
 // ── Notes ────────────────────────────────────────────────────────────

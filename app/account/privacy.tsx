@@ -73,7 +73,9 @@ export default function PrivacyScreen() {
         ? { label: 'Locked', detail: 'Enter your recovery phrase below to unlock encrypted messages on this device.', color: '#c9821a', icon: 'exclamationmark.triangle.fill' as const }
         : status === 'needs-setup'
           ? { label: 'Not set up', detail: 'No recovery phrase exists yet for this account.', color: Colors[colorScheme].icon, icon: 'lock.fill' as const }
-          : { label: 'Checking…', detail: '', color: Colors[colorScheme].icon, icon: 'lock.shield.fill' as const };
+          : status === 'check-failed'
+            ? { label: "Couldn't verify", detail: "Couldn't reach the hub to check your encryption status — check your connection and try again.", color: '#c9821a', icon: 'exclamationmark.triangle.fill' as const }
+            : { label: 'Checking…', detail: '', color: Colors[colorScheme].icon, icon: 'lock.shield.fill' as const };
 
   return (
     <ThemedView style={styles.flex}>
@@ -135,7 +137,8 @@ export default function PrivacyScreen() {
             )}
             <ThemedText style={styles.footnote}>
               Enter your recovery phrase here to read and send encrypted messages on this device.
-              {status !== 'needs-setup' && ' A recovery phrase already exists for this account — generating a new one would lock out any device that only has the old one, so that option is hidden once one exists.'}
+              {(status === 'ready' || status === 'needs-recovery') && ' A recovery phrase already exists for this account — generating a new one would lock out any device that only has the old one, so that option is hidden once one exists.'}
+              {status === 'check-failed' && " Couldn't confirm whether a recovery phrase already exists for this account — reconnect and reopen this screen before generating a new one."}
             </ThemedText>
           </View>
         </View>
