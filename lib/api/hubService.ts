@@ -1,4 +1,4 @@
-import { AtlasPin, AtlasPinCategory, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AtlasPin, AtlasPinCategory, BlockedMember, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -8,6 +8,22 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
     // response wasn't JSON — fall through to the generic message
   }
   return fallback;
+}
+
+// Guards the *success* path the way readErrorMessage guards the error path:
+// a hub whose server doesn't have a given route yet (an older deployment, a
+// proxy/catch-all) can still answer 200 with an HTML page instead of JSON —
+// res.ok is true, so readErrorMessage never runs, and a bare res.json() then
+// throws a raw "Unexpected token '<'" SyntaxError straight from JSON.parse.
+// Used by routes added after the rest of this file, where an unmigrated hub
+// is a real possibility rather than a theoretical one.
+async function readJson<T>(res: Response, fallback: string): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(fallback);
+  }
 }
 
 export async function loginUser(
@@ -29,6 +45,58 @@ export async function loginUser(
     throw new Error(await readErrorMessage(res, 'Login failed. Check your username and password.'));
   }
   return res.json();
+}
+
+export type RegisterInput = {
+  username: string;
+  password: string;
+  email?: string;
+  displayName?: string;
+  tags?: string[];
+};
+
+// POST /api/auth/register — mirrors citinet web's registerUser. Response
+// shape (and the immediate token) is identical to loginUser's: registering
+// logs you in right away even when status comes back 'pending' — the server
+// gates actual data access at authenticate(), not at this route, so a
+// pending/rejected result still needs the caller to route to a waiting
+// screen instead of the main app (see session-context.tsx's signUp/signIn).
+export async function registerUser(tunnelUrl: string, input: RegisterInput): Promise<LoginResponse> {
+  let res: Response;
+  try {
+    res = await fetch(`${tunnelUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: input.username,
+        password: input.password,
+        email: input.email || '',
+        displayName: input.displayName || '',
+        tags: input.tags || [],
+      }),
+    });
+  } catch {
+    throw new Error("Couldn't reach this hub. Check that it's online and try again.");
+  }
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Registration failed.'));
+  }
+  return res.json();
+}
+
+// GET /api/auth/session-status — a lighter check than any authenticate()-gated
+// route: works for a pending/rejected token too (those 403 everywhere else),
+// so this is the only safe way to poll "am I approved yet" without a route
+// that assumes an approved account.
+export async function getSessionStatus(tunnelUrl: string, token: string): Promise<'pending' | 'approved' | 'rejected'> {
+  const res = await fetch(`${tunnelUrl}/api/auth/session-status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't check your account status."));
+  }
+  const { status } = await res.json();
+  return status;
 }
 
 export type HubInfo = {
@@ -473,6 +541,149 @@ export async function deleteAccount(tunnelUrl: string, token: string, password: 
   if (!res.ok && res.status !== 204) {
     throw new Error(await readErrorMessage(res, "Couldn't delete your account."));
   }
+}
+
+// ── Trust & safety ───────────────────────────────────────────────────
+
+export async function reportContent(
+  tunnelUrl: string,
+  token: string,
+  targetType: ReportTargetType,
+  targetId: string,
+  reason: ReportReason,
+  details?: string
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/reports`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_type: targetType, target_id: targetId, reason, details }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't submit that report."));
+  }
+}
+
+export async function blockMember(tunnelUrl: string, token: string, userId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/members/${encodeURIComponent(userId)}/block`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't block that member."));
+  }
+}
+
+export async function unblockMember(tunnelUrl: string, token: string, userId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/members/${encodeURIComponent(userId)}/block`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't unblock that member."));
+  }
+}
+
+export async function listBlockedMembers(tunnelUrl: string, token: string): Promise<BlockedMember[]> {
+  const res = await fetch(`${tunnelUrl}/api/blocks`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load blocked members."));
+  }
+  const data = await readJson<{ members?: BlockedMember[] }>(res, "This hub doesn't support blocking yet — it may need a server update.");
+  return Array.isArray(data.members) ? data.members : [];
+}
+
+// ── Admin: member approval + roles ──────────────────────────────────
+// Mobile equivalent of citinet web's HubManagementScreen "Members" tab —
+// same routes, trimmed to approve/reject/role/remove (no join-approval-mode
+// or member-vote settings here; that stays a web-only hub setting).
+
+export async function listPendingUsers(tunnelUrl: string, token: string): Promise<PendingUser[]> {
+  const res = await fetch(`${tunnelUrl}/api/admin/pending-users`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load pending requests."));
+  }
+  const data = await readJson<{ pending?: PendingUser[] }>(res, "This hub doesn't support pending approvals yet — it may need a server update.");
+  return Array.isArray(data.pending) ? data.pending : [];
+}
+
+export async function approvePendingUser(tunnelUrl: string, token: string, userId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/admin/pending-users/${encodeURIComponent(userId)}/approve`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't approve that request."));
+  }
+}
+
+export async function rejectPendingUser(tunnelUrl: string, token: string, userId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/admin/pending-users/${encodeURIComponent(userId)}/reject`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't decline that request."));
+  }
+}
+
+export async function setMemberRole(tunnelUrl: string, token: string, userId: string, role: MemberRole): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/members/${encodeURIComponent(userId)}/role`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that member's role."));
+  }
+}
+
+export async function removeMember(tunnelUrl: string, token: string, userId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/members/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that member."));
+  }
+}
+
+// ── Admin: reports + mod log ────────────────────────────────────────
+
+export async function listReports(tunnelUrl: string, token: string, status: 'open' | 'reviewed' | 'dismissed' | 'all' = 'open'): Promise<ReportEntry[]> {
+  const res = await fetch(`${tunnelUrl}/api/reports?status=${encodeURIComponent(status)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load reports."));
+  }
+  const data = await readJson<{ reports?: ReportEntry[] }>(res, "This hub doesn't support reports yet — it may need a server update.");
+  return Array.isArray(data.reports) ? data.reports : [];
+}
+
+export async function resolveReport(tunnelUrl: string, token: string, reportId: string, status: 'reviewed' | 'dismissed'): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/reports/${encodeURIComponent(reportId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't update that report."));
+  }
+}
+
+export async function getModLog(tunnelUrl: string, token: string, limit = 50): Promise<ModLogEntry[]> {
+  const res = await fetch(`${tunnelUrl}/api/mod-log?limit=${limit}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load the mod log."));
+  }
+  const data = await readJson<{ entries?: ModLogEntry[] }>(res, "Couldn't read the mod log — this hub may need a server update.");
+  return Array.isArray(data.entries) ? data.entries : [];
 }
 
 // ── E2E key management ──────────────────────────────────────────────

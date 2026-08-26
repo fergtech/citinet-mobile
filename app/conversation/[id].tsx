@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 
+import { ActionSheet } from '@/components/action-sheet';
+import { ReportSheet } from '@/components/report-sheet';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getMessages, listConversations, sendMessage } from '@/lib/api/hubService';
+import { blockMember, getMessages, listConversations, sendMessage } from '@/lib/api/hubService';
 import { HubMessage } from '@/lib/api/types';
+import { confirmDestructive } from '@/lib/ui/confirm';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
@@ -36,6 +39,9 @@ export default function ConversationScreen() {
   // only the conversations LIST endpoint returns (no single-conversation
   // detail route exists), so it's fetched separately here.
   const [peerLastReadAt, setPeerLastReadAt] = useState<string | null>(null);
+  const [showActions, setShowActions] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const [reportMessageId, setReportMessageId] = useState<string | null>(null);
 
   // A conversation reached via Messages carries the peer id already; a
   // hypothetical deep link that skips that screen falls back to deriving it
@@ -117,6 +123,19 @@ export default function ConversationScreen() {
     };
   }, [messages, peerId, id, decryptForConversation]);
 
+  function handleBlockPeer() {
+    if (!session || !peerId) return;
+    confirmDestructive(
+      `Block ${title ?? 'this user'}? They won't be able to message you, and you won't see their posts or listings.`,
+      'Block',
+      () => {
+        blockMember(session.hub.tunnelUrl, session.token, peerId)
+          .then(() => router.back())
+          .catch((err) => setError(err instanceof Error ? err.message : "Couldn't block that member."));
+      }
+    );
+  }
+
   async function handleSend() {
     if (!session || !draft.trim()) return;
     const text = draft.trim();
@@ -145,6 +164,9 @@ export default function ConversationScreen() {
               ? () => router.push({ pathname: '/group-members', params: { id, title: title ?? 'Group' } })
               : undefined
           }
+          rightIcon={!isGroup && peerId ? 'ellipsis.circle.fill' : undefined}
+          onRightPress={!isGroup && peerId ? () => setShowActions(true) : undefined}
+          rightAccessibilityLabel="More actions"
         />
 
         {loading && messages.length === 0 && <ActivityIndicator style={styles.spinner} />}
@@ -172,7 +194,8 @@ export default function ConversationScreen() {
                 {!own && (
                   <ThemedText style={styles.sender}>{item.sender_username ?? 'Citinet'}</ThemedText>
                 )}
-                <View
+                <Pressable
+                  onLongPress={!own ? () => setReportMessageId(item.message_id) : undefined}
                   style={[
                     styles.bubble,
                     own
@@ -185,7 +208,7 @@ export default function ConversationScreen() {
                     darkColor={own ? '#fff' : undefined}>
                     {bodyText}
                   </ThemedText>
-                </View>
+                </Pressable>
                 <ThemedText style={styles.time}>
                   {timeAgo(item.created_at)}
                   {own &&
@@ -221,6 +244,50 @@ export default function ConversationScreen() {
             </Pressable>
           </View>
         </View>
+
+        {peerId && (
+          <ActionSheet
+            visible={showActions}
+            onClose={() => setShowActions(false)}
+            options={[
+              {
+                key: 'report',
+                label: `Report ${title ?? 'this user'}`,
+                icon: 'flag.fill',
+                onPress: () => setShowReport(true),
+              },
+              {
+                key: 'block',
+                label: `Block ${title ?? 'this user'}`,
+                icon: 'exclamationmark.octagon.fill',
+                destructive: true,
+                onPress: handleBlockPeer,
+              },
+            ]}
+          />
+        )}
+
+        {peerId && (
+          <ReportSheet
+            visible={showReport}
+            onClose={() => setShowReport(false)}
+            tunnelUrl={session.hub.tunnelUrl}
+            token={session.token}
+            targetType="member"
+            targetId={peerId}
+          />
+        )}
+
+        {reportMessageId && (
+          <ReportSheet
+            visible={!!reportMessageId}
+            onClose={() => setReportMessageId(null)}
+            tunnelUrl={session.hub.tunnelUrl}
+            token={session.token}
+            targetType="message"
+            targetId={reportMessageId}
+          />
+        )}
       </ThemedView>
     </KeyboardAvoidingView>
   );

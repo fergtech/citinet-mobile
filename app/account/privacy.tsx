@@ -103,6 +103,15 @@ export default function PrivacyScreen() {
             })}
           </View>
 
+          <ThemedText style={styles.sectionLabel}>Safety</ThemedText>
+          <View style={styles.section}>
+            <Pressable onPress={() => router.push('/account/blocked-users' as Href)} style={styles.row}>
+              <IconSymbol name="exclamationmark.octagon.fill" size={20} color={Colors[colorScheme].icon} />
+              <ThemedText style={styles.rowLabel}>Blocked users</ThemedText>
+              <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
+            </Pressable>
+          </View>
+
           <ThemedText style={styles.sectionLabel}>Location</ThemedText>
           <View style={styles.section}>
             <View style={styles.row}>

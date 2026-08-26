@@ -10,6 +10,7 @@ import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useThemePreference } from '@/lib/ui/theme-preference';
+import { isMod } from '@/lib/session/is-mod';
 import { useSession } from '@/lib/session/session-context';
 
 // The Profile tab's own full screen — identity up top, then a Settings
@@ -84,6 +85,19 @@ export default function ProfileScreen() {
             <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
           </Pressable>
         </View>
+
+        {isMod(session) && (
+          <>
+            <ThemedText style={styles.sectionLabel}>Hub</ThemedText>
+            <View style={styles.section}>
+              <Pressable onPress={() => router.push('/admin' as Href)} style={styles.row}>
+                <IconSymbol name="shield.fill" size={20} color={Colors[colorScheme].icon} />
+                <ThemedText style={styles.rowLabel}>Admin</ThemedText>
+                <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
+              </Pressable>
+            </View>
+          </>
+        )}
 
         <ThemedText style={styles.sectionLabel}>Settings</ThemedText>
         <View style={styles.section}>

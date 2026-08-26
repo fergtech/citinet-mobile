@@ -573,3 +573,51 @@ export type InitiativeActivityEntry = {
   text: string;
   created_at: string;
 };
+
+// ── Trust & safety ──────────────────────────────────────────────────
+export type ReportTargetType = 'post' | 'reply' | 'message' | 'listing' | 'member';
+export type ReportReason = 'spam' | 'harassment' | 'inappropriate' | 'scam' | 'other';
+
+export type BlockedMember = {
+  user_id: string;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+};
+
+export type PendingUser = {
+  user_id: string;
+  username: string;
+  email: string | null;
+  created_at: string;
+};
+
+export type MemberRole = 'member' | 'moderator' | 'admin';
+
+export type ReportEntry = {
+  id: string;
+  target_type: ReportTargetType;
+  target_id: string;
+  reason: ReportReason;
+  details: string | null;
+  status: 'open' | 'reviewed' | 'dismissed';
+  created_at: string;
+  reviewed_at: string | null;
+  reporter_id: string | null;
+  reporter_username: string | null;
+  reviewed_by_username: string | null;
+};
+
+export type ModLogEntry = {
+  id: string;
+  action_type: string;
+  target_type: string | null;
+  target_id: string | null;
+  target_name: string | null;
+  reason: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+  actor_id: string | null;
+  actor_username: string | null;
+  actor_avatar_url: string | null;
+};

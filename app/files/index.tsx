@@ -110,7 +110,17 @@ export default function FilesListScreen() {
       {loading && files.length === 0 && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
-      <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+      {/* Backdrop dismisses the keyboard on any tap that isn't itself a
+          touchable — a separate absolute-filled Pressable BEHIND the content
+          (not wrapping it): react-native-web's Pressable calls
+          preventDefault() on pointerdown, which blocks the browser's native
+          focus-on-click for any TextInput nested inside it (this exact
+          screen's search field went unclickable on web from that). The
+          content View below sits on top with pointerEvents="box-none" so its
+          own children (search field, chips, list) keep normal touch handling
+          and only truly empty space falls through to this backdrop. */}
+      <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
+      <View style={styles.flex} pointerEvents="box-none">
         <View style={styles.searchRow}>
           <IconSymbol name="magnifyingglass" size={17} color={Colors[colorScheme].icon} />
           <TextInput
@@ -189,7 +199,7 @@ export default function FilesListScreen() {
             ) : null
           }
         />
-      </Pressable>
+      </View>
     </ThemedView>
   );
 }
@@ -197,6 +207,13 @@ export default function FilesListScreen() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  // zIndex: -1 (not DOM order) keeps this behind the header above it too —
+  // absoluteFillObject alone would cover the whole screen including the
+  // header/back button, since it's a later sibling in the same stacking context.
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: -1,
   },
   listFlex: {
     flex: 1,

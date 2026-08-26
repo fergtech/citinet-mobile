@@ -11,10 +11,12 @@ import {
 } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import { ActionSheet } from '@/components/action-sheet';
 import { HubAvatar } from '@/components/hub-avatar';
 import { HubMedia } from '@/components/hub-media';
 import { EventAtlasLink } from '@/components/event-atlas-link';
 import { EventRsvpButton } from '@/components/event-rsvp-button';
+import { ReportSheet } from '@/components/report-sheet';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { PollCard } from '@/components/poll-card';
 import { ThemedText } from '@/components/themed-text';
@@ -22,7 +24,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { createReply, getPost, listAttendees, listReplies, toggleLike, toggleRsvp, votePoll } from '@/lib/api/hubService';
-import { EventAttendee, HubPost, HubPostReply } from '@/lib/api/types';
+import { EventAttendee, HubPost, HubPostReply, ReportTargetType } from '@/lib/api/types';
 import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { applyVote } from '@/lib/ui/poll';
 import { useSession } from '@/lib/session/session-context';
@@ -69,11 +71,13 @@ function CommentNode({
   depth,
   tunnelUrl,
   onReply,
+  onReport,
 }: {
   node: ReplyNode;
   depth: number;
   tunnelUrl: string;
   onReply: (replyId: string, username: string | null, authorId: string | null) => void;
+  onReport: (replyId: string) => void;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
@@ -112,6 +116,9 @@ function CommentNode({
             <Pressable onPress={() => onReply(node.id, node.author_username, node.author_id)}>
               <ThemedText style={[styles.replyAction, { color: tint }]}>Reply</ThemedText>
             </Pressable>
+            <Pressable onPress={() => onReport(node.id)}>
+              <ThemedText style={styles.rowMeta}>Report</ThemedText>
+            </Pressable>
           </View>
         </View>
       </View>
@@ -123,7 +130,7 @@ function CommentNode({
           // right (a new border, one level in) for each deeper level.
           <View style={[styles.childrenWrap, { borderLeftColor: Colors[colorScheme].icon + '33' }]}>
             {node.children.map((child) => (
-              <CommentNode key={child.id} node={child} depth={depth + 1} tunnelUrl={tunnelUrl} onReply={onReply} />
+              <CommentNode key={child.id} node={child} depth={depth + 1} tunnelUrl={tunnelUrl} onReply={onReply} onReport={onReport} />
             ))}
           </View>
         ) : (
@@ -164,6 +171,8 @@ export default function PostDetailScreen() {
   const [attendees, setAttendees] = useState<EventAttendee[] | null>(null);
   const [loadingAttendees, setLoadingAttendees] = useState(false);
   const [showAttendees, setShowAttendees] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [reportTarget, setReportTarget] = useState<{ type: ReportTargetType; id: string } | null>(null);
 
   const load = useCallback(() => {
     if (!session) return;
@@ -266,6 +275,11 @@ export default function PostDetailScreen() {
           <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
             <IconSymbol name="chevron.left" size={24} color={Colors[colorScheme].text} />
           </Pressable>
+          {post && (
+            <Pressable onPress={() => setShowActions(true)} hitSlop={12} accessibilityLabel="More actions" accessibilityRole="button">
+              <IconSymbol name="ellipsis.circle.fill" size={22} color={Colors[colorScheme].text} />
+            </Pressable>
+          )}
         </View>
 
         {loading && <ActivityIndicator style={styles.spinner} />}
@@ -277,7 +291,13 @@ export default function PostDetailScreen() {
             keyExtractor={(node) => node.id}
             contentContainerStyle={styles.list}
             renderItem={({ item }) => (
-              <CommentNode node={item} depth={0} tunnelUrl={session.hub.tunnelUrl} onReply={handleReplyTap} />
+              <CommentNode
+                node={item}
+                depth={0}
+                tunnelUrl={session.hub.tunnelUrl}
+                onReply={handleReplyTap}
+                onReport={(replyId) => setReportTarget({ type: 'reply', id: replyId })}
+              />
             )}
             ListHeaderComponent={
               <View style={styles.postSection}>
@@ -399,6 +419,32 @@ export default function PostDetailScreen() {
             </Pressable>
           </View>
         </View>
+
+        {post && (
+          <ActionSheet
+            visible={showActions}
+            onClose={() => setShowActions(false)}
+            options={[
+              {
+                key: 'report',
+                label: 'Report post',
+                icon: 'flag.fill',
+                onPress: () => setReportTarget({ type: 'post', id: post.id }),
+              },
+            ]}
+          />
+        )}
+
+        {reportTarget && (
+          <ReportSheet
+            visible={!!reportTarget}
+            onClose={() => setReportTarget(null)}
+            tunnelUrl={session.hub.tunnelUrl}
+            token={session.token}
+            targetType={reportTarget.type}
+            targetId={reportTarget.id}
+          />
+        )}
       </ThemedView>
     </KeyboardAvoidingView>
   );
@@ -409,6 +455,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: 56,
     paddingBottom: 12,

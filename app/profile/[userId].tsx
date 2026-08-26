@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
+import { ActionSheet } from '@/components/action-sheet';
 import { HubAvatar } from '@/components/hub-avatar';
+import { ReportSheet } from '@/components/report-sheet';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand } from '@/constants/theme';
-import { createConversation, getMember } from '@/lib/api/hubService';
+import { blockMember, createConversation, getMember, listBlockedMembers, unblockMember } from '@/lib/api/hubService';
 import { HubMember } from '@/lib/api/types';
+import { confirmDestructive } from '@/lib/ui/confirm';
 import { useSession } from '@/lib/session/session-context';
 
 // The other-member equivalent of app/(tabs)/profile.tsx — a pushed screen
@@ -25,16 +28,44 @@ export default function MemberProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [messaging, setMessaging] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [showReport, setShowReport] = useState(false);
 
   useEffect(() => {
     if (!session) return;
     setLoading(true);
     setError(null);
-    getMember(session.hub.tunnelUrl, session.token, userId)
-      .then(setMember)
+    Promise.all([
+      getMember(session.hub.tunnelUrl, session.token, userId),
+      listBlockedMembers(session.hub.tunnelUrl, session.token).catch(() => []),
+    ])
+      .then(([nextMember, blockedList]) => {
+        setMember(nextMember);
+        setBlocked(blockedList.some((m) => m.user_id === userId));
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
       .finally(() => setLoading(false));
   }, [session, userId]);
+
+  function handleToggleBlock() {
+    if (!session || !member) return;
+    if (blocked) {
+      unblockMember(session.hub.tunnelUrl, session.token, member.user_id)
+        .then(() => setBlocked(false))
+        .catch((err) => setError(err instanceof Error ? err.message : "Couldn't unblock that member."));
+      return;
+    }
+    confirmDestructive(
+      `Block ${member.display_name || member.username}? They won't be able to message you, and you won't see their posts or listings.`,
+      'Block',
+      () => {
+        blockMember(session.hub.tunnelUrl, session.token, member.user_id)
+          .then(() => setBlocked(true))
+          .catch((err) => setError(err instanceof Error ? err.message : "Couldn't block that member."));
+      }
+    );
+  }
 
   async function handleMessage() {
     if (!session || !member) return;
@@ -56,7 +87,12 @@ export default function MemberProfileScreen() {
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title={member?.display_name || member?.username || 'Profile'} />
+      <ScreenHeader
+        title={member?.display_name || member?.username || 'Profile'}
+        rightIcon={member ? 'ellipsis.circle.fill' : undefined}
+        onRightPress={member ? () => setShowActions(true) : undefined}
+        rightAccessibilityLabel="More actions"
+      />
 
       {loading && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -84,16 +120,53 @@ export default function MemberProfileScreen() {
             </View>
           )}
 
-          <Pressable
-            onPress={handleMessage}
-            disabled={messaging}
-            style={[styles.messageButton, { opacity: messaging ? 0.6 : 1 }]}>
-            <IconSymbol name="paperplane.fill" size={16} color="#fff" />
-            <ThemedText style={styles.messageButtonLabel} lightColor="#fff" darkColor="#fff">
-              Message
-            </ThemedText>
-          </Pressable>
+          {blocked ? (
+            <ThemedText style={styles.blockedNote}>You&apos;ve blocked this member.</ThemedText>
+          ) : (
+            <Pressable
+              onPress={handleMessage}
+              disabled={messaging}
+              style={[styles.messageButton, { opacity: messaging ? 0.6 : 1 }]}>
+              <IconSymbol name="paperplane.fill" size={16} color="#fff" />
+              <ThemedText style={styles.messageButtonLabel} lightColor="#fff" darkColor="#fff">
+                Message
+              </ThemedText>
+            </Pressable>
+          )}
         </View>
+      )}
+
+      {member && (
+        <ActionSheet
+          visible={showActions}
+          onClose={() => setShowActions(false)}
+          options={[
+            {
+              key: 'report',
+              label: `Report ${member.display_name || member.username}`,
+              icon: 'flag.fill',
+              onPress: () => setShowReport(true),
+            },
+            {
+              key: 'block',
+              label: blocked ? `Unblock ${member.display_name || member.username}` : `Block ${member.display_name || member.username}`,
+              icon: 'exclamationmark.octagon.fill',
+              destructive: !blocked,
+              onPress: handleToggleBlock,
+            },
+          ]}
+        />
+      )}
+
+      {session && member && (
+        <ReportSheet
+          visible={showReport}
+          onClose={() => setShowReport(false)}
+          tunnelUrl={session.hub.tunnelUrl}
+          token={session.token}
+          targetType="member"
+          targetId={member.user_id}
+        />
       )}
     </ThemedView>
   );
@@ -171,5 +244,10 @@ const styles = StyleSheet.create({
   messageButtonLabel: {
     fontSize: 15,
     fontWeight: '600',
+  },
+  blockedNote: {
+    marginTop: 24,
+    fontSize: 13,
+    opacity: 0.6,
   },
 });

@@ -2,9 +2,11 @@ import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
+import { ActionSheet } from '@/components/action-sheet';
 import { HubMedia } from '@/components/hub-media';
 import { ListingCard } from '@/components/marketplace/listing-card';
 import { VendorLogo } from '@/components/marketplace/vendor-logo';
+import { ReportSheet } from '@/components/report-sheet';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -37,6 +39,8 @@ export default function ListingDetailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [messaging, setMessaging] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [showReport, setShowReport] = useState(false);
 
   // No single-listing GET route — same list-and-find approach as Atlas Pin
   // Detail. Vendor + their other listings come from GET /api/vendors/:id
@@ -111,14 +115,21 @@ export default function ListingDetailScreen() {
         <ThemedText type="defaultSemiBold" style={styles.headerTitle}>
           Listing
         </ThemedText>
-        <Pressable
-          onPress={() => listing && toggleSaved(listing.id)}
-          disabled={!listing}
-          hitSlop={12}
-          accessibilityLabel={saved ? 'Unsave' : 'Save'}
-          accessibilityRole="button">
-          <IconSymbol name={saved ? 'bookmark.fill' : 'bookmark'} size={22} color={saved ? Brand : Colors[colorScheme].text} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          {listing && !isOwnListing && (
+            <Pressable onPress={() => setShowActions(true)} hitSlop={12} accessibilityLabel="More actions" accessibilityRole="button">
+              <IconSymbol name="ellipsis.circle.fill" size={22} color={Colors[colorScheme].text} />
+            </Pressable>
+          )}
+          <Pressable
+            onPress={() => listing && toggleSaved(listing.id)}
+            disabled={!listing}
+            hitSlop={12}
+            accessibilityLabel={saved ? 'Unsave' : 'Save'}
+            accessibilityRole="button">
+            <IconSymbol name={saved ? 'bookmark.fill' : 'bookmark'} size={22} color={saved ? Brand : Colors[colorScheme].text} />
+          </Pressable>
+        </View>
       </View>
 
       {loading && !listing && <ActivityIndicator style={styles.spinner} />}
@@ -221,6 +232,32 @@ export default function ListingDetailScreen() {
           )}
         </View>
       )}
+
+      {listing && (
+        <ActionSheet
+          visible={showActions}
+          onClose={() => setShowActions(false)}
+          options={[
+            {
+              key: 'report',
+              label: 'Report listing',
+              icon: 'flag.fill',
+              onPress: () => setShowReport(true),
+            },
+          ]}
+        />
+      )}
+
+      {listing && (
+        <ReportSheet
+          visible={showReport}
+          onClose={() => setShowReport(false)}
+          tunnelUrl={session.hub.tunnelUrl}
+          token={session.token}
+          targetType="listing"
+          targetId={listing.id}
+        />
+      )}
     </ThemedView>
   );
 }
@@ -239,6 +276,11 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 17,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
   },
   spinner: {
     marginTop: 40,

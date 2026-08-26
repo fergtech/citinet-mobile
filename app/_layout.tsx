@@ -35,6 +35,9 @@ function RootNavigator() {
       <Stack.Protected guard={status === 'signedOut'}>
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       </Stack.Protected>
+      <Stack.Protected guard={status === 'pending'}>
+        <Stack.Screen name="pending-approval" options={{ headerShown: false }} />
+      </Stack.Protected>
       <Stack.Protected guard={status === 'signedIn'}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
@@ -44,6 +47,16 @@ function RootNavigator() {
         <Stack.Screen name="profile/[userId]" options={{ headerShown: false }} />
         <Stack.Screen name="account/privacy" options={{ headerShown: false }} />
         <Stack.Screen name="account/settings" options={{ headerShown: false }} />
+        <Stack.Screen name="account/blocked-users" options={{ headerShown: false }} />
+        {/* headerShown here is just the base default — each of these 5
+            screens overrides it at runtime via its own <Stack.Screen
+            options={useNativeHeaderOptions(...)} />, since that needs hooks
+            (theme-aware colors) a static options object here can't use. */}
+        <Stack.Screen name="admin/index" options={{ headerShown: false }} />
+        <Stack.Screen name="admin/pending" options={{ headerShown: false }} />
+        <Stack.Screen name="admin/members" options={{ headerShown: false }} />
+        <Stack.Screen name="admin/reports" options={{ headerShown: false }} />
+        <Stack.Screen name="admin/mod-log" options={{ headerShown: false }} />
         <Stack.Screen name="notes/index" options={{ headerShown: false }} />
         <Stack.Screen name="notes/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="atlas/index" options={{ headerShown: false }} />

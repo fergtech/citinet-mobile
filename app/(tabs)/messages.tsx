@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useScrollToTop } from '@react-navigation/native';
 
 import { BrandGradient } from '@/components/brand-gradient';
 import { HubAvatar } from '@/components/hub-avatar';
@@ -60,6 +61,11 @@ export default function MessagesScreen() {
   const [previews, setPreviews] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-tapping the Chat tab while already on it scrolls back to the top —
+  // same as Home (see (tabs)/index.tsx's own useScrollToTop).
+  const listRef = useRef<FlatList<HubConversation>>(null);
+  useScrollToTop(listRef);
 
   const load = useCallback(() => {
     if (!session) return;
@@ -121,6 +127,7 @@ export default function MessagesScreen() {
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
       <FlatList
+        ref={listRef}
         data={conversations}
         keyExtractor={(item) => item.conversation_id}
         contentContainerStyle={[styles.list, { paddingBottom: 24 + extraBottomInset }]}

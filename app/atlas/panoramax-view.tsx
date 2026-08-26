@@ -1,4 +1,4 @@
-import { Linking, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { ZoomableImage } from '@/components/atlas/zoomable-image';
@@ -24,6 +24,25 @@ import { panoramaxWebViewerUrl } from '@/lib/atlas/panoramax';
 export default function PanoramaxViewScreen() {
   const { image, picture } = useLocalSearchParams<{ image: string; picture: string }>();
 
+  // The URL itself is confirmed valid (see lib/atlas/panoramax.ts) — this
+  // guards against Linking.openURL rejecting for environmental reasons
+  // (seen on the iOS Simulator without a default browser association) that
+  // have nothing to do with the URL being wrong. Unhandled, that rejection
+  // surfaced as an uncaught-promise red-screen error instead of anything a
+  // user could act on.
+  async function handleOpenWebViewer() {
+    try {
+      await Linking.openURL(panoramaxWebViewerUrl(picture));
+    } catch {
+      const message = "Couldn't open that link right now.";
+      if (Platform.OS === 'web') {
+        window.alert(message);
+      } else {
+        Alert.alert(message);
+      }
+    }
+  }
+
   return (
     <ThemedView style={styles.flex}>
       <ZoomableImage uri={image} />
@@ -32,7 +51,7 @@ export default function PanoramaxViewScreen() {
         <IconSymbol name="xmark" size={20} color="#fff" />
       </Pressable>
 
-      <Pressable onPress={() => Linking.openURL(panoramaxWebViewerUrl(picture))} style={styles.webLinkButton}>
+      <Pressable onPress={handleOpenWebViewer} style={styles.webLinkButton}>
         <IconSymbol name="view.3d" size={14} color="#fff" />
         <ThemedText style={styles.webLinkLabel} lightColor="#fff" darkColor="#fff">
           View full 360° on panoramax.fr

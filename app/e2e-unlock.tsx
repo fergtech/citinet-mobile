@@ -64,8 +64,15 @@ export default function E2EUnlockScreen() {
       </View>
 
       {/* Dismisses the keyboard on any tap that isn't itself a touchable —
-          there's no ScrollView here to get that for free. */}
-      <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+          there's no ScrollView here to get that for free. Backdrop Pressable
+          behind the content, not wrapping it: on web, react-native-web's
+          Pressable calls preventDefault() on pointerdown, which blocks the
+          browser's native focus-on-click for the passphrase TextInput nested
+          inside it (this screen's field was unclickable on web from exactly
+          that). pointerEvents="box-none" on the content View lets its own
+          children keep normal touch handling. */}
+      <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
+      <View style={styles.flex} pointerEvents="box-none">
       <ThemedText style={styles.body}>
         Your encrypted messages are protected by a recovery phrase set up elsewhere (like the web portal) — enter it
         here to read and send them on this device too.
@@ -106,7 +113,7 @@ export default function E2EUnlockScreen() {
           )}
         </BrandGradient>
       </Pressable>
-      </Pressable>
+      </View>
       </ThemedView>
     </KeyboardAvoidingView>
   );
@@ -120,6 +127,13 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 60,
+  },
+  // zIndex: -1 keeps this behind the header above it too — absoluteFillObject
+  // alone would cover the whole screen including the header/close button,
+  // since it's a later sibling in the same stacking context.
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: -1,
   },
   header: {
     flexDirection: 'row',

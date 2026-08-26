@@ -168,9 +168,18 @@ export default function LocationPreviewScreen() {
           // keyboardShouldPersistTaps="handled" below (needed so a suggestion
           // row's own tap still works while the keyboard is up) suppresses the
           // ScrollView's normal tap-elsewhere-dismisses-keyboard default, so
-          // this Pressable puts that back explicitly — same pattern as
-          // files/index, atlas/index, marketplace/index, notes/index.
-          <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+          // this backdrop Pressable puts that back explicitly — same pattern
+          // as files/index, atlas/index, marketplace/index, notes/index. It's
+          // a separate absolute-filled Pressable BEHIND the ScrollView, not
+          // wrapping it: on web, react-native-web's Pressable calls
+          // preventDefault() on pointerdown, which blocks the browser's
+          // native focus-on-click for the manual-search TextInput nested
+          // inside it (this screen's field was unclickable on web from
+          // exactly that). pointerEvents="box-none" on the wrapper below lets
+          // the ScrollView keep normal touch/scroll handling.
+          <>
+          <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
+          <View style={styles.flex} pointerEvents="box-none">
           <ScrollView
             contentContainerStyle={styles.body}
             keyboardShouldPersistTaps="handled"
@@ -276,7 +285,8 @@ export default function LocationPreviewScreen() {
               <ThemedText style={[styles.viewMapLinkLabel, { color: Brand }]}>View full Atlas map</ThemedText>
             </Pressable>
           </ScrollView>
-          </Pressable>
+          </View>
+          </>
         )}
       </ThemedView>
   );
@@ -285,6 +295,13 @@ export default function LocationPreviewScreen() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  // zIndex: -1 keeps this behind the header above it too — absoluteFillObject
+  // alone would cover the whole screen including the header/back button,
+  // since it's a later sibling in the same stacking context.
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: -1,
   },
   header: {
     flexDirection: 'row',

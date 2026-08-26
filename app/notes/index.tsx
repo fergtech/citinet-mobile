@@ -193,7 +193,15 @@ export default function NotesListScreen() {
         // A tap anywhere in here that isn't itself a touchable (the search
         // input, a tab, a row) dismisses the keyboard — otherwise it was
         // stuck open with no way to close it short of tapping a note.
-        <Pressable style={styles.flex} onPress={Keyboard.dismiss}>
+        // Backdrop Pressable behind the content, not wrapping it: on web,
+        // react-native-web's Pressable calls preventDefault() on pointerdown,
+        // which blocks the browser's native focus-on-click for the search
+        // TextInput nested inside it (this screen's search field was
+        // unclickable on web from exactly that). pointerEvents="box-none" on
+        // the content View lets its own children keep normal touch handling.
+        <>
+        <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
+        <View style={styles.flex} pointerEvents="box-none">
           <View style={styles.searchRow}>
             <IconSymbol name="magnifyingglass" size={17} color={Colors[colorScheme].icon} />
             <TextInput
@@ -293,7 +301,8 @@ export default function NotesListScreen() {
               ) : null
             }
           />
-        </Pressable>
+        </View>
+        </>
       )}
     </ThemedView>
   );
@@ -347,6 +356,13 @@ function NoteRow({
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  // zIndex: -1 keeps this behind the header above it too — absoluteFillObject
+  // alone would cover the whole screen including the header/back button,
+  // since it's a later sibling in the same stacking context.
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: -1,
   },
   header: {
     flexDirection: 'row',

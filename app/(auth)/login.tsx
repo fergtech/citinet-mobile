@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 
 import { AuthBackground } from '@/components/auth-background';
 import { BrandGradient } from '@/components/brand-gradient';
@@ -77,8 +77,15 @@ export default function LoginScreen() {
         {/* Dismisses the keyboard on any tap that isn't itself a touchable
             (the fields, the button) — there's no ScrollView here to get this
             for free the way most other screens' default keyboardShouldPersistTaps
-            behavior does. */}
-        <Pressable style={styles.tapToDismiss} onPress={Keyboard.dismiss}>
+            behavior does. A separate backdrop Pressable, not a wrapper around
+            the card: on web, react-native-web's Pressable calls
+            preventDefault() on pointerdown to suppress text-selection/drag,
+            which also blocks the browser's native focus-on-click for any
+            TextInput nested inside it — wrapping the card (and its inputs)
+            in this Pressable made the username/password fields unclickable
+            on web while working fine on native. */}
+        <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
+        <View style={styles.centerWrap} pointerEvents="box-none">
       {/* A card, not edge-to-edge, because the content underneath is a moving
           video, not the app's own themed background — inputs/text need a
           stable, opaque-enough surface to stay legible over arbitrary footage. */}
@@ -134,8 +141,32 @@ export default function LoginScreen() {
             )}
           </BrandGradient>
         </Pressable>
-      </View>
+
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: '/(auth)/signup',
+              params: {
+                hubId,
+                hubSlug,
+                hubName,
+                tunnelUrl,
+                location,
+                hubIconMode,
+                hubIconSymbol,
+                hubIconBgMode,
+                hubIconGradientFrom,
+                hubIconGradientTo,
+                hubIconSolidColor,
+                hubIconImageFileName,
+              },
+            })
+          }
+          style={styles.signupLink}>
+          <ThemedText style={styles.signupLinkLabel}>Don&apos;t have an account? Sign up</ThemedText>
         </Pressable>
+      </View>
+        </View>
       </ThemedView>
     </KeyboardAvoidingView>
   );
@@ -152,7 +183,10 @@ const styles = StyleSheet.create({
   transparentBg: {
     backgroundColor: 'transparent',
   },
-  tapToDismiss: {
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  centerWrap: {
     flex: 1,
     justifyContent: 'center',
   },
@@ -210,5 +244,15 @@ const styles = StyleSheet.create({
   buttonLabel: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  signupLink: {
+    marginTop: 16,
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  signupLinkLabel: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    opacity: 0.7,
   },
 });
