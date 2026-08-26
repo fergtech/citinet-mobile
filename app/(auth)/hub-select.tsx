@@ -4,6 +4,7 @@ import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
 
 import { AuthBackground } from '@/components/auth-background';
 import { BrandGradient } from '@/components/brand-gradient';
+import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -114,11 +115,12 @@ export default function HubSelectScreen() {
         onPress={() => setSelectedId(item.id)}
         style={[styles.row, selected && { backgroundColor: tint + '15' }]}>
         <View style={styles.avatarWrap}>
-          <BrandGradient style={styles.avatar}>
-            <ThemedText style={styles.avatarText} lightColor="#fff" darkColor="#fff">
-              {item.name.charAt(0).toUpperCase()}
-            </ThemedText>
-          </BrandGradient>
+          <HubIcon
+            hub={item}
+            tunnelUrl={item.tunnel_url}
+            size={44}
+            fallback={<HubLetterFallback letter={item.name.charAt(0).toUpperCase()} size={44} />}
+          />
           {live && <View style={styles.liveDot} />}
         </View>
         <View style={styles.rowText}>
@@ -330,17 +332,6 @@ const styles = StyleSheet.create({
   },
   avatarWrap: {
     position: 'relative',
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    fontSize: 18,
-    fontWeight: '600',
   },
   liveDot: {
     position: 'absolute',
