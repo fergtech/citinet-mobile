@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 
 import { ActionSheet } from '@/components/action-sheet';
@@ -10,13 +10,30 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { blockMember, getMessages, listConversations, sendMessage } from '@/lib/api/hubService';
-import { HubMessage } from '@/lib/api/types';
+import { blockMember, getMessages, listConversations, sendMessage, toggleMessageReaction } from '@/lib/api/hubService';
+import { HubMessage, MessageReaction } from '@/lib/api/types';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
 import { timeAgo } from '@/lib/ui/time-ago';
+
+// Real, already-working infra (see toggleMessageReaction's own note) —
+// "like, heart, smile, laugh, something else" per the product ask, mapped to
+// 5 single-glyph emoji (the server 400s past 4 UTF-16 code units per emoji).
+const REACTION_EMOJI = ['👍', '❤️', '😊', '😂', '🎉'];
+
+// Adjusts the emoji's own entry (add/increment/decrement/remove) without
+// waiting on the network — replaced with the server's authoritative array
+// once toggleMessageReaction resolves (see handleToggleReaction), so this
+// only has to be approximately right for the instant before that lands.
+function applyReactionToggle(reactions: MessageReaction[], emoji: string): MessageReaction[] {
+  const existing = reactions.find((r) => r.emoji === emoji);
+  if (!existing) return [...reactions, { emoji, count: 1, reacted_by_me: true }];
+  if (!existing.reacted_by_me) return reactions.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1, reacted_by_me: true } : r));
+  if (existing.count <= 1) return reactions.filter((r) => r.emoji !== emoji);
+  return reactions.map((r) => (r.emoji === emoji ? { ...r, count: r.count - 1, reacted_by_me: false } : r));
+}
 
 export default function ConversationScreen() {
   const { id, title, peerId: peerIdParam } = useLocalSearchParams<{ id: string; title: string; peerId?: string }>();
@@ -42,6 +59,11 @@ export default function ConversationScreen() {
   const [showActions, setShowActions] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [reportMessageId, setReportMessageId] = useState<string | null>(null);
+  // Long-press on any bubble (own or not) opens this instead of going
+  // straight to Report the way it used to for other people's messages —
+  // the reaction row now owns that gesture, with Report demoted to a row
+  // inside the same sheet (see the sheet's own render below).
+  const [reactionSheetMessageId, setReactionSheetMessageId] = useState<string | null>(null);
 
   // A conversation reached via Messages carries the peer id already; a
   // hypothetical deep link that skips that screen falls back to deriving it
@@ -144,13 +166,36 @@ export default function ConversationScreen() {
     try {
       const outgoingBody = await encryptForConversation(id, peerId, text);
       const sent = await sendMessage(session.hub.tunnelUrl, session.token, id, outgoingBody);
-      setMessages((prev) => [...prev, sent]);
+      // POST .../messages' real response has no `reactions` field at all
+      // (unlike GET .../messages, which aggregates it) — a fresh send would
+      // otherwise be `undefined` here and crash the reaction row's `.length`
+      // read. Same defensive default for `attachments`, which that response
+      // also omits whenever there are none.
+      setMessages((prev) => [...prev, { ...sent, reactions: sent.reactions ?? [], attachments: sent.attachments ?? [] }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message.');
     } finally {
       setSending(false);
     }
   }
+
+  function handleToggleReaction(messageId: string, emoji: string) {
+    if (!session) return;
+    setReactionSheetMessageId(null);
+    const previous = messages;
+    setMessages((prev) =>
+      prev.map((m) => (m.message_id === messageId ? { ...m, reactions: applyReactionToggle(m.reactions, emoji) } : m))
+    );
+    toggleMessageReaction(session.hub.tunnelUrl, session.token, messageId, emoji)
+      .then((result) => {
+        setMessages((prev) => prev.map((m) => (m.message_id === messageId ? { ...m, reactions: result.reactions } : m)));
+      })
+      .catch(() => {
+        setMessages(previous);
+      });
+  }
+
+  const reactionSheetMessage = messages.find((m) => m.message_id === reactionSheetMessageId) ?? null;
 
   if (!session) return null;
 
@@ -195,7 +240,7 @@ export default function ConversationScreen() {
                   <ThemedText style={styles.sender}>{item.sender_username ?? 'Citinet'}</ThemedText>
                 )}
                 <Pressable
-                  onLongPress={!own ? () => setReportMessageId(item.message_id) : undefined}
+                  onLongPress={() => setReactionSheetMessageId(item.message_id)}
                   style={[
                     styles.bubble,
                     own
@@ -209,6 +254,24 @@ export default function ConversationScreen() {
                     {bodyText}
                   </ThemedText>
                 </Pressable>
+                {item.reactions.length > 0 && (
+                  <View style={styles.reactionRow}>
+                    {item.reactions.map((r) => (
+                      <Pressable
+                        key={r.emoji}
+                        onPress={() => handleToggleReaction(item.message_id, r.emoji)}
+                        style={[
+                          styles.reactionPill,
+                          { borderColor: Colors[colorScheme].icon + '33' },
+                          r.reacted_by_me && { backgroundColor: Brand + '22', borderColor: Brand },
+                        ]}>
+                        <ThemedText style={styles.reactionPillText}>
+                          {r.emoji} {r.count}
+                        </ThemedText>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
                 <ThemedText style={styles.time}>
                   {timeAgo(item.created_at)}
                   {own &&
@@ -288,6 +351,52 @@ export default function ConversationScreen() {
             targetId={reportMessageId}
           />
         )}
+
+        {/* Long-press on any bubble — reaction row up top (own messages can
+            react to themselves too, same as iMessage/Discord/Slack), plus a
+            Report row underneath for other people's messages only. Not
+            components/action-sheet.tsx: that only renders a plain list of
+            labeled rows, no way to fit a horizontal emoji row above them. */}
+        <Modal
+          visible={!!reactionSheetMessage}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setReactionSheetMessageId(null)}>
+          <Pressable style={styles.sheetBackdrop} onPress={() => setReactionSheetMessageId(null)}>
+            <Pressable onPress={() => {}} style={[styles.sheet, { backgroundColor: Colors[colorScheme].background }]}>
+              <View style={styles.reactionPickerRow}>
+                {REACTION_EMOJI.map((emoji) => (
+                  <Pressable
+                    key={emoji}
+                    onPress={() => reactionSheetMessage && handleToggleReaction(reactionSheetMessage.message_id, emoji)}
+                    style={styles.reactionPickerButton}
+                    hitSlop={6}>
+                    <ThemedText style={styles.reactionPickerEmoji}>{emoji}</ThemedText>
+                  </Pressable>
+                ))}
+              </View>
+              {reactionSheetMessage && reactionSheetMessage.sender_id !== session.userId && (
+                <>
+                  <View style={[styles.divider, { backgroundColor: Colors[colorScheme].icon + '22' }]} />
+                  <Pressable
+                    onPress={() => {
+                      const id = reactionSheetMessage.message_id;
+                      setReactionSheetMessageId(null);
+                      setReportMessageId(id);
+                    }}
+                    style={styles.sheetRow}>
+                    <IconSymbol name="flag.fill" size={18} color={Colors[colorScheme].text} />
+                    <ThemedText style={styles.sheetRowLabel}>Report this message</ThemedText>
+                  </Pressable>
+                </>
+              )}
+              <View style={[styles.divider, { backgroundColor: Colors[colorScheme].icon + '22' }]} />
+              <Pressable onPress={() => setReactionSheetMessageId(null)} style={styles.sheetRow}>
+                <ThemedText style={styles.sheetRowLabel}>Cancel</ThemedText>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
       </ThemedView>
     </KeyboardAvoidingView>
   );
@@ -348,6 +457,23 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     opacity: 0.8,
   },
+  reactionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 2,
+  },
+  reactionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  reactionPillText: {
+    fontSize: 12.5,
+  },
   time: {
     fontSize: 11,
     opacity: 0.45,
@@ -374,5 +500,47 @@ const styles = StyleSheet.create({
   sendButton: {
     paddingVertical: 8,
     paddingHorizontal: 4,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 36,
+    paddingHorizontal: 8,
+  },
+  reactionPickerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    paddingHorizontal: 8,
+    paddingBottom: 12,
+  },
+  reactionPickerButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reactionPickerEmoji: {
+    fontSize: 28,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 4,
+  },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+  },
+  sheetRowLabel: {
+    fontSize: 15.5,
   },
 });

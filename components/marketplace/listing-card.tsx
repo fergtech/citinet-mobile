@@ -22,6 +22,7 @@ export function ListingCard({
   saved,
   onToggleSave,
   style,
+  imageAspectRatio,
 }: {
   listing: MarketplaceListing;
   tunnelUrl: string;
@@ -33,13 +34,29 @@ export function ListingCard({
   saved?: boolean;
   onToggleSave?: () => void;
   style?: StyleProp<ViewStyle>;
+  // Unset keeps the default fixed height:100 (the fixed-width strip card's
+  // own proportions — Discover, "More from this seller"). A single
+  // full-bleed showcase card (Home) sets this to 1 instead — square, so a
+  // cover-fit crop only trims the product photo's edges evenly rather than
+  // cutting deep off one side the way a wide fixed height would at full
+  // device width.
+  imageAspectRatio?: number;
 }) {
   const category = categoryMeta(listing.category);
   const kind = PRICE_TYPE_META[listing.price_type] ?? PRICE_TYPE_META.fixed;
 
   return (
     <Pressable style={[styles.card, style]} onPress={onPress}>
-      <View style={[styles.imageBox, { backgroundColor: category.color }]}>
+      <View
+        style={[
+          styles.imageBox,
+          { backgroundColor: category.color },
+          // width: '100%' is load-bearing here — an aspectRatio-only child
+          // with no explicit width can fall back to shrink-to-fit instead of
+          // stretching to the parent's width, leaving a small square
+          // hugging the left edge instead of a full-bleed one.
+          imageAspectRatio ? { aspectRatio: imageAspectRatio, height: undefined, width: '100%' } : null,
+        ]}>
         {listing.image_file_name ? (
           <HubMedia fileName={listing.image_file_name} tunnelUrl={tunnelUrl} token={token} style={styles.image} />
         ) : (

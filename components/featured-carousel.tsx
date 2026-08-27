@@ -150,8 +150,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     paddingHorizontal: 20,
   },
+  // No horizontal padding — matches Discover's horizontal strips, which
+  // start flush at the exact screen edge (draggable from the edge, first
+  // card touching it) rather than inset like the header label above it.
   list: {
-    paddingHorizontal: 20,
     gap: 12,
   },
   card: {

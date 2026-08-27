@@ -1,6 +1,6 @@
-import { Tabs, router } from 'expo-router';
-import React from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { Tabs, router, useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CreateTabButton } from '@/components/create-tab-button';
@@ -11,6 +11,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { TabBarBackground } from '@/components/ui/tab-bar-background';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { listUnreadNotifications } from '@/lib/api/hubService';
 import { useSession } from '@/lib/session/session-context';
 
 export default function TabLayout() {
@@ -20,6 +21,22 @@ export default function TabLayout() {
   const tint = Colors[colorScheme ?? 'light'].tint;
   const isDark = colorScheme === 'dark';
   const borderColor = isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.08)';
+
+  // Lives at the tab-layout level (not inside app/notifications.tsx itself)
+  // so the dot shows regardless of which tab is active. This component IS
+  // the screen behind Stack.Screen name="(tabs)" in the root layout, so it
+  // regains focus like any other screen when the pushed /notifications
+  // screen is popped — same useFocusEffect re-check convention as
+  // everywhere else in this app that can go stale from a screen on top of it.
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      listUnreadNotifications(session.hub.tunnelUrl, session.token)
+        .then((list) => setHasUnreadNotifications(list.length > 0))
+        .catch(() => {});
+    }, [session])
+  );
 
   return (
     <Tabs
@@ -102,8 +119,36 @@ export default function TabLayout() {
         name="discover"
         options={{
           title: 'Explore',
-          // True SVG vector rendering, not a bitmap — see custom-icon.tsx.
-          tabBarIcon: ({ color }) => <CustomIcon size={30} name="search" color={color} />,
+          // Pulled off the tab bar — reached from Home's own header search
+          // icon instead now (see app/(tabs)/index.tsx). href: null keeps
+          // this a real, navigable route (expo-router still registers it),
+          // it just no longer gets a tab bar button of its own.
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="alerts"
+        options={{
+          title: 'Notifications',
+          // Traced from bell-android's pathData — see custom-icon.tsx.
+          // Takes over the tab bar slot search used to sit in.
+          tabBarIcon: ({ color }) => (
+            <View>
+              <CustomIcon size={28} name="bell" color={color} />
+              {hasUnreadNotifications && <View style={styles.unreadDot} />}
+            </View>
+          ),
+        }}
+        listeners={{
+          // Same "intercept and push the real screen" pattern as the create
+          // tab — app/(tabs)/alerts.tsx only exists as a redirect fallback,
+          // the actual screen is the top-level app/notifications.tsx. Named
+          // "alerts" (not "notifications") specifically so this tab's own
+          // route never collides with that one — see alerts.tsx's own note.
+          tabPress: (e) => {
+            e.preventDefault();
+            router.push('/notifications');
+          },
         }}
       />
       <Tabs.Screen
@@ -154,3 +199,17 @@ export default function TabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  unreadDot: {
+    position: 'absolute',
+    top: -2,
+    right: -3,
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    backgroundColor: '#d1465f',
+    borderWidth: 1.5,
+    borderColor: '#fff',
+  },
+});

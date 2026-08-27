@@ -1,25 +1,26 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { ActionSheet } from '@/components/action-sheet';
 import { HubAvatar } from '@/components/hub-avatar';
 import { ReportSheet } from '@/components/report-sheet';
+import { SpaceAvatar } from '@/components/space-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand } from '@/constants/theme';
-import { blockMember, createConversation, getMember, listBlockedMembers, unblockMember } from '@/lib/api/hubService';
-import { HubMember } from '@/lib/api/types';
+import { blockMember, createConversation, getMember, listBlockedMembers, listSharedSpaces, unblockMember } from '@/lib/api/hubService';
+import { HubMember, Space } from '@/lib/api/types';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useSession } from '@/lib/session/session-context';
 
 // The other-member equivalent of app/(tabs)/profile.tsx — a pushed screen
 // (back-chevron header, not a tab), reached by tapping any avatar/username
 // anywhere in the app (see lib/ui/navigate-to-profile.ts). No Settings
-// section (that's account-only) and no spaces list (not tackling Spaces
-// yet) — just identity and a way to message them.
+// section (that's account-only) — identity, a way to message them, and a
+// "Shared spaces" strip (mutual active memberships with the viewer).
 export default function MemberProfileScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const { session } = useSession();
@@ -31,6 +32,7 @@ export default function MemberProfileScreen() {
   const [blocked, setBlocked] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [sharedSpaces, setSharedSpaces] = useState<Space[]>([]);
 
   useEffect(() => {
     if (!session) return;
@@ -46,6 +48,13 @@ export default function MemberProfileScreen() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
       .finally(() => setLoading(false));
+  }, [session, userId]);
+
+  useEffect(() => {
+    if (!session || userId === session.userId) return;
+    listSharedSpaces(session.hub.tunnelUrl, session.token, userId)
+      .then(setSharedSpaces)
+      .catch(() => {});
   }, [session, userId]);
 
   function handleToggleBlock() {
@@ -133,6 +142,25 @@ export default function MemberProfileScreen() {
               </ThemedText>
             </Pressable>
           )}
+        </View>
+      )}
+
+      {sharedSpaces.length > 0 && (
+        <View style={styles.sharedSpacesSection}>
+          <ThemedText style={styles.sharedSpacesLabel}>Shared spaces</ThemedText>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.spacesStrip}>
+            {sharedSpaces.map((space) => (
+              <Pressable
+                key={space.id}
+                onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: space.slug } })}
+                style={styles.spaceItem}>
+                <SpaceAvatar space={space} size={38} />
+                <ThemedText style={styles.spaceItemLabel} numberOfLines={1}>
+                  {space.name}
+                </ThemedText>
+              </Pressable>
+            ))}
+          </ScrollView>
         </View>
       )}
 
@@ -249,5 +277,29 @@ const styles = StyleSheet.create({
     marginTop: 24,
     fontSize: 13,
     opacity: 0.6,
+  },
+  sharedSpacesSection: {
+    marginTop: 32,
+  },
+  sharedSpacesLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    opacity: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    paddingHorizontal: 20,
+  },
+  spacesStrip: {
+    paddingHorizontal: 20,
+    gap: 16,
+  },
+  spaceItem: {
+    alignItems: 'center',
+    width: 64,
+    gap: 6,
+  },
+  spaceItemLabel: {
+    fontSize: 11.5,
+    textAlign: 'center',
   },
 });

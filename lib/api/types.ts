@@ -112,6 +112,16 @@ export type ConversationMember = {
   last_read_at: string | null;
 };
 
+// Matches POST /api/messages/:id/reactions' response and GET .../messages'
+// own per-message reactionsAgg subquery (both confirmed against
+// api/server.js) — one row per distinct emoji on a message, pre-aggregated
+// server-side, not one row per individual reaction.
+export type MessageReaction = {
+  emoji: string;
+  count: number;
+  reacted_by_me: boolean;
+};
+
 export type HubMessage = {
   message_id: string;
   conversation_id: string;
@@ -120,7 +130,7 @@ export type HubMessage = {
   body: string;
   created_at: string;
   attachments: unknown[];
-  reactions: unknown[];
+  reactions: MessageReaction[];
 };
 
 export type HubConversation = {
@@ -167,11 +177,95 @@ export type SearchMemberResult = {
   score: number;
 };
 
+// The real GET /api/search spaces SQL selects a lot more than this (slug,
+// description, visibility, banner fields, my_role/my_status) via `...r` —
+// only slug is added here, the minimum needed to navigate a result to
+// app/spaces/[slug].tsx now that it exists. Was previously a dead-end
+// non-interactive row in Discover's search results for exactly that reason.
 export type SearchSpaceResult = {
   id: string;
+  slug: string;
   name: string;
   member_count: number;
   score: number;
+};
+
+// ── Spaces ────────────────────────────────────────────────────────
+// Confirmed directly against api/server.js's real hub_spaces/hub_space_members
+// SQL (the POST/GET/PATCH/join/leave/members/posts/files routes under
+// /api/spaces), not guessed from the design handoff. A few things worth
+// flagging for callers:
+// - visibility 'invite-only' exists on the server (POST .../join 403s for it
+//   unless already invited) but has no dedicated UI treatment specified yet
+//   — spaceVisibilityMeta falls back to 'private' styling for it.
+// - my_role/my_status are null (not 'member'/undefined) when the caller has
+//   never interacted with the space at all — a LEFT JOIN, not a default.
+// - member_count comes back as a numeric STRING, not a number: every one of
+//   these SELECTs does `COUNT(DISTINCT ...) AS member_count` with no ::int
+//   cast (unlike open_roles_count elsewhere in this codebase, which does
+//   cast), and node-pg parses bigint/count aggregates as strings by default.
+//   Confirmed against api/server.js directly, not assumed — Number(...) it
+//   before use.
+export type SpaceVisibility = 'public' | 'private' | 'invite-only';
+export type SpaceBannerMode = 'image' | 'solid' | 'gradient' | null;
+export type SpaceMemberRole = 'owner' | 'admin' | 'moderator' | 'member';
+export type SpaceMemberStatus = 'active' | 'pending' | 'invited';
+
+export type Space = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  visibility: SpaceVisibility;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  banner_mode: SpaceBannerMode;
+  banner_color: string | null;
+  banner_gradient_from: string | null;
+  banner_gradient_to: string | null;
+  banner_image_file_name: string | null;
+  // Present on GET (list/mine/detail) responses; absent from the bare POST
+  // create response — optional rather than assumed present everywhere.
+  web_public?: boolean;
+  member_count: string;
+  // Unlike member_count, this one *is* ::int-cast in SQL (added alongside
+  // this type, so it started right) — a real number, not a string. Exists
+  // so the space detail screen's "N posts" meta stat can show for a public
+  // space the viewer hasn't joined yet, since GET .../posts itself 403s for
+  // non-members.
+  post_count: number;
+  my_role: SpaceMemberRole | null;
+  my_status: SpaceMemberStatus | null;
+};
+
+// Matches GET /api/spaces/:slug/members' real SELECT — active AND pending
+// (and invited) rows come back in one list; filter by `status` client-side
+// for anything that needs just the active roster.
+export type SpaceMember = {
+  user_id: string;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  profile_headline: string | null;
+  role: SpaceMemberRole;
+  status: SpaceMemberStatus;
+  joined_at: string;
+};
+
+// Matches GET /api/spaces/:slug/files' real SELECT — note the bare `id`
+// (not `file_id`, unlike HubFile elsewhere in this app) since that route
+// aliases f.id directly with no rename.
+export type SpaceFile = {
+  id: string;
+  file_name: string;
+  file_key: string;
+  mime_type: string | null;
+  size_bytes: number;
+  uploaded_at: string;
+  uploaded_by: string | null;
+  post_id: string | null;
+  post_title: string | null;
 };
 
 export type SearchResults = {
@@ -565,12 +659,55 @@ export type InitiativeResource = {
   updated_at: string;
 };
 
+// kind is really a closed set ('task' | 'resource' | 'team' | 'update' |
+// 'member' — see hub_initiative_activity's CHECK constraint in api/server.js)
+// but only 'task'/'resource'/'team' are actually ever inserted today
+// ('update' — a general wall post — and 'member' aren't emitted by any real
+// route yet); kept loose as `string` rather than narrowed, so a future kind
+// doesn't silently fail to type-check here.
+// actor_username was a guess that didn't match the live column — the real
+// table (and every INSERT into it) uses actor_name, confirmed directly
+// against api/server.js's CREATE TABLE hub_initiative_activity.
 export type InitiativeActivityEntry = {
   id: string;
   initiative_id: string;
   kind: string;
-  actor_username: string | null;
+  actor_name: string | null;
   text: string;
+  created_at: string;
+};
+
+// ── Notifications ────────────────────────────────────────────────────
+// Matches GET /api/notifications/unread's real SELECT (hub_notifications
+// joined to hub_users for actor_username) — confirmed against api/server.js,
+// not guessed. `id` is a plain SERIAL (int4), not the bigint/COUNT string
+// footgun noted elsewhere in this file for space member_count — safe as a
+// real number here.
+//
+// Only 6 types are ever actually inserted anywhere in the server (every
+// notifyUser(...) call site) — kept as a union rather than widened to
+// `string`, since a 7th appearing would mean a real server change worth
+// knowing about at compile time, not something to quietly swallow:
+//   - message: ref_id = conversation id
+//   - reply: ref_id = post id
+//   - space_invite: ref_id = the space's SLUG, not its id
+//   - initiative_invite: ref_id = initiative id
+//   - join_request: ref_id = the requesting user's own id (an admin-facing
+//     notice, not something the requester sees)
+//   - account_approved: ref_id is always null — there's no single "item" to
+//     deep-link to, see lib/notifications/meta.ts's own handling of this.
+// citinet-web's own FEATURE_TYPES only wires 3 of these 6 into a per-icon
+// badge dot (feed/messages/hub_management) — the other 3 are otherwise only
+// ever surfaced by email. The mobile notifications screen is what actually
+// surfaces all 6 in one place.
+export type NotificationType = 'message' | 'reply' | 'space_invite' | 'initiative_invite' | 'account_approved' | 'join_request';
+
+export type HubNotification = {
+  id: number;
+  type: NotificationType;
+  actor_id: string | null;
+  actor_username: string | null;
+  ref_id: string | null;
   created_at: string;
 };
 

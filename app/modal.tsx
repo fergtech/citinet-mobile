@@ -52,6 +52,18 @@ const ACTIONS: ActionRow[] = [
     onPress: () => router.push({ pathname: '/event-editor', params: { from: 'compose' } }),
   },
   {
+    icon: 'target',
+    title: 'Start an initiative',
+    subtitle: 'Organize neighbors around a goal, with tasks and roles.',
+    onPress: () => router.push('/initiatives/create'),
+  },
+  {
+    icon: 'building.2.fill',
+    title: 'Create a space',
+    subtitle: 'Start a group for a street, building, or shared interest.',
+    onPress: () => router.push('/spaces/create'),
+  },
+  {
     icon: 'externaldrive.fill',
     title: 'Upload a file',
     subtitle: 'Share a document, photo, or other file with the hub.',

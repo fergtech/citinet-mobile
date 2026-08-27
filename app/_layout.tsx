@@ -80,14 +80,18 @@ function RootNavigator() {
         <Stack.Screen name="files/share" options={{ headerShown: false }} />
         <Stack.Screen name="files/storage" options={{ headerShown: false }} />
         <Stack.Screen name="feed" options={{ headerShown: false }} />
+        <Stack.Screen name="notifications" options={{ headerShown: false }} />
         <Stack.Screen name="events" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/index" options={{ headerShown: false }} />
+        <Stack.Screen name="initiatives/create" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/team" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/tasks" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/tasks/[taskId]" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/roles" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/resources" options={{ headerShown: false }} />
+        <Stack.Screen name="spaces/[slug]" options={{ headerShown: false }} />
+        <Stack.Screen name="spaces/create" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="group-members" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="e2e-unlock" options={{ presentation: 'modal', headerShown: false }} />

@@ -1,17 +1,17 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { HubAvatar } from '@/components/hub-avatar';
-import { HubMedia } from '@/components/hub-media';
 import { ScreenHeader } from '@/components/screen-header';
 import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getInitiative, getInitiativeActivity, joinInitiative } from '@/lib/api/hubService';
+import { getInitiative, getInitiativeActivity, initiativeBannerUrl, joinInitiative } from '@/lib/api/hubService';
 import { Initiative, InitiativeActivityEntry } from '@/lib/api/types';
 import {
   initiativeCategoryMeta,
@@ -132,12 +132,7 @@ export default function InitiativeDetailScreen() {
           <View style={styles.banner}>
             {initiative.banner_mode === 'image' && initiative.banner_image_file_name ? (
               <>
-                <HubMedia
-                  fileName={initiative.banner_image_file_name}
-                  tunnelUrl={session.hub.tunnelUrl}
-                  token={session.token}
-                  style={styles.bannerMedia}
-                />
+                <Image source={{ uri: initiativeBannerUrl(session.hub.tunnelUrl, initiative.id) }} style={styles.bannerMedia} contentFit="cover" />
                 <View style={styles.bannerScrim} />
               </>
             ) : initiative.banner_mode === 'gradient' && initiative.banner_gradient_from && initiative.banner_gradient_to ? (

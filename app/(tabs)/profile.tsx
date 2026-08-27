@@ -1,22 +1,25 @@
+import { useCallback, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
-import { router, type Href } from 'expo-router';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { HubAvatar } from '@/components/hub-avatar';
+import { SpaceAvatar } from '@/components/space-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { listMySpaces } from '@/lib/api/hubService';
+import { Space } from '@/lib/api/types';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useThemePreference } from '@/lib/ui/theme-preference';
 import { isMod } from '@/lib/session/is-mod';
 import { useSession } from '@/lib/session/session-context';
 
 // The Profile tab's own full screen — identity up top, then a Settings
-// section. Not tackling Spaces yet, so no spaces list here (see
-// app/profile/[userId].tsx for the other-member equivalent, which has no
-// Settings section at all, just identity + a Message CTA).
+// section. See app/profile/[userId].tsx for the other-member equivalent
+// (identity + a Message CTA + its own "Shared spaces" strip, no Settings).
 export default function ProfileScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, signOut } = useSession();
@@ -24,6 +27,19 @@ export default function ProfileScreen() {
   const isDark = colorScheme === 'dark';
   const tabBarHeight = useBottomTabBarHeight();
   const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
+
+  // "Your spaces" — GET /api/spaces/mine already scopes to active
+  // memberships only, no client-side filtering needed. Own-profile
+  // equivalent of the other-member screen's "Shared spaces" strip.
+  const [mySpaces, setMySpaces] = useState<Space[]>([]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      listMySpaces(session.hub.tunnelUrl, session.token)
+        .then(setMySpaces)
+        .catch(() => {});
+    }, [session])
+  );
 
   if (!session) return null;
 
@@ -86,6 +102,25 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
 
+        {mySpaces.length > 0 && (
+          <>
+            <ThemedText style={styles.sectionLabel}>Your spaces</ThemedText>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.spacesStrip}>
+              {mySpaces.map((space) => (
+                <Pressable
+                  key={space.id}
+                  onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: space.slug } })}
+                  style={styles.spaceItem}>
+                  <SpaceAvatar space={space} size={38} showBanner tunnelUrl={session.hub.tunnelUrl} />
+                  <ThemedText style={styles.spaceItemLabel} numberOfLines={1}>
+                    {space.name}
+                  </ThemedText>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </>
+        )}
+
         {isMod(session) && (
           <>
             <ThemedText style={styles.sectionLabel}>Hub</ThemedText>
@@ -106,10 +141,6 @@ export default function ProfileScreen() {
             <ThemedText style={styles.rowLabel}>Privacy & Security</ThemedText>
             <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
           </Pressable>
-          <View style={[styles.row, styles.rowDisabled]}>
-            <IconSymbol name="bell.fill" size={20} color={Colors[colorScheme].icon} />
-            <ThemedText style={styles.rowLabel}>Notifications</ThemedText>
-          </View>
           <Pressable onPress={() => router.push('/account/settings')} style={styles.row}>
             <IconSymbol name="gearshape.fill" size={20} color={Colors[colorScheme].icon} />
             <ThemedText style={styles.rowLabel}>Account</ThemedText>
@@ -187,11 +218,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#8884',
   },
-  rowDisabled: {
-    opacity: 0.4,
-  },
   rowLabel: {
     flex: 1,
     fontSize: 15,
+  },
+  spacesStrip: {
+    paddingHorizontal: 20,
+    gap: 16,
+    marginBottom: 24,
+  },
+  spaceItem: {
+    alignItems: 'center',
+    width: 64,
+    gap: 6,
+  },
+  spaceItemLabel: {
+    fontSize: 11.5,
+    textAlign: 'center',
   },
 });

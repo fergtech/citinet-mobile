@@ -414,7 +414,10 @@ export default function DiscoverScreen() {
               <>
                 <ThemedText style={[styles.sectionLabel, styles.sectionLabelSpaced]}>Spaces</ThemedText>
                 {searchResults.spaces.map((s) => (
-                  <View key={s.id} style={styles.hubRow}>
+                  <Pressable
+                    key={s.id}
+                    style={styles.hubRow}
+                    onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: s.slug } })}>
                     <View style={styles.hubIcon}>
                       <IconSymbol name="person.fill" size={16} color={Brand} />
                     </View>
@@ -426,7 +429,7 @@ export default function DiscoverScreen() {
                         {s.member_count} members
                       </ThemedText>
                     </View>
-                  </View>
+                  </Pressable>
                 ))}
               </>
             )}

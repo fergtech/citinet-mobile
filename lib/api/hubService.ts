@@ -1,4 +1,4 @@
-import { AtlasPin, AtlasPinCategory, BlockedMember, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AtlasPin, AtlasPinCategory, BlockedMember, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -397,6 +397,32 @@ export async function sendMessage(
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't send that message."));
+  }
+  return res.json();
+}
+
+// Real, already-working infra (POST /api/messages/:id/reactions, toggle
+// semantics — add if the caller hasn't reacted with this exact emoji yet,
+// remove if they have) confirmed directly against api/server.js. No reply-
+// to-a-specific-message or edit-a-sent-message support exists anywhere in
+// that file (hub_messages has no reply_to/edited columns and no PATCH route
+// at all) — deliberately not built on mobile for that reason, not an
+// oversight. `emoji` must be a single glyph — the server 400s past 4 UTF-16
+// code units (multi-codepoint emoji like some skin-tone variants can span
+// more than one "character").
+export async function toggleMessageReaction(
+  tunnelUrl: string,
+  token: string,
+  messageId: string,
+  emoji: string
+): Promise<{ message_id: string; reacted: boolean; reactions: MessageReaction[] }> {
+  const res = await fetch(`${tunnelUrl}/api/messages/${encodeURIComponent(messageId)}/reactions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emoji }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't react to that message."));
   }
   return res.json();
 }
@@ -1267,6 +1293,14 @@ export async function updateMarketplaceBannerConfig(
 // there were wrong on several endpoint paths, HTTP methods, and body/response
 // field names — see each function's own note for what changed.
 
+// spaceId is sent as a query param but GET /api/initiatives on the real
+// server never reads req.query.space_id at all (confirmed directly against
+// api/server.js) — it's a no-op today, every call returns the hub's full
+// initiative list regardless. Kept here (rather than removed) since it's
+// harmless to send and documents the intent; callers who actually need a
+// space's initiatives must filter the returned array client-side by
+// `initiative.space_id` themselves (see app/spaces/[slug].tsx) until/unless
+// the server route is fixed to honor it.
 export async function listInitiatives(tunnelUrl: string, token: string, spaceId?: string): Promise<Initiative[]> {
   const params = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : '';
   const res = await fetch(`${tunnelUrl}/api/initiatives${params}`, {
@@ -1277,6 +1311,28 @@ export async function listInitiatives(tunnelUrl: string, token: string, spaceId?
   }
   const data = await res.json();
   return Array.isArray(data.initiatives) ? data.initiatives : [];
+}
+
+// Real route/body per api/server.js's POST /api/initiatives local-mode
+// branch — title/category/goal/description/color, plus space_id (accepted
+// separately from the rest of the body, never proxied to an external
+// provider) to link it under a space's "Start an initiative here" entry
+// point. No dedicated mobile create screen existed before this — see
+// app/initiatives/create.tsx.
+export async function createInitiative(
+  tunnelUrl: string,
+  token: string,
+  data: { title: string; category?: string; goal?: string; description?: string; color?: string; space_id?: string }
+): Promise<Initiative> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't create that initiative."));
+  }
+  return res.json();
 }
 
 export async function getInitiative(tunnelUrl: string, token: string, initiativeId: string): Promise<Initiative> {
@@ -1329,6 +1385,17 @@ export async function getInitiativeActivity(
   }
   const data = await res.json();
   return Array.isArray(data.activity) ? data.activity : [];
+}
+
+// GET /api/initiatives/:id/banner streams the image straight from MinIO — no
+// `authenticate` middleware on that route (confirmed against api/server.js),
+// and no hub_files row backs it (the upload handler writes directly to
+// MinIO under initiative-banners/<id>/<filename>, never INSERTs into
+// hub_files). That means it's NOT reachable through getMediaUrl/HubMedia,
+// which both assume a hub_files row exists to look up by file_name — this
+// is a plain, already-public URL, usable directly as an <Image> uri.
+export function initiativeBannerUrl(tunnelUrl: string, initiativeId: string): string {
+  return `${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/banner`;
 }
 
 export async function getInitiativeShareLink(tunnelUrl: string, token: string, initiativeId: string): Promise<string> {
@@ -1687,4 +1754,177 @@ export async function unprovideResource(tunnelUrl: string, token: string, resour
     throw new Error(await readErrorMessage(res, "Couldn't undo that."));
   }
   return res.json();
+}
+
+// ── Spaces ───────────────────────────────────────────────────────────
+// Real shapes/routes read straight from api/server.js's /api/spaces* handlers
+// (see the note on the Space/SpaceMember/SpaceFile types in types.ts for
+// specifics — member_count as a string, my_role/my_status null-not-default,
+// etc.) — not the design handoff. All addressed by slug, not id.
+
+// Real route/body per api/server.js's POST /api/spaces local-mode branch —
+// name + slug are both required server-side (it also re-cleans whatever
+// slug it's given, stripping to [a-z0-9-]), description/visibility optional
+// (visibility defaults to 'public' server-side too). No dedicated mobile
+// create screen existed before this — see app/spaces/create.tsx, which
+// derives the slug from the name client-side rather than exposing a
+// separate slug field.
+export async function createSpace(
+  tunnelUrl: string,
+  token: string,
+  data: { name: string; slug: string; description?: string; visibility?: string }
+): Promise<Space> {
+  const res = await fetch(`${tunnelUrl}/api/spaces`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't create that space."));
+  }
+  return readJson<Space>(res, "Couldn't create that space.");
+}
+
+export async function getSpace(tunnelUrl: string, token: string, slug: string): Promise<Space> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this space."));
+  }
+  return readJson<Space>(res, "Couldn't load this space.");
+}
+
+// GET /api/spaces/mine — active memberships only (the server's own JOIN
+// requires status = 'active'), used for the "Your spaces" monogram strip.
+export async function listMySpaces(tunnelUrl: string, token: string): Promise<Space[]> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/mine`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load your spaces."));
+  }
+  return readJson<Space[]>(res, "Couldn't load your spaces.");
+}
+
+// No dedicated "mutual spaces" route exists elsewhere in this app — added
+// specifically for the other-member profile screen's "Shared spaces" strip
+// (see app/spaces/shared-with/:userId in api/server.js). Returns spaces
+// where both the caller and :userId are active members.
+export async function listSharedSpaces(tunnelUrl: string, token: string, userId: string): Promise<Space[]> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/shared-with/${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load shared spaces."));
+  }
+  return readJson<Space[]>(res, "Couldn't load shared spaces.");
+}
+
+// Returns { status: 'active' | 'pending' } — active for public spaces,
+// pending for private ones (403s outright for invite-only unless already
+// invited). The space detail screen re-fetches the full Space afterward
+// rather than trying to merge this narrow response in by hand.
+export async function joinSpace(tunnelUrl: string, token: string, slug: string): Promise<{ status: string }> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/join`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't join this space."));
+  }
+  return readJson(res, "Couldn't join this space.");
+}
+
+// 400s if the caller is the space's owner ("Transfer ownership before
+// leaving") — surfaced as-is via readErrorMessage, no special-casing here.
+export async function leaveSpace(tunnelUrl: string, token: string, slug: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/leave`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't leave this space."));
+  }
+}
+
+// 403s ("Join this space to view posts") unless the caller is an active
+// member — real gate on the server, not just a UI nicety, so callers must be
+// ready to treat that failure as "you're not in" rather than a generic error.
+// Returns every post/event in one shot (no category split server-side) —
+// split client-side on `!!event_date`, same convention the general feed uses.
+export async function listSpacePosts(tunnelUrl: string, token: string, slug: string): Promise<HubPost[]> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/posts`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Join this space to view posts.'));
+  }
+  return readJson<HubPost[]>(res, "Couldn't load this space's posts.");
+}
+
+// Same active-member gate as listSpacePosts. Files here are always post
+// attachments (owns_file uploads go through POST .../posts with a media
+// file, is_public: false) — never navigate these to the general
+// app/files/[id].tsx screen, which gates on is_public/ownership and would
+// 403/hide them for any member who isn't the uploader.
+export async function listSpaceFiles(tunnelUrl: string, token: string, slug: string): Promise<SpaceFile[]> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/files`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, 'Join this space to view files.'));
+  }
+  return readJson<SpaceFile[]>(res, "Couldn't load this space's files.");
+}
+
+export async function listSpaceMembers(tunnelUrl: string, token: string, slug: string): Promise<SpaceMember[]> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/members`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load this space's members."));
+  }
+  return readJson<SpaceMember[]>(res, "Couldn't load this space's members.");
+}
+
+// GET /api/spaces/:slug/banner streams the image straight from MinIO — no
+// `authenticate` middleware on that route (confirmed against api/server.js),
+// same reasoning as initiativeBannerUrl above: not reachable through
+// getMediaUrl/HubMedia (no hub_files row backs it), just a plain public URL.
+export function spaceBannerUrl(tunnelUrl: string, slug: string): string {
+  return `${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/banner`;
+}
+
+// ── Notifications ────────────────────────────────────────────────────
+// citinet-web itself has no notifications screen — just per-feature red-dot
+// badges (GET /api/notifications/counts, grouped into 3 feature buckets).
+// This app's own notifications screen (app/notifications.tsx) lists every
+// unread notification individually instead, across all 6 real types (see
+// HubNotification's own note on that) — this is that list, and the one way
+// to dismiss a single row regardless of type.
+
+// Capped at 50 server-side (LIMIT 50, newest first) — no pagination exists
+// on this route, which is fine for "things you haven't looked at yet."
+export async function listUnreadNotifications(tunnelUrl: string, token: string): Promise<HubNotification[]> {
+  const res = await fetch(`${tunnelUrl}/api/notifications/unread`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load notifications."));
+  }
+  return readJson<HubNotification[]>(res, "Couldn't load notifications.");
+}
+
+// POST /api/notifications/:id/read — added specifically for this screen
+// (see its own note in api/server.js) since neither of the two mark-read
+// routes that already existed can target every notification type uniformly.
+export async function markNotificationRead(tunnelUrl: string, token: string, id: number): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/notifications/${id}/read`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't dismiss that notification."));
+  }
 }
