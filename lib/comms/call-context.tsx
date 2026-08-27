@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { answerCall, declineCall, endCall, ringCall } from '@/lib/api/hubService';
 import { CallMode, CallOutcome } from '@/lib/api/types';
@@ -30,6 +30,11 @@ export type CallState = {
   blurOn: boolean;
   speakerOn: boolean;
   sharingOn: boolean;
+  // Lives here, not local state in components/comms/in-call-overlay.tsx's
+  // RoomContent, because that component unmounts on minimize — local state
+  // would silently reset to 'user' on restore while the actual camera
+  // stayed wherever it was, desyncing the mirror styling from reality.
+  facingMode: 'user' | 'environment';
   // Set the instant a call resolves — the transcript chip (rendered by
   // app/conversation/[id].tsx) reads this once, then the thread's own
   // call-events refetch takes over as the durable record.
@@ -54,6 +59,7 @@ const idleState: CallState = {
   blurOn: false,
   speakerOn: true,
   sharingOn: false,
+  facingMode: 'user',
   endedOutcome: null,
 };
 
@@ -70,6 +76,7 @@ type CallContextValue = {
   toggleBlur: () => void;
   toggleSpeaker: () => void;
   toggleSharing: () => void;
+  toggleFacingMode: () => void;
   toggleLayout: () => void;
   minimize: () => void;
   restore: () => void;
@@ -91,7 +98,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
       // A second ring arriving mid-call is a real product gap (should
       // busy-signal it) — out of scope here; just don't let it stomp
       // whatever's already happening.
-      if (callRef.current.phase !== 'idle') return;
+      if (callRef.current.phase !== 'idle') {
+        console.log('[call] incoming_call ignored, phase is', callRef.current.phase);
+        return;
+      }
+      console.log('[call] incoming_call -> phase=incoming', event.call_id);
       setCall({
         ...idleState,
         phase: 'incoming',
@@ -123,7 +134,22 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const startOutgoingCall = useCallback<CallContextValue['startOutgoingCall']>(
     ({ conversationId, peerId, peerName, mode }) => {
       if (!session) return;
-      setCall({ ...idleState, phase: 'outgoing', conversationId, peerId, peerName, mode });
+      // Carry forward mic/cam/speaker from whatever the pre-call setup
+      // screen's toggles left them at — same bug class as broadcast-
+      // context.tsx's startBroadcast (see its own note): spreading idleState
+      // wholesale here discarded a mute set right before placing the call.
+      setCall((prev) => ({
+        ...idleState,
+        phase: 'outgoing',
+        conversationId,
+        peerId,
+        peerName,
+        mode,
+        micOn: prev.micOn,
+        camOn: prev.camOn,
+        blurOn: prev.blurOn,
+        speakerOn: prev.speakerOn,
+      }));
       ringCall(session.hub.tunnelUrl, session.token, conversationId, peerId, mode)
         .then((res) => {
           setCall((prev) =>
@@ -166,19 +192,36 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   const reset = useCallback(() => setCall(idleState), []);
+
+  // Safety net for phase 'ended': app/call/setup.tsx used to be the only
+  // thing that reset back to idle, via its own 900ms timer — but that
+  // screen already popped itself the instant phase hit 'connected' (see its
+  // own effect), so for any call that actually connected, nothing was still
+  // mounted to catch 'ended' when the in-call overlay's End button fired it.
+  // Phase stayed stuck at 'ended' until the next call attempt remounted
+  // setup.tsx, which then saw the stale 'ended' phase and immediately
+  // auto-closed itself — the "opens for a moment then closes" symptom.
+  // Living here instead guarantees it fires regardless of which screen (if
+  // any) happens to be mounted.
+  useEffect(() => {
+    if (call.phase !== 'ended') return;
+    const timer = setTimeout(() => setCall(idleState), 900);
+    return () => clearTimeout(timer);
+  }, [call.phase]);
   const setMode = useCallback((mode: CallMode) => setCall((prev) => ({ ...prev, mode })), []);
   const toggleMic = useCallback(() => setCall((prev) => ({ ...prev, micOn: !prev.micOn })), []);
   const toggleCam = useCallback(() => setCall((prev) => ({ ...prev, camOn: !prev.camOn })), []);
   const toggleBlur = useCallback(() => setCall((prev) => ({ ...prev, blurOn: !prev.blurOn })), []);
   const toggleSpeaker = useCallback(() => setCall((prev) => ({ ...prev, speakerOn: !prev.speakerOn })), []);
   const toggleSharing = useCallback(() => setCall((prev) => ({ ...prev, sharingOn: !prev.sharingOn })), []);
+  const toggleFacingMode = useCallback(() => setCall((prev) => ({ ...prev, facingMode: prev.facingMode === 'user' ? 'environment' : 'user' })), []);
   const toggleLayout = useCallback(() => setCall((prev) => ({ ...prev, layout: prev.layout === 'split' ? 'focus' : 'split' })), []);
   const minimize = useCallback(() => setCall((prev) => ({ ...prev, minimized: true })), []);
   const restore = useCallback(() => setCall((prev) => ({ ...prev, minimized: false })), []);
 
   const value = useMemo<CallContextValue>(
-    () => ({ call, startOutgoingCall, answer, decline, end, reset, setMode, toggleMic, toggleCam, toggleBlur, toggleSpeaker, toggleSharing, toggleLayout, minimize, restore }),
-    [call, startOutgoingCall, answer, decline, end, reset, setMode, toggleMic, toggleCam, toggleBlur, toggleSpeaker, toggleSharing, toggleLayout, minimize, restore]
+    () => ({ call, startOutgoingCall, answer, decline, end, reset, setMode, toggleMic, toggleCam, toggleBlur, toggleSpeaker, toggleSharing, toggleFacingMode, toggleLayout, minimize, restore }),
+    [call, startOutgoingCall, answer, decline, end, reset, setMode, toggleMic, toggleCam, toggleBlur, toggleSpeaker, toggleSharing, toggleFacingMode, toggleLayout, minimize, restore]
   );
 
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;

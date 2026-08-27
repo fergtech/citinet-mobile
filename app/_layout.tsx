@@ -9,8 +9,10 @@ import { useEffect, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
+import { BroadcastOverlay } from '@/components/comms/broadcast-overlay';
 import { InCallOverlay } from '@/components/comms/in-call-overlay';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { BroadcastProvider } from '@/lib/comms/broadcast-context';
 import { CallProvider, useCall } from '@/lib/comms/call-context';
 import { E2EKeysProvider } from '@/lib/crypto/e2e-context';
 import { SessionProvider, useSession } from '@/lib/session/session-context';
@@ -43,6 +45,7 @@ function RootNavigator() {
   useEffect(() => {
     if (call.phase === 'incoming' && call.callId && pushedForCallId.current !== call.callId) {
       pushedForCallId.current = call.callId;
+      console.log('[call] pushing /call/setup for', call.callId);
       router.push('/call/setup');
     }
     if (call.phase === 'idle') pushedForCallId.current = null;
@@ -114,6 +117,7 @@ function RootNavigator() {
         <Stack.Screen name="spaces/create" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="call/setup" options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'fade' }} />
+        <Stack.Screen name="broadcast/setup" options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="group-members" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="e2e-unlock" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="e2e-setup" options={{ presentation: 'modal', headerShown: false }} />
@@ -134,12 +138,16 @@ function RootLayout() {
         <SessionProvider>
           <E2EKeysProvider>
             <CallProvider>
-              <RootNavigator />
-              {/* Sibling to the Stack, not inside any one screen — this is
-                  what lets a call survive navigating to a different screen
-                  (minimize) instead of unmounting with whatever screen
-                  happened to push it. See its own top-of-file note. */}
-              <InCallOverlay />
+              <BroadcastProvider>
+                <RootNavigator />
+                {/* Sibling to the Stack, not inside any one screen — this is
+                    what lets a call/broadcast survive navigating to a
+                    different screen (minimize) instead of unmounting with
+                    whatever screen happened to push it. See InCallOverlay's
+                    own top-of-file note — BroadcastOverlay mirrors it. */}
+                <InCallOverlay />
+                <BroadcastOverlay />
+              </BroadcastProvider>
             </CallProvider>
           </E2EKeysProvider>
         </SessionProvider>

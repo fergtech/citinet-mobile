@@ -42,17 +42,24 @@ export function useCommsSocket(
     function connect() {
       if (cancelled) return;
       ws = new WebSocket(commsSocketUrl(tunnelUrl!, token!));
+      ws.onopen = () => {
+        console.log('[comms-socket] connected');
+      };
       ws.onmessage = (e) => {
         try {
-          onEventRef.current(JSON.parse(e.data));
-        } catch {
-          // malformed payload — ignore rather than crash the socket
+          const event = JSON.parse(e.data);
+          console.log('[comms-socket] event received', event.type);
+          onEventRef.current(event);
+        } catch (err) {
+          console.warn('[comms-socket] malformed payload, dropped', e.data, err);
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (e) => {
+        console.log('[comms-socket] closed', e.code, e.reason);
         if (!cancelled) reconnectTimer = setTimeout(connect, 3000);
       };
-      ws.onerror = () => {
+      ws.onerror = (e) => {
+        console.warn('[comms-socket] error', e);
         ws?.close();
       };
     }

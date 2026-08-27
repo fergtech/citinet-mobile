@@ -71,12 +71,12 @@ function RoomContent() {
 
   function handleToggleMic() {
     toggleMic();
-    localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled).catch(() => {});
+    localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled).catch((err) => console.warn('[call] toggle mic failed', err));
   }
 
   function handleToggleCam() {
     toggleCam();
-    localParticipant.setCameraEnabled(!isCameraEnabled).catch(() => {});
+    localParticipant.setCameraEnabled(!isCameraEnabled).catch((err) => console.warn('[call] toggle camera failed', err));
   }
 
   function handleToggleShare() {
@@ -84,7 +84,7 @@ function RoomContent() {
     // Triggers the browser's own getDisplayMedia() picker — no extra wiring
     // needed on web, unlike native where screen share needs a separate
     // platform capability.
-    localParticipant.setScreenShareEnabled(!isScreenShareEnabled).catch(() => {});
+    localParticipant.setScreenShareEnabled(!isScreenShareEnabled).catch((err) => console.warn('[call] toggle screen share failed', err));
   }
 
   const statusLine = call.phase === 'outgoing' ? 'Ringing…' : formatCallDuration(elapsed);

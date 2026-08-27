@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useScrollToTop } from '@react-navigation/native';
+import { router, useFocusEffect, type Href } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BrandGradient } from '@/components/brand-gradient';
 import { HubAvatar } from '@/components/hub-avatar';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
 import { listConversations, listLiveComms } from '@/lib/api/hubService';
 import { HubConversation, LiveCommsItem } from '@/lib/api/types';
+import { useBroadcast } from '@/lib/comms/broadcast-context';
+import { formatCallDuration, useElapsedSeconds } from '@/lib/comms/use-elapsed';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
@@ -55,13 +57,13 @@ function isUnread(convo: HubConversation, selfId: string): boolean {
 // to every live card's video just to render a list, expensive for what's
 // meant to be a lightweight strip) — a brand/red gradient placeholder fills
 // the same visual role honestly, same simplification this app already uses
-// for avatars with no uploaded photo. Not yet tappable: no viewer/room
-// destination screen is built yet (see this file's own note on the live
-// fetch above) — a real card, just not wired to a route that doesn't exist.
-function LiveCard({ item }: { item: LiveCommsItem }) {
+// for avatars with no uploaded photo. Only broadcast cards are tappable —
+// joins as a viewer (see BroadcastProvider's joinAsViewer). Rooms (kind
+// 'room', the OPEN badge) don't have a destination screen yet.
+function LiveCard({ item, onPress }: { item: LiveCommsItem; onPress?: () => void }) {
   const isLive = item.kind === 'broadcast';
   return (
-    <View style={styles.liveCard}>
+    <Pressable onPress={onPress} disabled={!onPress} style={styles.liveCard}>
       <BrandGradient style={StyleSheet.absoluteFillObject} />
       <View style={[styles.liveBadge, { backgroundColor: isLive ? '#DC2B2B' : Brand }]}>
         <ThemedText style={styles.liveBadgeLabel} lightColor="#fff" darkColor="#fff">
@@ -88,13 +90,39 @@ function LiveCard({ item }: { item: LiveCommsItem }) {
           {item.title || (isLive ? 'Live broadcast' : 'Open room')}
         </ThemedText>
       </View>
-    </View>
+    </Pressable>
+  );
+}
+
+// Own component, same reasoning as MinimizedCallBar in app/conversation/
+// [id].tsx: the elapsed-seconds tick only re-renders this small bar, not
+// the whole Messages screen.
+function MinimizedBroadcastBar({ onPress }: { onPress: () => void }) {
+  const { broadcast } = useBroadcast();
+  const elapsed = useElapsedSeconds(broadcast.startedAt);
+  // The join-request card only exists inside the live screen itself
+  // (components/comms/broadcast-overlay.tsx) — a minimized host would
+  // otherwise never know one arrived at all. This is the only surface that
+  // exists while minimized, so it has to carry that signal.
+  const hasPendingRequest = broadcast.role === 'host' && !!broadcast.pendingRequest;
+  return (
+    <Pressable onPress={onPress} style={[styles.minimizeBar, hasPendingRequest && styles.minimizeBarAlert]}>
+      <View style={[styles.minimizeDot, hasPendingRequest && styles.minimizeDotAlert]} />
+      <ThemedText style={styles.minimizeLabel} lightColor="#fff" darkColor="#fff" numberOfLines={1}>
+        {hasPendingRequest ? `${broadcast.pendingRequest!.requesterName} wants to join in` : broadcast.role === 'host' ? 'Broadcasting live' : 'Watching live'}
+      </ThemedText>
+      <ThemedText style={styles.minimizeTimer} lightColor="#fff" darkColor="#fff">
+        {formatCallDuration(elapsed)}
+      </ThemedText>
+      <IconSymbol name="chevron.up" size={14} color="#fff" />
+    </Pressable>
   );
 }
 
 export default function MessagesScreen() {
   const { session } = useSession();
   const { ensure, attention, decryptForConversation } = useE2EKeys();
+  const { broadcast, joinAsViewer, restore } = useBroadcast();
   // Only iOS's tab bar floats over content (see app/(tabs)/_layout.tsx) —
   // compensate so the last row doesn't end up hidden behind the glass.
   const tabBarHeight = useBottomTabBarHeight();
@@ -104,6 +132,15 @@ export default function MessagesScreen() {
   const [live, setLive] = useState<LiveCommsItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Computed once, used for both the "Live now" header's visibility and the
+  // strip itself — the header used to check raw `live.length` while the
+  // strip filtered separately, so ending your only broadcast could leave
+  // the "Live now" eyebrow showing over an empty strip.
+  const visibleLive = useMemo(
+    () => live.filter((item) => item.host_id !== session?.userId || (broadcast.phase === 'live' && broadcast.roomName === item.room_name)),
+    [live, session, broadcast.phase, broadcast.roomName]
+  );
 
   // Re-tapping the Chat tab while already on it scrolls back to the top —
   // same as Home (see (tabs)/index.tsx's own useScrollToTop).
@@ -130,16 +167,38 @@ export default function MessagesScreen() {
   useFocusEffect(load);
 
   // Real fetch (GET /api/comms/live, LiveKit's own room list — see
-  // hubService.ts's own note) — starts out empty on every hub until a
-  // broadcast/room actually exists, since neither has a mobile create
-  // screen yet. Not a stub: the moment one exists (from a follow-up build,
-  // or another client), this strip picks it up with no further changes.
+  // hubService.ts's own note) — empty until a broadcast/room actually
+  // exists. Rooms (kind 'room') still have no mobile create screen; the
+  // Broadcast pill below does (app/broadcast/setup.tsx).
+  const refreshLive = useCallback(() => {
+    if (!session) return;
+    listLiveComms(session.hub.tunnelUrl, session.token).then(setLive);
+  }, [session]);
+
+  useFocusEffect(refreshLive);
+
+  // Focus alone only catches a broadcast *this device* started/ended — it
+  // does nothing for one that started on someone else's device, since
+  // there's no push channel for that (unlike calls — see lib/comms/
+  // socket.ts's own note on why that one's special). Polling every 15s
+  // while this screen is actually visible is the low-effort middle ground:
+  // not instant, but another device's new broadcast shows up on its own
+  // instead of requiring a manual navigate-away-and-back.
   useFocusEffect(
     useCallback(() => {
-      if (!session) return;
-      listLiveComms(session.hub.tunnelUrl, session.token).then(setLive);
-    }, [session])
+      const id = setInterval(refreshLive, 15000);
+      return () => clearInterval(id);
+    }, [refreshLive])
   );
+
+  // Focus alone left this screen showing a stale watching-count (or a
+  // just-started broadcast missing entirely) whenever you started/ended one
+  // without ever navigating away — minimizing stays on this same screen
+  // instance, so no focus event fires. Reacting to the phase transition
+  // directly instead catches both cases.
+  useEffect(() => {
+    if (broadcast.phase === 'live' || broadcast.phase === 'idle') refreshLive();
+  }, [broadcast.phase, refreshLive]);
 
   useEffect(() => {
     ensure();
@@ -174,44 +233,57 @@ export default function MessagesScreen() {
     <ThemedView style={styles.container}>
       <View style={styles.header}>
         <ThemedText type="title" style={styles.headerTitle}>
-          Comms
+          Communications
         </ThemedText>
       </View>
 
       {loading && conversations.length === 0 && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
+      {broadcast.phase === 'live' && broadcast.minimized && <MinimizedBroadcastBar onPress={restore} />}
+
       <FlatList
         ref={listRef}
         data={conversations}
         keyExtractor={(item) => item.conversation_id}
         contentContainerStyle={[styles.list, { paddingBottom: 24 + extraBottomInset }]}
-        onRefresh={load}
+        onRefresh={() => {
+          load();
+          refreshLive();
+        }}
         refreshing={loading}
         ListHeaderComponent={
           <View style={styles.listHeader}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.entryRow}>
-              {/* No setup screen wired yet (see this screen's own note above
-                  the live-fetch effect) — a real, but not-yet-actionable,
-                  row rather than a route that would crash on tap. Same
-                  "disabled, dimmed, no onPress" convention app/modal.tsx
-                  already uses for its own "Report an issue" stub. */}
-              <View style={[styles.broadcastPill, styles.broadcastPillDisabled]}>
+              <Pressable onPress={() => router.push('/broadcast/setup')} style={styles.broadcastPill}>
                 <IconSymbol name="dot.radiowaves.left.and.right" size={14} color="#DC2B2B" />
                 <ThemedText style={[styles.broadcastPillLabel, { color: '#DC2B2B' }]}>Broadcast</ThemedText>
-              </View>
+              </Pressable>
             </ScrollView>
 
-            {live.length > 0 && (
+            {visibleLive.length > 0 && (
               <>
                 <View style={styles.liveEyebrowRow}>
                   <View style={styles.liveDot} />
                   <ThemedText style={styles.eyebrow}>Live now</ThemedText>
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.liveStrip}>
-                  {live.map((item) => (
-                    <LiveCard key={item.room_name} item={item} />
-                  ))}
+                  {visibleLive.map((item) => {
+                    // A card for the broadcast I'm already in (as host or
+                    // as a joined viewer/guest, just minimized) must
+                    // restore that session, not start a fresh join —
+                    // joining my own room as a brand-new viewer identity
+                    // is how "my own live" ended up showing "Join in"
+                    // instead of host controls.
+                    const isMine = broadcast.phase === 'live' && broadcast.roomName === item.room_name;
+                    return (
+                      <LiveCard
+                        key={item.room_name}
+                        item={item}
+                        onPress={item.kind === 'broadcast' ? (isMine ? restore : () => joinAsViewer(item)) : undefined}
+                      />
+                    );
+                  })}
                 </ScrollView>
               </>
             )}
@@ -356,12 +428,42 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 9,
   },
-  broadcastPillDisabled: {
-    opacity: 0.55,
-  },
   broadcastPillLabel: {
     fontSize: 13.5,
     fontWeight: '700',
+  },
+  minimizeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#4A1616',
+    marginHorizontal: 20,
+    marginBottom: 8,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  minimizeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#DC2B2B',
+  },
+  minimizeBarAlert: {
+    backgroundColor: '#331CA7',
+  },
+  minimizeDotAlert: {
+    backgroundColor: '#fff',
+  },
+  minimizeLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  minimizeTimer: {
+    fontSize: 12.5,
+    fontVariant: ['tabular-nums'],
+    opacity: 0.85,
   },
   liveEyebrowRow: {
     flexDirection: 'row',

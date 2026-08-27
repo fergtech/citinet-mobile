@@ -23,7 +23,7 @@ import { useSession } from '@/lib/session/session-context';
 export default function CallSetupScreen() {
   const { session } = useSession();
   const params = useLocalSearchParams<{ conversationId?: string; peerId?: string; peerName?: string; mode?: string }>();
-  const { call, startOutgoingCall, answer, decline, reset, toggleMic, toggleCam, toggleBlur, toggleSpeaker } = useCall();
+  const { call, startOutgoingCall, answer, decline, toggleMic, toggleCam, toggleBlur, toggleSpeaker } = useCall();
 
   const isIncoming = call.phase === 'incoming';
   const outgoingParamsReady = !!(params.conversationId && params.peerId && params.peerName);
@@ -39,13 +39,13 @@ export default function CallSetupScreen() {
     if (call.phase === 'connected') {
       router.back();
     } else if (call.phase === 'ended') {
-      const timer = setTimeout(() => {
-        reset();
-        router.back();
-      }, 900);
+      // Just navigation here — CallContext's own timer (lib/comms/call-
+      // context.tsx) is what resets phase back to idle, guaranteed to fire
+      // regardless of whether this screen is even mounted to see it.
+      const timer = setTimeout(() => router.back(), 900);
       return () => clearTimeout(timer);
     }
-  }, [call.phase, reset]);
+  }, [call.phase]);
 
   function handleStart() {
     if (!outgoingParamsReady) return;

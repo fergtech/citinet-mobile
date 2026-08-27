@@ -1,8 +1,7 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Track } from 'livekit-client';
-import { LiveKitRoom, useLocalParticipant, useRemoteParticipants, useTracks, VideoTrack } from '@livekit/react-native';
+import { AudioSession, LiveKitRoom, useLocalParticipant, useRemoteParticipants, useTracks, VideoTrack } from '@livekit/react-native';
 
 import { HubAvatar } from '@/components/hub-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -45,14 +44,13 @@ export function InCallOverlay() {
 
 function RoomContent() {
   const { session } = useSession();
-  const { call, minimize, end, toggleLayout, toggleMic, toggleCam, toggleSpeaker, toggleSharing, setMode } = useCall();
+  const { call, minimize, end, toggleLayout, toggleMic, toggleCam, toggleSpeaker, toggleSharing, toggleFacingMode, setMode } = useCall();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
   const remote = remoteParticipants[0];
   const cameraTracks = useTracks([Track.Source.Camera]);
   const localTrackRef = cameraTracks.find((t) => t.participant.isLocal);
   const remoteTrackRef = cameraTracks.find((t) => !t.participant.isLocal);
-  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const elapsed = useElapsedSeconds(call.startedAt);
 
   // Nothing to navigate here — this overlay isn't a pushed screen, it just
@@ -64,24 +62,38 @@ function RoomContent() {
   }
 
   function handleFlip() {
-    const next = facingMode === 'user' ? 'environment' : 'user';
-    setFacingMode(next);
-    localParticipant.setCameraEnabled(true, { facingMode: next }).catch(() => {});
+    const next = call.facingMode === 'user' ? 'environment' : 'user';
+    toggleFacingMode();
+    localParticipant.setCameraEnabled(true, { facingMode: next }).catch((err) => console.warn('[call] flip camera failed', err));
   }
 
   function handleToggleMic() {
     toggleMic();
-    localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled).catch(() => {});
+    localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled).catch((err) => console.warn('[call] toggle mic failed', err));
   }
 
   function handleToggleCam() {
     toggleCam();
-    localParticipant.setCameraEnabled(!isCameraEnabled).catch(() => {});
+    localParticipant.setCameraEnabled(!isCameraEnabled).catch((err) => console.warn('[call] toggle camera failed', err));
   }
 
   function handleToggleShare() {
     toggleSharing();
-    localParticipant.setScreenShareEnabled(!isScreenShareEnabled).catch(() => {});
+    localParticipant.setScreenShareEnabled(!isScreenShareEnabled).catch((err) => console.warn('[call] toggle screen share failed', err));
+  }
+
+  // toggleSpeaker() alone only flips CallContext's own `speakerOn` flag —
+  // it never touches the real output route, which is why the button used to
+  // look like it worked while audio kept coming out the speaker regardless.
+  // AudioSession.selectAudioOutput is the actual native route switch;
+  // 'force_speaker'/'default' are the only two values iOS exposes (see
+  // @livekit/react-native's AudioSession.getAudioOutputs doc comment) —
+  // 'default' lets iOS pick earpiece/headset/bluetooth normally.
+  function handleToggleSpeaker() {
+    const next = !call.speakerOn;
+    toggleSpeaker();
+    const deviceId = Platform.OS === 'ios' ? (next ? 'force_speaker' : 'default') : next ? 'speaker' : 'earpiece';
+    AudioSession.selectAudioOutput(deviceId).catch((err) => console.warn('[call] toggle speaker failed', err));
   }
 
   // Real state, not the spec prototype's fixed "~2.2s" demo timing — this
@@ -103,7 +115,7 @@ function RoomContent() {
               </View>
               <View style={[styles.tile, styles.selfTileSplit]}>
                 {localTrackRef && isCameraEnabled ? (
-                  <VideoTrack trackRef={localTrackRef} style={styles.fill} objectFit="cover" mirror={facingMode === 'user'} />
+                  <VideoTrack trackRef={localTrackRef} style={styles.fill} objectFit="cover" mirror={call.facingMode === 'user'} />
                 ) : (
                   <SelfFallback />
                 )}
@@ -120,7 +132,7 @@ function RoomContent() {
               </View>
               <View style={[styles.tile, styles.selfTilePip]}>
                 {localTrackRef && isCameraEnabled ? (
-                  <VideoTrack trackRef={localTrackRef} style={styles.fill} objectFit="cover" mirror={facingMode === 'user'} />
+                  <VideoTrack trackRef={localTrackRef} style={styles.fill} objectFit="cover" mirror={call.facingMode === 'user'} />
                 ) : (
                   <SelfFallback compact />
                 )}
@@ -185,7 +197,7 @@ function RoomContent() {
           ) : (
             <ControlButton icon="video.fill" active={false} label="Video" onPress={() => setMode('video')} />
           )}
-          <ControlButton icon={call.speakerOn ? 'speaker.wave.2.fill' : 'speaker.slash.fill'} active={call.speakerOn} label={call.speakerOn ? 'Speaker' : 'Earpiece'} onPress={toggleSpeaker} />
+          <ControlButton icon={call.speakerOn ? 'speaker.wave.2.fill' : 'speaker.slash.fill'} active={call.speakerOn} label={call.speakerOn ? 'Speaker' : 'Earpiece'} onPress={handleToggleSpeaker} />
           <ControlButton icon="rectangle.on.rectangle" active={call.sharingOn} label={call.sharingOn ? 'Sharing' : 'Share'} onPress={handleToggleShare} />
         </View>
         <Pressable onPress={handleEnd} style={styles.endButton} accessibilityLabel="End call">

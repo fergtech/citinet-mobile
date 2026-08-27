@@ -2020,3 +2020,26 @@ export async function getCommsToken(
   }
   return readJson(res, "Couldn't connect.");
 }
+
+// Host-only — force-closes a broadcast/room's LiveKit room server-side.
+// Without this, ending one only ever disconnected the caller's own client;
+// the room itself lingered (still joinable) until LiveKit's own 5-minute
+// empty-room timeout. The client's own local end() already happens
+// regardless of what this returns (see lib/comms/use-broadcast-actions.ts)
+// — this doesn't block or throw on failure — but a failed/missing response
+// is logged rather than silently swallowed, since a silent failure here
+// looks identical to "ending doesn't work" from the outside (e.g. the hub
+// server not having picked up this route yet without a restart).
+export async function endBroadcastRoom(tunnelUrl: string, token: string, roomName: string): Promise<void> {
+  try {
+    const res = await fetch(`${tunnelUrl}/api/comms/${encodeURIComponent(roomName)}/end`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      console.warn('[broadcast] server-side end failed', res.status, await res.text().catch(() => ''));
+    }
+  } catch (err) {
+    console.warn('[broadcast] server-side end request failed', err);
+  }
+}
