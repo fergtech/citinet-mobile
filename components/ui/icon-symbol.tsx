@@ -71,6 +71,7 @@ const MAPPING = {
   'pencil': 'edit',
   'bookmark.circle.fill': 'bookmark-added',
   'chevron.down': 'expand-more',
+  'chevron.up': 'expand-less',
   'camera.fill': 'photo-camera',
   'arrow.triangle.turn.up.right.diamond.fill': 'directions',
   'view.3d': 'panorama',
@@ -114,6 +115,19 @@ const MAPPING = {
   'checkmark': 'check',
   'shield.fill': 'shield',
   'flag.fill': 'flag',
+  // Comms (calls/broadcasts/rooms) — added alongside that feature.
+  'mic.fill': 'mic',
+  'mic.slash.fill': 'mic-off',
+  'video.slash.fill': 'videocam-off',
+  'speaker.wave.2.fill': 'volume-up',
+  'speaker.slash.fill': 'volume-off',
+  'phone.down.fill': 'call-end',
+  'arrow.triangle.2.circlepath.camera.fill': 'flip-camera-ios',
+  'rectangle.on.rectangle': 'present-to-all',
+  'arrow.up.left.and.arrow.down.right': 'fullscreen',
+  'square.grid.2x2': 'grid-view',
+  'dot.radiowaves.left.and.right': 'sensors',
+  'paperclip': 'attach-file',
 } as IconMapping;
 
 /**

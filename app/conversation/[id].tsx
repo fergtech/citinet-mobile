@@ -10,13 +10,17 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { blockMember, getMessages, listConversations, sendMessage, toggleMessageReaction } from '@/lib/api/hubService';
-import { HubMessage, MessageReaction } from '@/lib/api/types';
+import { blockMember, getMessages, listCallEvents, listConversations, sendMessage, toggleMessageReaction } from '@/lib/api/hubService';
+import { CallEvent, CallMode, HubMessage, MessageReaction } from '@/lib/api/types';
+import { useCall } from '@/lib/comms/call-context';
+import { formatCallDuration, useElapsedSeconds } from '@/lib/comms/use-elapsed';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
 import { timeAgo } from '@/lib/ui/time-ago';
+
+type TimelineItem = { kind: 'message'; key: string; createdAt: string; message: HubMessage } | { kind: 'call'; key: string; createdAt: string; event: CallEvent };
 
 // Real, already-working infra (see toggleMessageReaction's own note) —
 // "like, heart, smile, laugh, something else" per the product ask, mapped to
@@ -35,14 +39,62 @@ function applyReactionToggle(reactions: MessageReaction[], emoji: string): Messa
   return reactions.map((r) => (r.emoji === emoji ? { ...r, count: r.count - 1, reacted_by_me: false } : r));
 }
 
+// "Video call · 1:12" / "· not answered" — spec, verbatim. Duration is
+// derived once from the row's own started_at/ended_at (a closed record by
+// the time it's fetched), not the live elapsed-seconds hook that only
+// applies to a call still in progress.
+function CallEventChip({ event, selfId }: { event: CallEvent; selfId: string }) {
+  const modeLabel = event.mode === 'video' ? 'Video call' : 'Audio call';
+  let detail: string;
+  if (event.outcome === 'connected' && event.started_at && event.ended_at) {
+    const seconds = Math.max(0, Math.round((new Date(event.ended_at).getTime() - new Date(event.started_at).getTime()) / 1000));
+    detail = formatCallDuration(seconds);
+  } else if (event.outcome === 'declined') {
+    detail = event.callee_id === selfId ? 'declined' : 'not answered';
+  } else {
+    detail = 'not answered';
+  }
+  return (
+    <View style={styles.callChipRow}>
+      <View style={styles.callChip}>
+        <IconSymbol name={event.mode === 'video' ? 'video.fill' : 'phone.fill'} size={12} color="#8886" />
+        <ThemedText style={styles.callChipText}>
+          {modeLabel} · {detail}
+        </ThemedText>
+      </View>
+    </View>
+  );
+}
+
+// Own component so the elapsed-seconds tick (500ms, see use-elapsed.ts's own
+// note on why) only re-renders this small bar, not the whole thread screen.
+function MinimizedCallBar({ onPress }: { onPress: () => void }) {
+  const { call } = useCall();
+  const elapsed = useElapsedSeconds(call.startedAt);
+  return (
+    <Pressable onPress={onPress} style={styles.minimizeBar}>
+      <View style={styles.minimizeDot} />
+      <ThemedText style={styles.minimizeLabel} lightColor="#fff" darkColor="#fff">
+        {call.mode === 'video' ? 'Video call in progress' : 'Call in progress'}
+      </ThemedText>
+      <ThemedText style={styles.minimizeTimer} lightColor="#fff" darkColor="#fff">
+        {call.phase === 'outgoing' ? 'Ringing…' : formatCallDuration(elapsed)}
+      </ThemedText>
+      <IconSymbol name="chevron.up" size={14} color="#fff" />
+    </Pressable>
+  );
+}
+
 export default function ConversationScreen() {
   const { id, title, peerId: peerIdParam } = useLocalSearchParams<{ id: string; title: string; peerId?: string }>();
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
   const { ensure, attention, decryptForConversation, encryptForConversation } = useE2EKeys();
-  const listRef = useRef<FlatList<HubMessage>>(null);
+  const { call, restore } = useCall();
+  const listRef = useRef<FlatList<TimelineItem>>(null);
 
   const [messages, setMessages] = useState<HubMessage[]>([]);
+  const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [decrypted, setDecrypted] = useState<Map<string, string | null>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +136,23 @@ export default function ConversationScreen() {
     return null;
   }, [messages, session]);
 
+  // Merged client-side by timestamp — there's no server-side merge of
+  // hub_messages and hub_call_events (deliberately: call history got its own
+  // small table rather than folding a "kind" discriminator into messages,
+  // see api/comms.js's own note).
+  const timeline = useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [
+      ...messages.map((m) => ({ kind: 'message' as const, key: `m-${m.message_id}`, createdAt: m.created_at, message: m })),
+      ...callEvents.map((c) => ({ kind: 'call' as const, key: `c-${c.id}`, createdAt: c.created_at, event: c })),
+    ];
+    return items.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [messages, callEvents]);
+
+  function handleStartCall(mode: CallMode) {
+    if (!peerId || !title) return;
+    router.push({ pathname: '/call/setup', params: { conversationId: id, peerId, peerName: title, mode } });
+  }
+
   const load = useCallback(() => {
     if (!session) return;
     setLoading(true);
@@ -97,6 +166,27 @@ export default function ConversationScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadCallEvents = useCallback(() => {
+    if (!session) return;
+    listCallEvents(session.hub.tunnelUrl, session.token, id).then(setCallEvents);
+  }, [session, id]);
+
+  useEffect(() => {
+    loadCallEvents();
+  }, [loadCallEvents]);
+
+  // A call for this exact conversation just resolved — refetch so its
+  // transcript chip ("Video call · 1:12") shows up without a manual pull.
+  // A short extra refetch covers end()/decline() being fire-and-forget on
+  // the server side (see hubService.ts's own note on that).
+  useEffect(() => {
+    if (call.phase === 'ended' && call.conversationId === id) {
+      loadCallEvents();
+      const timer = setTimeout(loadCallEvents, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [call.phase, call.conversationId, id, loadCallEvents]);
 
   useEffect(() => {
     if (!session) return;
@@ -212,18 +302,34 @@ export default function ConversationScreen() {
           rightIcon={!isGroup && peerId ? 'ellipsis.circle.fill' : undefined}
           onRightPress={!isGroup && peerId ? () => setShowActions(true) : undefined}
           rightAccessibilityLabel="More actions"
+          rightIcon2={!isGroup && peerId ? 'video.fill' : undefined}
+          onRightPress2={!isGroup && peerId ? () => handleStartCall('video') : undefined}
+          rightAccessibilityLabel2="Start video call"
+          rightIcon3={!isGroup && peerId ? 'phone.fill' : undefined}
+          onRightPress3={!isGroup && peerId ? () => handleStartCall('audio') : undefined}
+          rightAccessibilityLabel3="Start audio call"
         />
+
+        {/* Minimize keeps the call alive (components/comms/in-call-overlay.tsx
+            stays mounted) — this bar is purely "come back to it," not a
+            second copy of the call state. Only for a minimized call
+            belonging to *this* conversation; other threads show nothing. */}
+        {call.minimized && call.conversationId === id && (call.phase === 'connected' || call.phase === 'outgoing') && <MinimizedCallBar onPress={restore} />}
 
         {loading && messages.length === 0 && <ActivityIndicator style={styles.spinner} />}
         {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
         <FlatList
           ref={listRef}
-          data={messages}
-          keyExtractor={(m) => m.message_id}
+          data={timeline}
+          keyExtractor={(t) => t.key}
           contentContainerStyle={styles.list}
           onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-          renderItem={({ item }) => {
+          renderItem={({ item: timelineItem }) => {
+            if (timelineItem.kind === 'call') {
+              return <CallEventChip event={timelineItem.event} selfId={session.userId} />;
+            }
+            const item = timelineItem.message;
             const own = item.sender_id === session.userId;
             const encrypted = isEncryptedBody(item.body);
             const resolved = decrypted.get(item.message_id);
@@ -542,5 +648,49 @@ const styles = StyleSheet.create({
   },
   sheetRowLabel: {
     fontSize: 15.5,
+  },
+  callChipRow: {
+    alignItems: 'center',
+    marginVertical: 6,
+  },
+  callChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#8882',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  callChipText: {
+    fontSize: 12,
+    opacity: 0.7,
+  },
+  minimizeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1B4D3E',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  minimizeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4ADE80',
+  },
+  minimizeLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  minimizeTimer: {
+    fontSize: 12.5,
+    fontVariant: ['tabular-nums'],
+    opacity: 0.85,
   },
 });

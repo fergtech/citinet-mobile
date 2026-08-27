@@ -1,14 +1,17 @@
 import '@/lib/crypto/random-polyfill';
+import '@/lib/comms/livekit-init';
 
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
+import { InCallOverlay } from '@/components/comms/in-call-overlay';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { CallProvider, useCall } from '@/lib/comms/call-context';
 import { E2EKeysProvider } from '@/lib/crypto/e2e-context';
 import { SessionProvider, useSession } from '@/lib/session/session-context';
 import { ThemePreferenceProvider } from '@/lib/ui/theme-preference';
@@ -21,12 +24,29 @@ SplashScreen.preventAutoHideAsync();
 
 function RootNavigator() {
   const { status } = useSession();
+  const { call } = useCall();
+  // Guards against pushing /call/setup a second time if this effect re-runs
+  // while already on it (e.g. a fast-refresh) — only fires on the actual
+  // idle-to-incoming transition, not on every render while phase stays
+  // 'incoming'.
+  const pushedForCallId = useRef<string | null>(null);
 
   useEffect(() => {
     if (status !== 'loading') {
       SplashScreen.hideAsync();
     }
   }, [status]);
+
+  // The one place an incoming call actually interrupts whatever the user is
+  // doing — everywhere else in this app is poll-on-focus, this is the
+  // exception (see lib/comms/socket.ts's own note on why).
+  useEffect(() => {
+    if (call.phase === 'incoming' && call.callId && pushedForCallId.current !== call.callId) {
+      pushedForCallId.current = call.callId;
+      router.push('/call/setup');
+    }
+    if (call.phase === 'idle') pushedForCallId.current = null;
+  }, [call.phase, call.callId]);
 
   if (status === 'loading') return null;
 
@@ -93,6 +113,7 @@ function RootNavigator() {
         <Stack.Screen name="spaces/[slug]" options={{ headerShown: false }} />
         <Stack.Screen name="spaces/create" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="call/setup" options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="group-members" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="e2e-unlock" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="e2e-setup" options={{ presentation: 'modal', headerShown: false }} />
@@ -112,7 +133,14 @@ function RootLayout() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <SessionProvider>
           <E2EKeysProvider>
-            <RootNavigator />
+            <CallProvider>
+              <RootNavigator />
+              {/* Sibling to the Stack, not inside any one screen — this is
+                  what lets a call survive navigating to a different screen
+                  (minimize) instead of unmounting with whatever screen
+                  happened to push it. See its own top-of-file note. */}
+              <InCallOverlay />
+            </CallProvider>
           </E2EKeysProvider>
         </SessionProvider>
         <StatusBar style="auto" />

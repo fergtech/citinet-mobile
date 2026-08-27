@@ -144,6 +144,66 @@ export type HubConversation = {
   last_message: HubMessage | null;
 };
 
+// ── Comms (calls, broadcasts, rooms) ────────────────────────────────
+// Matches api/comms.js's real routes/shapes directly — LiveKit's own room
+// list is the source of truth for "what's live now" (no separate table),
+// hub_call_events is the one thing that's actually persisted.
+export type CallMode = 'audio' | 'video';
+export type CallOutcome = 'ringing' | 'connected' | 'declined' | 'not_answered';
+
+// POST /api/comms/call/ring's response — caller's own token to join/publish
+// immediately, before the callee has answered.
+export type RingResponse = {
+  call_id: string;
+  room_name: string;
+  token: string;
+  livekit_url: string;
+};
+
+// POST /api/comms/call/:id/answer's response.
+export type AnswerResponse = {
+  room_name: string;
+  mode: CallMode;
+  token: string;
+  livekit_url: string;
+};
+
+// The WS payload pushed to a callee the moment someone rings them (see
+// lib/comms/socket.ts) — same shape server-side, in api/comms.js's sendTo().
+export type IncomingCallPayload = {
+  type: 'incoming_call';
+  call_id: string;
+  conversation_id: string;
+  room_name: string;
+  mode: CallMode;
+  from_id: string;
+  from_username: string;
+};
+
+// GET /api/conversations/:id/call-events — history for the transcript's
+// "Video call · 1:12" chip.
+export type CallEvent = {
+  id: string;
+  mode: CallMode;
+  outcome: CallOutcome;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  caller_id: string;
+  callee_id: string;
+};
+
+// GET /api/comms/live — one entry per active broadcast/room, read back from
+// LiveKit room metadata (see POST /api/comms/token's own metadata write).
+export type LiveCommsItem = {
+  kind: 'broadcast' | 'room';
+  room_name: string;
+  title: string;
+  host_id: string;
+  host_username: string;
+  participant_count: number;
+};
+
 export type HubMember = {
   user_id: string;
   username: string;

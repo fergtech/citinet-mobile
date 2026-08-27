@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useScrollToTop } from '@react-navigation/native';
@@ -9,8 +9,9 @@ import { HubAvatar } from '@/components/hub-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { listConversations } from '@/lib/api/hubService';
-import { HubConversation } from '@/lib/api/types';
+import { Brand } from '@/constants/theme';
+import { listConversations, listLiveComms } from '@/lib/api/hubService';
+import { HubConversation, LiveCommsItem } from '@/lib/api/types';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
@@ -50,6 +51,47 @@ function isUnread(convo: HubConversation, selfId: string): boolean {
   return new Date(msg.created_at) > new Date(self.last_read_at);
 }
 
+// No preview thumbnail exists for a room's stream (would mean subscribing
+// to every live card's video just to render a list, expensive for what's
+// meant to be a lightweight strip) — a brand/red gradient placeholder fills
+// the same visual role honestly, same simplification this app already uses
+// for avatars with no uploaded photo. Not yet tappable: no viewer/room
+// destination screen is built yet (see this file's own note on the live
+// fetch above) — a real card, just not wired to a route that doesn't exist.
+function LiveCard({ item }: { item: LiveCommsItem }) {
+  const isLive = item.kind === 'broadcast';
+  return (
+    <View style={styles.liveCard}>
+      <BrandGradient style={StyleSheet.absoluteFillObject} />
+      <View style={[styles.liveBadge, { backgroundColor: isLive ? '#DC2B2B' : Brand }]}>
+        <ThemedText style={styles.liveBadgeLabel} lightColor="#fff" darkColor="#fff">
+          {isLive ? 'LIVE' : 'OPEN'}
+        </ThemedText>
+      </View>
+      <View style={styles.liveCountPill}>
+        <ThemedText style={styles.liveCountText} lightColor="#fff" darkColor="#fff">
+          {item.participant_count} {isLive ? 'watching' : 'here'}
+        </ThemedText>
+      </View>
+      <View style={styles.liveCardFooter}>
+        <View style={styles.liveHostRow}>
+          <View style={styles.liveHostMonogram}>
+            <ThemedText style={styles.liveHostInitial} lightColor="#fff" darkColor="#fff">
+              {(item.host_username || '?').charAt(0).toUpperCase()}
+            </ThemedText>
+          </View>
+          <ThemedText style={styles.liveHostName} lightColor="#fff" darkColor="#fff" numberOfLines={1}>
+            {item.host_username} · {isLive ? 'Broadcast' : 'Room'}
+          </ThemedText>
+        </View>
+        <ThemedText style={styles.liveTitle} lightColor="#fff" darkColor="#fff" numberOfLines={2}>
+          {item.title || (isLive ? 'Live broadcast' : 'Open room')}
+        </ThemedText>
+      </View>
+    </View>
+  );
+}
+
 export default function MessagesScreen() {
   const { session } = useSession();
   const { ensure, attention, decryptForConversation } = useE2EKeys();
@@ -59,6 +101,7 @@ export default function MessagesScreen() {
   const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
   const [conversations, setConversations] = useState<HubConversation[]>([]);
   const [previews, setPreviews] = useState<Map<string, string>>(new Map());
+  const [live, setLive] = useState<LiveCommsItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,6 +128,18 @@ export default function MessagesScreen() {
   // refetches every time Messages regains focus, e.g. backing out of a
   // conversation, so the dot clears on its own like it should.
   useFocusEffect(load);
+
+  // Real fetch (GET /api/comms/live, LiveKit's own room list — see
+  // hubService.ts's own note) — starts out empty on every hub until a
+  // broadcast/room actually exists, since neither has a mobile create
+  // screen yet. Not a stub: the moment one exists (from a follow-up build,
+  // or another client), this strip picks it up with no further changes.
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      listLiveComms(session.hub.tunnelUrl, session.token).then(setLive);
+    }, [session])
+  );
 
   useEffect(() => {
     ensure();
@@ -119,7 +174,7 @@ export default function MessagesScreen() {
     <ThemedView style={styles.container}>
       <View style={styles.header}>
         <ThemedText type="title" style={styles.headerTitle}>
-          Messages
+          Comms
         </ThemedText>
       </View>
 
@@ -133,6 +188,37 @@ export default function MessagesScreen() {
         contentContainerStyle={[styles.list, { paddingBottom: 24 + extraBottomInset }]}
         onRefresh={load}
         refreshing={loading}
+        ListHeaderComponent={
+          <View style={styles.listHeader}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.entryRow}>
+              {/* No setup screen wired yet (see this screen's own note above
+                  the live-fetch effect) — a real, but not-yet-actionable,
+                  row rather than a route that would crash on tap. Same
+                  "disabled, dimmed, no onPress" convention app/modal.tsx
+                  already uses for its own "Report an issue" stub. */}
+              <View style={[styles.broadcastPill, styles.broadcastPillDisabled]}>
+                <IconSymbol name="dot.radiowaves.left.and.right" size={14} color="#DC2B2B" />
+                <ThemedText style={[styles.broadcastPillLabel, { color: '#DC2B2B' }]}>Broadcast</ThemedText>
+              </View>
+            </ScrollView>
+
+            {live.length > 0 && (
+              <>
+                <View style={styles.liveEyebrowRow}>
+                  <View style={styles.liveDot} />
+                  <ThemedText style={styles.eyebrow}>Live now</ThemedText>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.liveStrip}>
+                  {live.map((item) => (
+                    <LiveCard key={item.room_name} item={item} />
+                  ))}
+                </ScrollView>
+              </>
+            )}
+
+            <ThemedText style={styles.eyebrow}>Direct messages</ThemedText>
+          </View>
+        }
         renderItem={({ item }) => {
           const peer = item.kind === 'dm' ? getPeer(item, session.userId) : null;
           const unread = isUnread(item, session.userId);
@@ -252,5 +338,117 @@ const styles = StyleSheet.create({
   empty: {
     opacity: 0.6,
     fontSize: 13,
+  },
+  listHeader: {
+    marginBottom: 4,
+  },
+  entryRow: {
+    gap: 8,
+    paddingBottom: 16,
+  },
+  broadcastPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(220,43,43,0.12)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  broadcastPillDisabled: {
+    opacity: 0.55,
+  },
+  broadcastPillLabel: {
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  liveEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#DC2B2B',
+  },
+  eyebrow: {
+    fontSize: 12,
+    fontWeight: '600',
+    opacity: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  liveStrip: {
+    gap: 10,
+    paddingBottom: 20,
+  },
+  liveCard: {
+    width: 148,
+    height: 196,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  liveBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  liveBadgeLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  liveCountPill: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  liveCountText: {
+    fontSize: 10,
+    fontVariant: ['tabular-nums'],
+  },
+  liveCardFooter: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    bottom: 10,
+    gap: 4,
+  },
+  liveHostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveHostMonogram: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveHostInitial: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  liveHostName: {
+    fontSize: 11,
+    flex: 1,
+    opacity: 0.9,
+  },
+  liveTitle: {
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

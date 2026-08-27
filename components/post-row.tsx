@@ -1,13 +1,13 @@
-import { Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { HubAvatar } from '@/components/hub-avatar';
-import { HubMedia } from '@/components/hub-media';
 import { EventAtlasLink } from '@/components/event-atlas-link';
 import { EventRsvpButton } from '@/components/event-rsvp-button';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { HubAvatar } from '@/components/hub-avatar';
+import { HubMedia } from '@/components/hub-media';
 import { PollCard } from '@/components/poll-card';
 import { ThemedText } from '@/components/themed-text';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { HubPost } from '@/lib/api/types';
@@ -56,9 +56,7 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
           <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={36} />
           <View style={styles.headerText}>
             <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
-            <ThemedText style={styles.meta}>
-              {post.category.charAt(0) + post.category.slice(1).toLowerCase()} · {timeAgo(post.created_at)}
-            </ThemedText>
+            
           </View>
         </Pressable>
       )}
@@ -97,6 +95,9 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
         </Pressable>
       )}
       {post.category === 'EVENT' && <EventRsvpButton post={post} onToggle={onToggleRsvp} />}
+      <ThemedText style={styles.meta}>
+        {/*{post.category.charAt(0) + post.category.slice(1).toLowerCase()} · */}{timeAgo(post.created_at)}
+      </ThemedText>
       <View style={styles.footer}>
         <Pressable
           onPress={(e) => {

@@ -1,4 +1,4 @@
-import { AtlasPin, AtlasPinCategory, BlockedMember, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -1927,4 +1927,96 @@ export async function markNotificationRead(tunnelUrl: string, token: string, id:
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't dismiss that notification."));
   }
+}
+
+// ── Comms (calls, broadcasts, rooms) ────────────────────────────────
+// Real routes/shapes read straight from api/comms.js — see that file's own
+// notes for why signaling is a plain WebSocket (lib/comms/socket.ts) rather
+// than more of this file's usual poll-on-focus convention, and why "live
+// now" has no listing function here (it reads LiveKit's own room list
+// server-side, nothing to additionally shape client-side beyond JSON parsing).
+
+export async function ringCall(
+  tunnelUrl: string,
+  token: string,
+  conversationId: string,
+  peerId: string,
+  mode: CallMode
+): Promise<RingResponse> {
+  const res = await fetch(`${tunnelUrl}/api/comms/call/ring`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation_id: conversationId, peer_id: peerId, mode }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't start that call."));
+  }
+  return readJson<RingResponse>(res, "Couldn't start that call.");
+}
+
+export async function answerCall(tunnelUrl: string, token: string, callId: string): Promise<AnswerResponse> {
+  const res = await fetch(`${tunnelUrl}/api/comms/call/${encodeURIComponent(callId)}/answer`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't answer that call."));
+  }
+  return readJson<AnswerResponse>(res, "Couldn't answer that call.");
+}
+
+export async function declineCall(tunnelUrl: string, token: string, callId: string): Promise<void> {
+  await fetch(`${tunnelUrl}/api/comms/call/${encodeURIComponent(callId)}/decline`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => {});
+}
+
+// Fire-and-forget by design — the caller is already leaving the call screen
+// the moment they hang up; a failed "mark it ended" server-side just means
+// the transcript chip's duration might read a beat long, not that anything
+// user-visible breaks.
+export async function endCall(tunnelUrl: string, token: string, callId: string): Promise<void> {
+  await fetch(`${tunnelUrl}/api/comms/call/${encodeURIComponent(callId)}/end`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => {});
+}
+
+export async function listCallEvents(tunnelUrl: string, token: string, conversationId: string): Promise<CallEvent[]> {
+  const res = await fetch(`${tunnelUrl}/api/conversations/${encodeURIComponent(conversationId)}/call-events`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data.call_events) ? data.call_events : [];
+}
+
+export async function listLiveComms(tunnelUrl: string, token: string): Promise<LiveCommsItem[]> {
+  const res = await fetch(`${tunnelUrl}/api/comms/live`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  return readJson<LiveCommsItem[]>(res, "Couldn't load what's live.");
+}
+
+// Mints a token for a broadcast/room. Omit room_name to create a brand new
+// one (you become its host) — pass an existing one (from listLiveComms) to
+// join something already running.
+export async function getCommsToken(
+  tunnelUrl: string,
+  token: string,
+  kind: 'broadcast' | 'room',
+  roomName?: string,
+  title?: string
+): Promise<{ room_name: string; token: string; livekit_url: string }> {
+  const res = await fetch(`${tunnelUrl}/api/comms/token`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, room_name: roomName, title }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't connect."));
+  }
+  return readJson(res, "Couldn't connect.");
 }

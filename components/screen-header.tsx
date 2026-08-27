@@ -15,6 +15,9 @@ export function ScreenHeader({
   rightIcon2,
   onRightPress2,
   rightAccessibilityLabel2,
+  rightIcon3,
+  onRightPress3,
+  rightAccessibilityLabel3,
 }: {
   title: string;
   onTitlePress?: () => void;
@@ -30,6 +33,12 @@ export function ScreenHeader({
   rightIcon2?: IconSymbolName;
   onRightPress2?: () => void;
   rightAccessibilityLabel2?: string;
+  // A third, furthest from the edge — app/conversation/[id].tsx's phone
+  // button, alongside video (rightIcon2) and the existing "..." menu
+  // (rightIcon). Every other caller is unaffected.
+  rightIcon3?: IconSymbolName;
+  onRightPress3?: () => void;
+  rightAccessibilityLabel3?: string;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
   return (
@@ -48,6 +57,11 @@ export function ScreenHeader({
         </ThemedText>
       </Pressable>
       <View style={styles.rightActions}>
+        {rightIcon3 && onRightPress3 && (
+          <Pressable onPress={onRightPress3} hitSlop={12} accessibilityLabel={rightAccessibilityLabel3} accessibilityRole="button">
+            <IconSymbol name={rightIcon3} size={22} color={Colors[colorScheme].text} />
+          </Pressable>
+        )}
         {rightIcon2 && onRightPress2 && (
           <Pressable onPress={onRightPress2} hitSlop={12} accessibilityLabel={rightAccessibilityLabel2} accessibilityRole="button">
             <IconSymbol name={rightIcon2} size={22} color={Colors[colorScheme].text} />
