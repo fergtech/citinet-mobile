@@ -3,6 +3,7 @@ import React, { useCallback, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AppDrawer } from '@/components/app-drawer';
 import { CreateTabButton } from '@/components/create-tab-button';
 import { HapticTab } from '@/components/haptic-tab';
 import { HubAvatar } from '@/components/hub-avatar';
@@ -38,6 +39,7 @@ export default function TabLayout() {
   );
 
   return (
+    <AppDrawer>
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: tint,
@@ -191,6 +193,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </AppDrawer>
   );
 }
 

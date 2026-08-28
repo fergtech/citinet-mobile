@@ -54,6 +54,7 @@ import { FILE_KIND_META, fileKind } from '@/lib/files/kind';
 import { initiativeCategoryMeta, initiativeColor } from '@/lib/initiatives/meta';
 import { useSession } from '@/lib/session/session-context';
 import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
+import { isLocalConnection } from '@/lib/ui/is-local-connection';
 import { applyVote } from '@/lib/ui/poll';
 import { timeAgo } from '@/lib/ui/time-ago';
 
@@ -783,17 +784,7 @@ export default function HomeScreen() {
 
   homeSections.sort((a, b) => b.latestAt - a.latestAt);
 
-  // Both of these connect straight to the hub's own LAN IP, no relay in
-  // between -- http:// is mDNS/manual entry (see nearbyHubs.ts and
-  // hub-select.tsx), and https://<slug>.hub.citinet.cloud is citinet-web's
-  // own HTTPS bridge (docs/hub-https-bridge.md): a public DNS A record that
-  // resolves straight to the hub's private LAN IP, just wrapped in a real
-  // trusted cert so Web Crypto works. Neither ever leaves the LAN. A hub
-  // whose tunnel_url is instead a genuine public tunnel (a Tailscale Funnel
-  // *.ts.net URL, a real Cloudflare Tunnel domain) is the only case that's
-  // actually reachable from anywhere -- that's "Web".
-  const isLocalConnection =
-    session.hub.tunnelUrl.startsWith('http://') || /^https:\/\/[^/]+\.hub\.citinet\.cloud(\/|$)/.test(session.hub.tunnelUrl);
+  const isLocal = isLocalConnection(session.hub.tunnelUrl);
 
   return (
     <ThemedView style={styles.container}>
@@ -811,9 +802,9 @@ export default function HomeScreen() {
               hub-select.tsx's handleManualConnect) -- every registry/tunnel
               hub uses https://, so this needs no new plumbing to tell them
               apart. */}
-          <View style={[styles.connectionBadge, isLocalConnection ? styles.connectionBadgeLocal : styles.connectionBadgeWeb]}>
-            <ThemedText style={[styles.connectionBadgeText, { color: isLocalConnection ? '#22c55e' : Colors[colorScheme].icon }]}>
-              {isLocalConnection ? 'Local' : 'Web'}
+          <View style={[styles.connectionBadge, isLocal ? styles.connectionBadgeLocal : styles.connectionBadgeWeb]}>
+            <ThemedText style={[styles.connectionBadgeText, { color: isLocal ? '#22c55e' : Colors[colorScheme].icon }]}>
+              {isLocal ? 'Local' : 'Web'}
             </ThemedText>
           </View>
         </Pressable>
@@ -829,7 +820,7 @@ export default function HomeScreen() {
         visible={showHubInfo}
         onClose={() => setShowHubInfo(false)}
         hub={session.hub}
-        isLocalConnection={isLocalConnection}
+        isLocalConnection={isLocal}
       />
 
       {loading && <ActivityIndicator style={styles.spinner} />}
