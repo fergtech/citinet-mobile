@@ -27,10 +27,6 @@ export function BroadcastOverlay() {
   if (broadcast.phase !== 'live' || !broadcast.token || !broadcast.livekitUrl || !session) return null;
 
   const isHost = broadcast.role === 'host';
-  // Diagnostic for the "joining immediately publishes as a presenter"
-  // report — confirms whether a viewer's audio/video props are really
-  // false at connect time.
-  console.log('[broadcast] connecting', { role: broadcast.role, isHost, micOn: broadcast.micOn, camOn: broadcast.camOn, willPublishAudio: isHost && broadcast.micOn, willPublishVideo: isHost && broadcast.camOn });
 
   return (
     <View style={broadcast.minimized ? styles.hidden : styles.fill} pointerEvents={broadcast.minimized ? 'none' : 'auto'}>
@@ -56,12 +52,10 @@ function RoomContent() {
 
   const isHost = broadcast.role === 'host';
   const canPublish = isHost || broadcast.approvedToPublish;
-  const viewerCount = remoteParticipants.length + 1;
-  // Diagnostic for "host on the live screen doesn't see the accept card" —
-  // if this logs a pendingRequest but the card still doesn't visually show,
-  // it's a render/CSS issue; if this never logs anything, the request never
-  // reached (or never got stored on) this client at all.
-  console.log('[broadcast] render', { isHost, pendingRequest: broadcast.pendingRequest, minimized: broadcast.minimized });
+  // Hidden participants are "Live now" card preview connections (see
+  // live-thumbnail.tsx), not real viewers — excluded so merely having the
+  // Messages screen open elsewhere doesn't inflate the count.
+  const viewerCount = remoteParticipants.filter((p) => !p.permissions?.hidden).length + 1;
 
   useEffect(() => {
     if (isHost || !broadcast.approvedToPublish) return;
@@ -107,10 +101,6 @@ function RoomContent() {
     gridParticipants.set(identity, entry);
   }
   const boxes = Array.from(gridParticipants.values());
-  // Diagnostic for the "PC shows gradient, not real camera video" report —
-  // confirms whether the subscription itself is the gap (cameraTrack never
-  // set) versus a pure rendering issue (set but not visually showing).
-  console.log('[broadcast] grid boxes', boxes.map((b) => ({ identity: b.identity, name: b.name, hasCameraTrack: !!b.cameraTrack })));
   const box = getBroadcastGridBox(boxes.length);
   const recentComments = broadcast.comments.slice(-4);
 

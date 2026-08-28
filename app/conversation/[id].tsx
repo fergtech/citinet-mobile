@@ -634,6 +634,10 @@ const styles = StyleSheet.create({
   },
   reactionPickerEmoji: {
     fontSize: 28,
+    // Color-emoji glyphs render taller than the line height RN computes
+    // from fontSize alone, clipping their tops inside the button's 48px
+    // box otherwise — explicit headroom fixes it.
+    lineHeight: 36,
   },
   divider: {
     height: StyleSheet.hairlineWidth,

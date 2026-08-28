@@ -9,12 +9,16 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-type ActionRow = {
+type ActionItem = {
+  key: string;
   icon: IconSymbolName;
   title: string;
-  subtitle: string;
   onPress?: () => void;
-  danger?: boolean;
+};
+
+type ActionSection = {
+  label: string;
+  items: ActionItem[];
 };
 
 // A launcher, not a container — the sheet itself never holds any creation
@@ -22,65 +26,76 @@ type ActionRow = {
 // marketplace listing, and an Atlas pin are three genuinely distinct,
 // independently real features, not "post types"), so leading with a
 // post-composer + attachment chips misrepresented the app's actual scope.
-// Each row instead routes straight to the real, standalone editor for that
+// Each item instead routes straight to the real, standalone editor for that
 // thing — the same editor reached from that feature's own "+" elsewhere
 // (Atlas's header, Marketplace's header), so there's exactly one
 // implementation per editor, never a sheet-only duplicate.
-const ACTIONS: ActionRow[] = [
+//
+// Grouped by intent rather than a flat list — "what am I trying to do"
+// (share something, organize the community, deal with something local)
+// reads faster on a phone than eight unrelated rows in a row. Section
+// labels carry the "why", so individual tiles need only an icon + name,
+// not a repeated explanatory sentence.
+const SECTIONS: ActionSection[] = [
   {
-    icon: 'pencil',
-    title: 'Write a post',
-    subtitle: 'Share an update with your neighbors.',
-    onPress: () => router.push('/compose-post'),
+    label: 'Share',
+    items: [
+      { key: 'post', icon: 'pencil', title: 'Write a post', onPress: () => router.push('/compose-post') },
+      {
+        key: 'file',
+        icon: 'externaldrive.fill',
+        title: 'Upload a file',
+        onPress: () => router.push({ pathname: '/files/upload', params: { from: 'compose' } }),
+      },
+    ],
   },
   {
-    icon: 'tag.fill',
-    title: 'Sell or give something',
-    subtitle: 'List an item or service for the neighborhood.',
-    onPress: () => router.push({ pathname: '/marketplace/editor', params: { from: 'compose' } }),
+    label: 'Community',
+    items: [
+      {
+        key: 'event',
+        icon: 'calendar',
+        title: 'Create an event',
+        onPress: () => router.push({ pathname: '/event-editor', params: { from: 'compose' } }),
+      },
+      { key: 'initiative', icon: 'target', title: 'Start an initiative', onPress: () => router.push('/initiatives/create') },
+      { key: 'space', icon: 'building.2.fill', title: 'Create a space', onPress: () => router.push('/spaces/create') },
+    ],
   },
   {
-    icon: 'mappin.and.ellipse',
-    title: 'Drop a pin',
-    subtitle: 'Mark a spot on the map for others to find.',
-    onPress: () => router.push({ pathname: '/atlas/editor', params: { from: 'compose' } }),
-  },
-  {
-    icon: 'calendar',
-    title: 'Create an event',
-    subtitle: 'Set a date and time for neighbors to join.',
-    onPress: () => router.push({ pathname: '/event-editor', params: { from: 'compose' } }),
-  },
-  {
-    icon: 'target',
-    title: 'Start an initiative',
-    subtitle: 'Organize neighbors around a goal, with tasks and roles.',
-    onPress: () => router.push('/initiatives/create'),
-  },
-  {
-    icon: 'building.2.fill',
-    title: 'Create a space',
-    subtitle: 'Start a group for a street, building, or shared interest.',
-    onPress: () => router.push('/spaces/create'),
-  },
-  {
-    icon: 'externaldrive.fill',
-    title: 'Upload a file',
-    subtitle: 'Share a document, photo, or other file with the hub.',
-    onPress: () => router.push({ pathname: '/files/upload', params: { from: 'compose' } }),
-  },
-  {
-    icon: 'exclamationmark.triangle.fill',
-    title: 'Report an issue',
-    subtitle: 'Flag something for hub admins to review.',
-    danger: true,
-    // No onPress — there is no report/flag endpoint anywhere in citinet's
-    // real server (confirmed via a full grep of api/server.js), so unlike
-    // the four rows above this one has nothing real to route to yet. Listed
-    // per spec, inert until that server-side piece exists — same "build
-    // what's real, disclose what isn't" rule as every other stub in this app.
+    label: 'Local',
+    items: [
+      {
+        key: 'listing',
+        icon: 'tag.fill',
+        title: 'Sell or give something',
+        onPress: () => router.push({ pathname: '/marketplace/editor', params: { from: 'compose' } }),
+      },
+      {
+        key: 'pin',
+        icon: 'mappin.and.ellipse',
+        title: 'Drop a pin',
+        onPress: () => router.push({ pathname: '/atlas/editor', params: { from: 'compose' } }),
+      },
+    ],
   },
 ];
+
+// Kept apart from the grouped grid above and given a distinct (tinted,
+// full-width) treatment — moderation/report actions carry a different
+// weight than "make a post" or "sell an item" and shouldn't visually
+// compete with them for attention.
+//
+// No onPress — there is no report/flag endpoint anywhere in citinet's
+// real server (confirmed via a full grep of api/server.js), so unlike the
+// items above this one has nothing real to route to yet. Listed per spec,
+// inert until that server-side piece exists — same "build what's real,
+// disclose what isn't" rule as every other stub in this app.
+const REPORT_ACTION: ActionItem = {
+  key: 'report',
+  icon: 'exclamationmark.triangle.fill',
+  title: 'Report an issue',
+};
 
 export default function ComposeLauncherScreen() {
   const colorScheme = useColorScheme() ?? 'light';
@@ -123,31 +138,40 @@ export default function ComposeLauncherScreen() {
             <IconSymbol name="xmark" size={22} color={Colors[colorScheme].text} />
           </Pressable>
           <ThemedText type="defaultSemiBold" style={styles.headerTitle}>
-            What would you like to do?
+            Create
           </ThemedText>
           <View style={styles.headerSpacer} />
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.list}>
-        {ACTIONS.map((action, index) => (
-          <Pressable
-            key={action.title}
-            disabled={!action.onPress}
-            onPress={action.onPress}
-            style={[styles.row, index === ACTIONS.length - 1 && styles.rowLast, !action.onPress && styles.rowDisabled]}>
-            <View style={[styles.iconTile, action.danger ? styles.iconTileDanger : styles.iconTileNeutral]}>
-              <IconSymbol name={action.icon} size={20} color={action.danger ? '#b0392f' : Colors[colorScheme].text} />
+        {SECTIONS.map((section) => (
+          <View key={section.label} style={styles.section}>
+            <ThemedText style={[styles.sectionLabel, { color: Colors[colorScheme].icon }]}>{section.label}</ThemedText>
+            <View style={styles.grid}>
+              {section.items.map((item) => (
+                <Pressable
+                  key={item.key}
+                  onPress={item.onPress}
+                  style={[styles.tile, { backgroundColor: Colors[colorScheme].icon + '14' }]}>
+                  <IconSymbol name={item.icon} size={22} color={Colors[colorScheme].text} />
+                  <ThemedText type="defaultSemiBold" style={styles.tileLabel}>
+                    {item.title}
+                  </ThemedText>
+                </Pressable>
+              ))}
             </View>
-            <View style={styles.rowText}>
-              <ThemedText type="defaultSemiBold" style={styles.rowTitle}>
-                {action.title}
-              </ThemedText>
-              <ThemedText style={styles.rowSubtitle}>{action.subtitle}</ThemedText>
-            </View>
-            {action.onPress && <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />}
-          </Pressable>
+          </View>
         ))}
+
+        <Pressable disabled style={[styles.reportRow, styles.reportRowDisabled]}>
+          <View style={styles.iconTileDanger}>
+            <IconSymbol name={REPORT_ACTION.icon} size={18} color="#b0392f" />
+          </View>
+          <ThemedText type="defaultSemiBold" style={styles.reportLabel}>
+            {REPORT_ACTION.title}
+          </ThemedText>
+        </Pressable>
       </ScrollView>
     </ThemedView>
   );
@@ -167,9 +191,8 @@ const styles = StyleSheet.create({
   // Sized to only cover the gap below the header row's own bottom edge
   // (paddingTop 60 + ~22px content + paddingBottom 16 ≈ 98 of the 130-tall
   // hero) — the previous 75px version reached up into the row itself,
-  // darkening a band directly behind the "What would you like to do?" text
-  // and X button, which read as an obvious boxed rectangle rather than a
-  // smooth dissolve.
+  // darkening a band directly behind the header title and X button, which
+  // read as an obvious boxed rectangle rather than a smooth dissolve.
   bottomFade: {
     position: 'absolute',
     left: 0,
@@ -195,43 +218,62 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
-  row: {
+  section: {
+    marginBottom: 22,
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 10,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  // Fixed-width tiles (not flex-grow) so every tile in a section reads at
+  // the same visual weight regardless of how many share the row — no
+  // single action should look "bigger" or more important than another.
+  tile: {
+    width: '48%',
+    borderRadius: 16,
+    paddingVertical: 18,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    gap: 8,
+  },
+  tileLabel: {
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 17,
+  },
+  // Deliberately distinct from the grid tiles above — full-width, tinted
+  // red, no icon-tile background match — so moderation/report actions
+  // read as a different category of thing, not just another option.
+  reportRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#8884',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(176,57,47,0.08)',
   },
-  rowLast: {
-    borderBottomWidth: 0,
-  },
-  rowDisabled: {
-    opacity: 0.45,
-  },
-  iconTile: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconTileNeutral: {
-    backgroundColor: '#8881',
+  reportRowDisabled: {
+    opacity: 0.55,
   },
   iconTileDanger: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'rgba(176,57,47,0.15)',
   },
-  rowText: {
-    flex: 1,
-    gap: 2,
-  },
-  rowTitle: {
-    fontSize: 15.5,
-  },
-  rowSubtitle: {
-    fontSize: 12.5,
-    opacity: 0.6,
-    lineHeight: 17,
+  reportLabel: {
+    fontSize: 14.5,
+    color: '#b0392f',
   },
 });

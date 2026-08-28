@@ -2003,17 +2003,22 @@ export async function listLiveComms(tunnelUrl: string, token: string): Promise<L
 // Mints a token for a broadcast/room. Omit room_name to create a brand new
 // one (you become its host) — pass an existing one (from listLiveComms) to
 // join something already running.
+// preview:true mints a hidden, canPublish:false token for LiveThumbnail's
+// silent camera-preview connection — requires an existing roomName, never
+// creates a room, and the server marks it hidden so it doesn't count as a
+// real viewer (see api/comms.js's /token route in the citinet-web repo).
 export async function getCommsToken(
   tunnelUrl: string,
   token: string,
   kind: 'broadcast' | 'room',
   roomName?: string,
-  title?: string
+  title?: string,
+  preview?: boolean
 ): Promise<{ room_name: string; token: string; livekit_url: string }> {
   const res = await fetch(`${tunnelUrl}/api/comms/token`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind, room_name: roomName, title }),
+    body: JSON.stringify({ kind, room_name: roomName, title, preview }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't connect."));

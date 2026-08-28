@@ -45,7 +45,6 @@ function RootNavigator() {
   useEffect(() => {
     if (call.phase === 'incoming' && call.callId && pushedForCallId.current !== call.callId) {
       pushedForCallId.current = call.callId;
-      console.log('[call] pushing /call/setup for', call.callId);
       router.push('/call/setup');
     }
     if (call.phase === 'idle') pushedForCallId.current = null;

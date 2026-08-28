@@ -98,11 +98,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       // A second ring arriving mid-call is a real product gap (should
       // busy-signal it) — out of scope here; just don't let it stomp
       // whatever's already happening.
-      if (callRef.current.phase !== 'idle') {
-        console.log('[call] incoming_call ignored, phase is', callRef.current.phase);
-        return;
-      }
-      console.log('[call] incoming_call -> phase=incoming', event.call_id);
+      if (callRef.current.phase !== 'idle') return;
       setCall({
         ...idleState,
         phase: 'incoming',

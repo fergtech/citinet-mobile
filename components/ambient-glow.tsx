@@ -25,13 +25,20 @@ type Orb = {
   delay: number;
 };
 
+// cy values are the original layout shifted up by a flat 20 units (each
+// pair keeps its original spread/delta, so the breathing/drift motion is
+// unchanged) — the goal is the cluster sitting a bit higher as a whole, not
+// a redesign of the composition itself. (A -40 shift pushed the whole
+// cluster past the visible crop entirely, -10 was close but asked for a
+// touch more — 20 is the middle of that range.) Everything else (r,
+// opacity, cx, durations, delays) is untouched on purpose.
 const ORBS: Orb[] = [
   // Amber — largest.
-  { color: '#ff9f43', cx: [24, 50], cy: [20, 40], r: [34, 42], opacity: [0.2, 0.36], moveDuration: 5000, breatheDuration: 3500, delay: 0 },
+  { color: '#ff9f43', cx: [24, 50], cy: [0, 20], r: [34, 42], opacity: [0.2, 0.36], moveDuration: 5000, breatheDuration: 3500, delay: 0 },
   // Violet — medium, opposite drift direction.
-  { color: '#8b5cf6', cx: [72, 46], cy: [32, 48], r: [28, 35], opacity: [0.18, 0.32], moveDuration: 6500, breatheDuration: 4000, delay: 500 },
+  { color: '#8b5cf6', cx: [72, 46], cy: [12, 28], r: [28, 35], opacity: [0.18, 0.32], moveDuration: 6500, breatheDuration: 4000, delay: 500 },
   // Deep ember red — smallest, quickest pulse.
-  { color: '#ef4444', cx: [44, 64], cy: [56, 34], r: [22, 28], opacity: [0.19, 0.34], moveDuration: 4500, breatheDuration: 3000, delay: 250 },
+  { color: '#ef4444', cx: [44, 64], cy: [36, 14], r: [22, 28], opacity: [0.19, 0.34], moveDuration: 4500, breatheDuration: 3000, delay: 250 },
 ];
 
 function useOrbAnimatedProps(orb: Orb) {

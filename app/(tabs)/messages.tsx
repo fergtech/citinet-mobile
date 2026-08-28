@@ -6,6 +6,7 @@ import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleShee
 
 import { BrandGradient } from '@/components/brand-gradient';
 import { HubAvatar } from '@/components/hub-avatar';
+import { LiveThumbnail } from '@/components/comms/live-thumbnail';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -60,11 +61,16 @@ function isUnread(convo: HubConversation, selfId: string): boolean {
 // for avatars with no uploaded photo. Only broadcast cards are tappable —
 // joins as a viewer (see BroadcastProvider's joinAsViewer). Rooms (kind
 // 'room', the OPEN badge) don't have a destination screen yet.
-function LiveCard({ item, onPress }: { item: LiveCommsItem; onPress?: () => void }) {
+function LiveCard({ item, onPress, showPreview }: { item: LiveCommsItem; onPress?: () => void; showPreview?: boolean }) {
   const isLive = item.kind === 'broadcast';
   return (
     <Pressable onPress={onPress} disabled={!onPress} style={styles.liveCard}>
       <BrandGradient style={StyleSheet.absoluteFillObject} />
+      {/* Lets a viewer see what they're about to walk into. Skipped for
+          "isMine" cards (see visibleLive.map below) — connecting a second,
+          hidden identity to a room you're already really in as yourself
+          would collide with your real session's LiveKit identity. */}
+      {showPreview && <LiveThumbnail roomName={item.room_name} hostId={item.host_id} />}
       <View style={[styles.liveBadge, { backgroundColor: isLive ? '#DC2B2B' : Brand }]}>
         <ThemedText style={styles.liveBadgeLabel} lightColor="#fff" darkColor="#fff">
           {isLive ? 'LIVE' : 'OPEN'}
@@ -132,14 +138,30 @@ export default function MessagesScreen() {
   const [live, setLive] = useState<LiveCommsItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // A room this device just left/ended, suppressed from the strip even if a
+  // fetch still lists it — the host's own /end request to the server races
+  // this device's local disconnect, so a refresh triggered right after
+  // ending (see the broadcast.phase effect below) can land before the
+  // server's own deleteRoom() actually finishes, genuinely still showing
+  // the room as live. Applies to viewers too, not just the host — a viewer
+  // who was just kicked out by the same server-side deletion hits the exact
+  // same race on their own refresh. Cleared once a fetch actually confirms
+  // the room's gone (see the effect below), not on a timer, so it never
+  // masks a real still-live room for longer than the race actually lasts.
+  const [justEndedRoomName, setJustEndedRoomName] = useState<string | null>(null);
 
   // Computed once, used for both the "Live now" header's visibility and the
   // strip itself — the header used to check raw `live.length` while the
   // strip filtered separately, so ending your only broadcast could leave
   // the "Live now" eyebrow showing over an empty strip.
   const visibleLive = useMemo(
-    () => live.filter((item) => item.host_id !== session?.userId || (broadcast.phase === 'live' && broadcast.roomName === item.room_name)),
-    [live, session, broadcast.phase, broadcast.roomName]
+    () =>
+      live.filter(
+        (item) =>
+          item.room_name !== justEndedRoomName &&
+          (item.host_id !== session?.userId || (broadcast.phase === 'live' && broadcast.roomName === item.room_name))
+      ),
+    [live, session, broadcast.phase, broadcast.roomName, justEndedRoomName]
   );
 
   // Re-tapping the Chat tab while already on it scrolls back to the top —
@@ -172,7 +194,10 @@ export default function MessagesScreen() {
   // Broadcast pill below does (app/broadcast/setup.tsx).
   const refreshLive = useCallback(() => {
     if (!session) return;
-    listLiveComms(session.hub.tunnelUrl, session.token).then(setLive);
+    listLiveComms(session.hub.tunnelUrl, session.token).then((items) => {
+      setLive(items);
+      setJustEndedRoomName((prev) => (prev && !items.some((item) => item.room_name === prev) ? null : prev));
+    });
   }, [session]);
 
   useFocusEffect(refreshLive);
@@ -198,7 +223,14 @@ export default function MessagesScreen() {
   // directly instead catches both cases.
   useEffect(() => {
     if (broadcast.phase === 'live' || broadcast.phase === 'idle') refreshLive();
-  }, [broadcast.phase, refreshLive]);
+    // Captured here, not on the 'idle' transition — by the time phase
+    // resets to idle (broadcast-context.tsx's own 900ms safety net),
+    // roomName has already been wiped back to idleState's ''. 'ended' is
+    // the one moment roomName still holds the room that just ended,
+    // for host and viewer alike (see use-broadcast-actions.ts's endBroadcast
+    // and broadcast-data-bridge.tsx's own end() calls).
+    if (broadcast.phase === 'ended' && broadcast.roomName) setJustEndedRoomName(broadcast.roomName);
+  }, [broadcast.phase, broadcast.roomName, refreshLive]);
 
   useEffect(() => {
     ensure();
@@ -281,6 +313,7 @@ export default function MessagesScreen() {
                         key={item.room_name}
                         item={item}
                         onPress={item.kind === 'broadcast' ? (isMine ? restore : () => joinAsViewer(item)) : undefined}
+                        showPreview={item.kind === 'broadcast' && !isMine}
                       />
                     );
                   })}

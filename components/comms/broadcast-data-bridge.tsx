@@ -18,10 +18,9 @@ export function BroadcastDataBridge() {
   const { broadcast, addComment, addHeart, setPendingRequest, approvePublish, setJoinRequestPending, end } = useBroadcast();
 
   useEffect(() => {
-    function handleData(payload: Uint8Array, participant?: { identity: string }) {
+    function handleData(payload: Uint8Array) {
       const message = decodeBroadcastMessage(payload);
       const myIdentity = room.localParticipant.identity;
-      console.log('[broadcast] data received', { type: message?.type, from: participant?.identity, myIdentity, myRole: broadcast.role, roomName: room.name });
       if (!message) return;
 
       if (message.type === 'comment') {
@@ -29,7 +28,6 @@ export function BroadcastDataBridge() {
       } else if (message.type === 'heart') {
         addHeart(message.delta);
       } else if (message.type === 'join_request') {
-        console.log('[broadcast] join_request received, amIHost=', broadcast.role === 'host');
         if (broadcast.role === 'host') setPendingRequest({ requesterId: message.requesterId, requesterName: message.requesterName });
       } else if (message.type === 'join_response') {
         if (message.requesterId !== myIdentity) return; // not addressed to me (only reaches me if it is, but be explicit)
@@ -63,7 +61,13 @@ export function BroadcastDataBridge() {
     // connecting doesn't produce one of these on the other clients, the
     // connection itself never actually established (see the join-request
     // investigation — same class of failure).
+    //
+    // Hidden participants (permissions.hidden) are the "Live now" card's
+    // silent camera-preview connections (see live-thumbnail.tsx) — they're
+    // not real viewers, so they're excluded here rather than spamming an
+    // announcement every time someone merely has the Messages screen open.
     function handleParticipantJoined(participant: RemoteParticipant) {
+      if (participant.permissions?.hidden) return;
       addComment({
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         senderId: 'system',
@@ -74,6 +78,7 @@ export function BroadcastDataBridge() {
     }
 
     function handleParticipantLeft(participant: RemoteParticipant) {
+      if (participant.permissions?.hidden) return;
       addComment({
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         senderId: 'system',

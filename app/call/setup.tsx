@@ -178,7 +178,7 @@ export default function CallSetupScreen() {
               Answer
             </ThemedText>
           </Pressable>
-          <Pressable onPress={decline} style={styles.textButton}>
+          <Pressable onPress={handleClose} style={styles.textButton}>
             <ThemedText style={styles.textButtonLabel} lightColor="rgba(255,255,255,0.75)" darkColor="rgba(255,255,255,0.75)">
               Decline
             </ThemedText>

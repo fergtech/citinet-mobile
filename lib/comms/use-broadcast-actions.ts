@@ -26,7 +26,6 @@ export function useBroadcastActions() {
     // just not reflected in its type.
     const payload = encodeBroadcastMessage(message) as Uint8Array<ArrayBuffer>;
     const destinationIdentities = destinationFor(message, hostId);
-    console.log('[broadcast] publishing', message.type, { destinationIdentities, hostId, myIdentity: room.localParticipant.identity, roomName: room.name });
     room.localParticipant.publishData(payload, { reliable: isReliable(message), destinationIdentities }).catch((err) => console.warn('[broadcast] publishData failed', message.type, err));
   }
 
