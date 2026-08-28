@@ -157,7 +157,20 @@ async function fetchInitiativeUpdates(tunnelUrl: string, token: string): Promise
     })
     .filter((row): row is InitiativeUpdateRow => row !== null);
 
-  return resolved.slice(0, 3);
+  // At most one card per initiative — `resolved` is still sorted most-recent
+  // first (the sort in `candidates` above survives the .map/.filter), so
+  // keeping only the first row seen per initiativeId keeps each initiative's
+  // single latest update while still ranking across initiatives by recency.
+  // Without this, an initiative with two recent task completions could take
+  // two of the section's three slots and crowd out a different initiative.
+  const seenInitiatives = new Set<string>();
+  const deduped = resolved.filter((row) => {
+    if (seenInitiatives.has(row.initiativeId)) return false;
+    seenInitiatives.add(row.initiativeId);
+    return true;
+  });
+
+  return deduped.slice(0, 3);
 }
 
 // Where a given activity row should actually land. 'task' goes to the real
@@ -345,19 +358,57 @@ function FileHomeRow({
   );
 }
 
-// The section's own trailing "See all files" row, rendered once below the
-// (up to 3) FileHomeRow entries rather than duplicated inside each one.
-function SeeAllFilesRow() {
+// The section's own trailing "See all files" card — styled and sized
+// (fileGridCard, 48% width) to match FileHomeRow exactly, so it reads as the
+// grid's own 6th cell (truly trailing the file list) rather than a separate
+// full-width row bolted on below it.
+function SeeAllFilesCard() {
   return (
-    <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/files?tab=shared' as Href)}>
-      <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+    <Pressable style={styles.fileGridCard} onPress={() => router.push('/files?tab=shared' as Href)}>
+      <View style={[styles.fileLatestIcon, { backgroundColor: Brand + '22' }]}>
         <IconSymbol name="externaldrive.fill" size={18} color={Brand} />
       </View>
-      <View style={styles.atlasLatestContent}>
-        <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+      <View style={styles.fileGridCardContent}>
+        <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]} numberOfLines={1}>
           See all files
         </ThemedText>
       </View>
+    </Pressable>
+  );
+}
+
+// Same idea as SeeAllFilesCard — the trailing "See all marketplace" card
+// sits inside the horizontal strip itself (marketplaceStripCard's 150px
+// width) as its own last item, so it truly trails the listing strip rather
+// than sitting in a separate full-width row below it. The row's default
+// cross-axis stretch (no explicit height set here) makes it match whatever
+// height the real ListingCards in the strip come out to.
+function SeeAllMarketplaceCard() {
+  return (
+    <Pressable style={[styles.marketplaceStripCard, styles.marketplaceSeeAllCard]} onPress={() => router.push('/marketplace' as Href)}>
+      <View style={[styles.marketplaceSeeAllIcon, { backgroundColor: Brand + '22' }]}>
+        <IconSymbol name="storefront.fill" size={20} color={Brand} />
+      </View>
+      <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]} numberOfLines={1}>
+        See all
+      </ThemedText>
+    </Pressable>
+  );
+}
+
+// Same idea again for Initiatives — sized to match InitiativeUpdateCard's own
+// fixed 150px/3:5 card shape (see components/initiative-update-card.tsx's
+// CARD_WIDTH/aspectRatio) so it sits as the strip's own trailing card rather
+// than a separate row below it.
+function SeeAllInitiativesCard() {
+  return (
+    <Pressable style={styles.initiativeSeeAllCard} onPress={() => router.push('/initiatives' as Href)}>
+      <View style={[styles.initiativeSeeAllIcon, { backgroundColor: Brand + '22' }]}>
+        <CustomIcon name="bullseyeArrow" size={20} color={Brand} />
+      </View>
+      <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]} numberOfLines={1}>
+        See all
+      </ThemedText>
     </Pressable>
   );
 }
@@ -468,7 +519,10 @@ export default function HomeScreen() {
   // still-private uploads.
   const latestPublicFiles = useMemo(() => {
     const visible = files.filter((f) => f.is_public || f.web_public);
-    return [...visible].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, 6);
+    // 5, not 6 — the grid's 6th cell is always the trailing "See all files"
+    // card (see SeeAllFilesCard), so this leaves room for it without pushing
+    // the grid to a 4th row.
+    return [...visible].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, 5);
   }, [files]);
 
   // Already newest-first (see hubService's listMarketplaceListings comment),
@@ -557,16 +611,7 @@ export default function HomeScreen() {
         <View style={styles.section} key="events">
           <ThemedText style={styles.sectionLabel}>Events</ThemedText>
           <LatestEventRow event={featuredEvent} />
-          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/events')}>
-            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-              <IconSymbol name="calendar" size={18} color={Brand} />
-            </View>
-            <View style={styles.atlasLatestContent}>
-              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                See all events
-              </ThemedText>
-            </View>
-          </Pressable>
+          <View style={styles.sectionDivider} />
         </View>
       ),
     });
@@ -585,20 +630,7 @@ export default function HomeScreen() {
             tunnelUrl={session.hub.tunnelUrl}
             token={session.token}
           />
-          {/* Trailing "See all" row instead of the header link — same
-              concept as Discover's in-list "See all" cards/rows, just a
-              single row here since this section only ever previews one
-              pin (no real list to append to). */}
-          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/atlas' as Href)}>
-            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-              <CustomIcon name="landLayerLocation" size={18} color={Brand} />
-            </View>
-            <View style={styles.atlasLatestContent}>
-              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                See all Atlas pins
-              </ThemedText>
-            </View>
-          </Pressable>
+          <View style={styles.sectionDivider} />
         </View>
       ),
     });
@@ -621,8 +653,9 @@ export default function HomeScreen() {
                 uploaderUsername={members.get(file.owner_id)?.username}
               />
             ))}
+            <SeeAllFilesCard />
           </View>
-          <SeeAllFilesRow />
+          <View style={styles.sectionDivider} />
         </View>
       ),
     });
@@ -654,17 +687,8 @@ export default function HomeScreen() {
                 style={styles.marketplaceStripCard}
               />
             ))}
+            <SeeAllMarketplaceCard />
           </ScrollView>
-          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/marketplace' as Href)}>
-            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-              <IconSymbol name="storefront.fill" size={18} color={Brand} />
-            </View>
-            <View style={styles.atlasLatestContent}>
-              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                See all marketplace
-              </ThemedText>
-            </View>
-          </Pressable>
         </View>
       ),
     });
@@ -690,17 +714,8 @@ export default function HomeScreen() {
                 onPress={() => router.push(initiativeActivityHref(row.initiativeId, row.entry.kind, row.taskId))}
               />
             ))}
+            <SeeAllInitiativesCard />
           </ScrollView>
-          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/initiatives' as Href)}>
-            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-              <CustomIcon name="bullseyeArrow" size={18} color={Brand} />
-            </View>
-            <View style={styles.atlasLatestContent}>
-              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                See all initiatives
-              </ThemedText>
-            </View>
-          </Pressable>
         </View>
       ),
     });
@@ -724,18 +739,6 @@ export default function HomeScreen() {
           />
         )}
         {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
-        {posts.length > 1 && (
-          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/feed')}>
-            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-              <IconSymbol name="message.fill" size={18} color={Brand} />
-            </View>
-            <View style={styles.atlasLatestContent}>
-              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                See all discussions
-              </ThemedText>
-            </View>
-          </Pressable>
-        )}
       </View>
     ),
   });
@@ -856,15 +859,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 24,
   },
-  // The one separator per section now — sits directly above that section's
-  // own trailing "See all X" row (between the real content and the nav
-  // link), not at the section's outer boundary. Combine with
-  // atlasLatestRow on each trailing link (e.g. `[styles.atlasLatestRow,
-  // styles.trailingSeparator]`) rather than section-level, so a section
-  // with no trailing link (nothing to see more of) shows no line at all.
-  trailingSeparator: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: '#8884',
+  // Closes off a section's content the same way PostRow's own
+  // borderBottomWidth does for a Discussions post (see components/post-row.tsx)
+  // — rendered as a plain sibling directly inside `section` rather than a
+  // border on the content row/grid itself, several of which (atlasLatestRow)
+  // bleed edge-to-edge via a negative margin and would carry the line all
+  // the way to the screen edges if it were a border on them instead. As a
+  // plain child of `section` it inherits that View's own 20px horizontal
+  // padding for its inset, same as sectionLabel above it.
+  sectionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#8884',
+    marginTop: 14,
   },
   sectionLabel: {
     fontSize: 12,
@@ -1020,9 +1026,47 @@ const styles = StyleSheet.create({
     width: 150,
     borderRadius: 10,
   },
+  // Combined with marketplaceStripCard above (for matching width/radius) on
+  // SeeAllMarketplaceCard — ListingCard supplies its own backgroundColor via
+  // its base `card` style, which this card has none of on its own, so it
+  // needs one here plus the centered icon+label layout ListingCard doesn't have.
+  marketplaceSeeAllCard: {
+    backgroundColor: '#8881',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 20,
+  },
+  marketplaceSeeAllIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   // Same edge-to-edge/gap convention as marketplaceStrip above — the cards
   // themselves (InitiativeUpdateCard) own their own fixed width/aspect ratio.
   initiativeStrip: {
     gap: 10,
+  },
+  // Mirrors InitiativeUpdateCard's own fixed 150px width / 3:5 aspect ratio
+  // (hardcoded to match rather than imported — that component doesn't
+  // export its CARD_WIDTH/aspectRatio constants) so this card sits flush
+  // alongside the real ones in the strip.
+  initiativeSeeAllCard: {
+    width: 150,
+    aspectRatio: 3 / 5,
+    borderRadius: 12,
+    backgroundColor: '#8881',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  initiativeSeeAllIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

@@ -1,24 +1,52 @@
+import type { ImageSourcePropType } from 'react-native';
+
 import type { IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
 import { Initiative, InitiativeTaskStatus, InitiativeTaskSummary, InitiativeUpdate, TaskMeta } from '@/lib/api/types';
 
-// Category is a lowercase free-form string on the real server ("infrastructure"),
-// not the capitalized four-value enum the design handoff implied — keyed
-// lowercase here, with the display label carried alongside since the raw
-// value is no longer presentable as-is. Only "infrastructure" has been seen
-// live; the other three are carried over from the handoff as a best guess
-// pending more real category values.
+// Category is a lowercase free-form string with no server-side enum — the
+// real, authoritative set is citinet web's own CATEGORY_META
+// (src/app/components/InitiativeCard.tsx), which every initiative creation
+// path (web's create form, the AI create-initiative tool) draws from. This
+// used to carry a different, guessed four-value set ("community"/"education"
+// instead of "culture"/"safety"/"budget") left over from a design handoff
+// that was never actually implemented anywhere — any initiative created on
+// web with one of the categories below showed up on mobile as an
+// unrecognized "Other" (see initiativeCategoryMeta's fallback), unpickable
+// in the create form and absent from the filter tabs. Keep this in sync with
+// web's CATEGORY_META if that list ever changes.
 export const INITIATIVE_CATEGORIES: Record<string, { label: string; icon: IconSymbolName }> = {
   infrastructure: { label: 'Infrastructure', icon: 'hammer.fill' },
+  safety: { label: 'Safety', icon: 'shield.fill' },
   environment: { label: 'Environment', icon: 'leaf.fill' },
-  community: { label: 'Community', icon: 'person.2.fill' },
-  education: { label: 'Education', icon: 'book.fill' },
+  budget: { label: 'Budget', icon: 'building.2.fill' },
+  culture: { label: 'Community life', icon: 'person.2.fill' },
 };
 
-export const INITIATIVE_CATEGORY_ORDER = ['infrastructure', 'environment', 'community', 'education'];
+export const INITIATIVE_CATEGORY_ORDER = ['infrastructure', 'safety', 'environment', 'budget', 'culture'];
 
 export function initiativeCategoryMeta(category: string): { label: string; icon: IconSymbolName } {
   return INITIATIVE_CATEGORIES[category?.toLowerCase()] ?? { label: category || 'Other', icon: 'ellipsis.circle.fill' };
+}
+
+// One preset photo per initiative category — the default cover art for any
+// initiative that hasn't uploaded its own banner_image_file_name yet,
+// replacing the plain solid-color + icon tile everywhere an initiative is
+// shown (Home's Initiatives cards, the initiatives list, Discover's row, and
+// the detail screen's banner). Metro requires require() targets to be static
+// string literals, so this can't be built from INITIATIVE_CATEGORY_ORDER
+// dynamically. "culture" reuses the "community" photo supplied for it — same
+// concept, just the corrected key (see INITIATIVE_CATEGORIES above).
+export const INITIATIVE_CATEGORY_PRESET_IMAGES: Record<string, ImageSourcePropType> = {
+  infrastructure: require('@/assets/images/initiatives/infrastructure.jpg'),
+  safety: require('@/assets/images/initiatives/safety.jpg'),
+  environment: require('@/assets/images/initiatives/environment.jpg'),
+  budget: require('@/assets/images/initiatives/budget.jpg'),
+  culture: require('@/assets/images/initiatives/community.jpg'),
+};
+
+export function initiativeCategoryPresetImage(category: string): ImageSourcePropType | null {
+  return INITIATIVE_CATEGORY_PRESET_IMAGES[category?.toLowerCase()] ?? null;
 }
 
 // `color` is a real, independent field on the initiative ("blue") — not

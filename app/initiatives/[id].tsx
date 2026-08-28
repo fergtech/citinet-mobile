@@ -23,6 +23,7 @@ import {
 import { Initiative, InitiativeActivityEntry } from '@/lib/api/types';
 import {
   initiativeCategoryMeta,
+  initiativeCategoryPresetImage,
   initiativeColor,
   initiativeLatestUpdate,
   initiativeMemberCount,
@@ -161,6 +162,7 @@ export default function InitiativeDetailScreen() {
   const category = initiative ? initiativeCategoryMeta(initiative.category) : null;
   const status = initiative ? initiativeStatusMeta(initiative.status) : null;
   const color = initiative ? initiativeColor(initiative.color) : null;
+  const presetImage = initiative ? initiativeCategoryPresetImage(initiative.category) : null;
   const counts = initiative ? initiativeTaskCounts(initiative) : { total: 0, done: 0 };
   const progress = initiative ? initiativeProgress(initiative) : 0;
   const memberCount = initiative ? initiativeMemberCount(initiative) : 0;
@@ -195,8 +197,18 @@ export default function InitiativeDetailScreen() {
                 end={{ x: 1, y: 1 }}
                 style={StyleSheet.absoluteFillObject}
               />
+            ) : initiative.banner_mode === 'solid' && initiative.banner_color ? (
+              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: initiative.banner_color }]} />
+            ) : presetImage ? (
+              // No custom banner set at all — a category preset photo is now
+              // the default look (see initiativeCategoryPresetImage), same
+              // priority order as the Home card and initiatives list use it.
+              <>
+                <Image source={presetImage} style={styles.bannerMedia} contentFit="cover" />
+                <View style={styles.bannerScrim} />
+              </>
             ) : (
-              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: initiative.banner_mode === 'solid' && initiative.banner_color ? initiative.banner_color : color }]} />
+              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: color }]} />
             )}
             <View style={styles.bannerContent}>
               <View style={styles.bannerIcon}>

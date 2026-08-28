@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Image } from 'expo-image';
 import { router, useFocusEffect, useNavigation, type Href } from 'expo-router';
 import { useBottomTabBarHeight, type BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 
@@ -14,14 +15,14 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getPosts, getUpcomingEvents, listAtlasPins, listFiles, listInitiatives, listMarketplaceListings, listMembers, search, toggleLike } from '@/lib/api/hubService';
+import { getPosts, getUpcomingEvents, initiativeBannerUrl, listAtlasPins, listFiles, listInitiatives, listMarketplaceListings, listMembers, search, toggleLike } from '@/lib/api/hubService';
 import { getHubs } from '@/lib/api/registryService';
 import { AtlasPin, HubFile, HubMember, HubPost, Initiative, MarketplaceListing, RegistryHub, SearchResults } from '@/lib/api/types';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
 import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
 import { useHubCenter } from '@/lib/atlas/hub-center';
 import { useStarredFiles } from '@/lib/files/starred-files';
-import { initiativeCategoryMeta, initiativeColor, initiativeStatusMeta, initiativeTaskCounts } from '@/lib/initiatives/meta';
+import { initiativeCategoryMeta, initiativeCategoryPresetImage, initiativeColor, initiativeStatusMeta, initiativeTaskCounts } from '@/lib/initiatives/meta';
 import { categoryMeta } from '@/lib/marketplace/categories';
 import { useSession } from '@/lib/session/session-context';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
@@ -98,10 +99,13 @@ function HubRow({ hub }: { hub: RegistryHub }) {
 }
 
 function InitiativeDiscoverRow({ initiative }: { initiative: Initiative }) {
+  const { session } = useSession();
   const category = initiativeCategoryMeta(initiative.category);
   const status = initiativeStatusMeta(initiative.status);
   const color = initiativeColor(initiative.color);
   const counts = initiativeTaskCounts(initiative);
+  const hasBannerImage = initiative.banner_mode === 'image' && !!initiative.banner_image_file_name;
+  const presetImage = initiativeCategoryPresetImage(initiative.category);
   return (
     <Pressable
       style={styles.initiativeRow}
@@ -109,7 +113,13 @@ function InitiativeDiscoverRow({ initiative }: { initiative: Initiative }) {
       // once the detail screen is built.
       onPress={() => router.push({ pathname: '/initiatives/[id]', params: { id: initiative.id } } as Href)}>
       <View style={[styles.initiativeTile, { backgroundColor: color }]}>
-        <IconSymbol name={category.icon} size={16} color="#fff" />
+        {hasBannerImage && session ? (
+          <Image source={{ uri: initiativeBannerUrl(session.hub.tunnelUrl, initiative.id) }} style={styles.initiativeTileImage} contentFit="cover" />
+        ) : presetImage ? (
+          <Image source={presetImage} style={styles.initiativeTileImage} contentFit="cover" />
+        ) : (
+          <IconSymbol name={category.icon} size={16} color="#fff" />
+        )}
       </View>
       <View style={styles.memberText}>
         <View style={styles.initiativeStatusLine}>
@@ -1201,6 +1211,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    overflow: 'hidden',
+  },
+  initiativeTileImage: {
+    ...StyleSheet.absoluteFillObject,
   },
   initiativeStatusLine: {
     flexDirection: 'row',

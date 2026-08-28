@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import { router, useFocusEffect, type Href } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
@@ -8,13 +9,14 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { listInitiatives } from '@/lib/api/hubService';
+import { initiativeBannerUrl, listInitiatives } from '@/lib/api/hubService';
 import { Initiative } from '@/lib/api/types';
 import {
   INITIATIVE_CATEGORY_ORDER,
   INITIATIVE_STATUS_META,
   INITIATIVE_STATUS_ORDER,
   initiativeCategoryMeta,
+  initiativeCategoryPresetImage,
   initiativeColor,
   initiativeMemberCount,
   initiativeOpenRoleCount,
@@ -27,7 +29,7 @@ import { useSession } from '@/lib/session/session-context';
 type StatusFilter = 'All' | string;
 type CategoryFilter = 'All' | string;
 
-function InitiativeRow({ initiative }: { initiative: Initiative }) {
+function InitiativeRow({ initiative, tunnelUrl }: { initiative: Initiative; tunnelUrl: string }) {
   const category = initiativeCategoryMeta(initiative.category);
   const status = initiativeStatusMeta(initiative.status);
   const color = initiativeColor(initiative.color);
@@ -35,6 +37,8 @@ function InitiativeRow({ initiative }: { initiative: Initiative }) {
   const progress = initiativeProgress(initiative);
   const memberCount = initiativeMemberCount(initiative);
   const openRoleCount = initiativeOpenRoleCount(initiative);
+  const hasBannerImage = initiative.banner_mode === 'image' && !!initiative.banner_image_file_name;
+  const presetImage = initiativeCategoryPresetImage(initiative.category);
 
   return (
     <Pressable
@@ -44,7 +48,13 @@ function InitiativeRow({ initiative }: { initiative: Initiative }) {
       // Drop the cast once that screen is built.
       onPress={() => router.push({ pathname: '/initiatives/[id]', params: { id: initiative.id } } as unknown as Href)}>
       <View style={[styles.tile, { backgroundColor: color }]}>
-        <IconSymbol name={category.icon} size={19} color="#fff" />
+        {hasBannerImage ? (
+          <Image source={{ uri: initiativeBannerUrl(tunnelUrl, initiative.id) }} style={styles.tileImage} contentFit="cover" />
+        ) : presetImage ? (
+          <Image source={presetImage} style={styles.tileImage} contentFit="cover" />
+        ) : (
+          <IconSymbol name={category.icon} size={19} color="#fff" />
+        )}
       </View>
       <View style={styles.rowContent}>
         <View style={styles.statusLine}>
@@ -132,7 +142,7 @@ export default function InitiativesScreen() {
         contentContainerStyle={styles.list}
         onRefresh={load}
         refreshing={loading}
-        renderItem={({ item }) => <InitiativeRow initiative={item} />}
+        renderItem={({ item }) => <InitiativeRow initiative={item} tunnelUrl={session.hub.tunnelUrl} />}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListHeaderComponent={
           <View style={styles.filters}>
@@ -300,6 +310,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    overflow: 'hidden',
+  },
+  tileImage: {
+    ...StyleSheet.absoluteFillObject,
   },
   rowContent: {
     flex: 1,

@@ -47,6 +47,32 @@ import Svg, { Path } from 'react-native-svg';
 // height="512" (just export metadata, not the coordinate space the path
 // data is actually in), so again no rescale needed.
 //
+// "commentDots" (replaces the app drawer's Discussions row IconSymbol
+// "message.fill") is lifted directly from comment-dots_24.xml's pathData —
+// same as bell/satelliteDish, its declared viewportWidth/Height="24" matches
+// its own coordinate range, so no rescale needed. Two subpaths form the
+// bubble outline itself (an outer boundary and an inner one, wound in
+// opposite directions so the default nonzero fill rule renders a hollow
+// ring rather than a solid disc — no fillRule override needed, unlike
+// "home"), plus three more subpaths for the dots. Verified against
+// H:\Apps\custom-icons\comment-dots.png via the same render-and-compare
+// pass as every other icon here — this pathData needed zero adjustment,
+// it was already an exact match.
+//
+// "citinetLogo" (replaces the app drawer's About row IconSymbol
+// "info.circle") is hand-authored, not lifted — H:\Apps\custom-icons\
+// apple-touch-icon.svg turned out to be a raster PNG (the same "C" mark
+// used for the app's own home-screen icon, see the logoWrap comment above)
+// wrapped in `<svg><image href="data:...base64">`, not real path data, so
+// this needed the same trace-by-eye treatment as "home". The ring is a
+// concentric outer arc (r=10) and inner arc (r=7, opposite sweep) around
+// center (13,12), with the two open ends of the "C" capped by small r≈1.54
+// rounding arcs (half the outer/inner point-to-point distance, bulging away
+// from the ring's center) instead of a plain straight cut — a plain L
+// between the arc endpoints reads as a sharp angular chisel-cut tip, this
+// reads as a soft rounded one. Three more subpaths for the dots. Authored
+// directly on a 0-24 grid, so no rescale needed.
+//
 // Exported so components/create-tab-button.tsx can reuse the exact same
 // "plus" path data for its own animated (Reanimated-driven fill color)
 // rendering instead of duplicating the raw path string.
@@ -62,6 +88,10 @@ export const ICON_PATHS = {
     'm16.949,2.05c-1.321-1.322-3.079-2.05-4.949-2.05s-3.628.728-4.95,2.05c-2.729,2.729-2.729,7.17.008,9.907l2.495,2.44c.675.66,1.561.99,2.447.99s1.772-.33,2.447-.99l2.502-2.448c1.322-1.322,2.051-3.08,2.051-4.95s-.729-3.627-2.051-4.95Zm-4.949,7.94c-1.657,0-3-1.343-3-3s1.343-3,3-3,3,1.343,3,3-1.343,3-3,3Zm12,6.772c.002.354-.183.682-.485.863l-9.861,5.917c-.51.306-1.082.459-1.653.459s-1.144-.153-1.653-.459L.485,17.625c-.303-.182-.487-.51-.485-.863.002-.353.19-.679.495-.857l4.855-2.842c.1.11.203.219.309.325l2.495,2.439c1.028,1.006,2.395,1.561,3.846,1.561s2.817-.555,3.846-1.561l2.518-2.463c.098-.098.194-.199.287-.301l4.854,2.841c.305.179.493.505.495.857Z',
   bullseyeArrow:
     'M24,12c0,6.62-5.38,12-12,12S0,18.62,0,12,5.38,0,12,0c.19,0,.38,0,.57,.01,.83,.04,1.47,.74,1.43,1.57-.04,.83-.72,1.45-1.57,1.43-.14,0-.29-.01-.43-.01C7.04,3,3,7.04,3,12s4.04,9,9,9,9-4.04,9-9c0-.14,0-.29-.01-.43-.04-.83,.6-1.53,1.43-1.57,.85-.03,1.53,.6,1.57,1.43,0,.19,.01,.38,.01,.57Zm-13.09-3.85c.8-.23,1.26-1.05,1.04-1.85s-1.06-1.26-1.85-1.04c-3,.85-5.09,3.62-5.09,6.74,0,3.86,3.14,7,7,7,3.12,0,5.89-2.09,6.74-5.09,.23-.8-.24-1.63-1.04-1.85-.8-.23-1.63,.24-1.85,1.04-.48,1.71-2.07,2.91-3.85,2.91-2.21,0-4-1.79-4-4,0-1.78,1.2-3.37,2.91-3.85Zm.03,2.79c-.59,.59-.59,1.54,0,2.12,.29,.29,.68,.44,1.06,.44s.77-.15,1.06-.44l5.06-5.06h2.38c.4,0,.78-.16,1.06-.44l2-2c.43-.43,.56-1.07,.33-1.63-.23-.56-.78-.93-1.39-.93h-1.5V1.5c0-.61-.37-1.15-.93-1.39-.56-.23-1.21-.1-1.63,.33l-2,2c-.28,.28-.44,.66-.44,1.06v2.38l-5.06,5.06Z',
+  commentDots:
+    'm12,0C5.383,0,0,5.383,0,12s5.383,12,12,12h12v-12C24,5.383,18.617,0,12,0Zm11,23h-11c-6.065,0-11-4.935-11-11S5.935,1,12,1s11,4.935,11,11v11Zm-10-11c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Zm5,0c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Zm-10,0c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Z',
+  citinetLogo:
+    'M21,6 A10,10 0 1 0 21,18 A1.54,1.54 0 0 0 18.5,16.2 A7,7 0 1 1 18.5,7.8 A1.54,1.54 0 0 0 21,6 Z M8.6,13.8 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0 M11.9,12 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0 M15.2,10.2 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0',
 } as const;
 
 export type CustomIconName = keyof typeof ICON_PATHS;

@@ -1,25 +1,73 @@
-import { useState, type ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
-import { Image } from 'expo-image';
-import { router, type Href } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import { router, type Href } from 'expo-router';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  interpolate,
+  interpolateColor,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { HubInfoModal } from '@/components/hub-info-modal';
+import { CitinetAboutModal } from '@/components/citinet-about-modal';
 import { ThemedText } from '@/components/themed-text';
 import { CustomIcon } from '@/components/ui/custom-icon';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { isLocalConnection } from '@/lib/ui/is-local-connection';
 import { useSession } from '@/lib/session/session-context';
 
 const EDGE_WIDTH = 24; // only this strip at the physical left edge can start opening it
 const DRAWER_WIDTH = 280;
 const COMMIT_RATIO = 0.4;
 const FLING_VELOCITY = 800;
+
+// Same trio as components/ambient-glow.tsx's ORBS — reused here (rather than
+// the blue/purple/cyan/teal/pink first floated) so the wordmark pulls from
+// the same brand palette as the rest of the app's ambient motion.
+const WORDMARK_PALETTE = ['#ff9f43', '#8b5cf6', '#ef4444'];
+const WORDMARK_INPUT_RANGE = [...Array(WORDMARK_PALETTE.length + 1).keys()]; // [0,1,2,3]
+const WORDMARK_OUTPUT_RANGE = [...WORDMARK_PALETTE, WORDMARK_PALETTE[0]]; // loop back matches start
+const WORDMARK_CYCLE_MS = 6000;
+
+// The "Citinet" header label's animated counterpart to a plain ThemedText —
+// its color continuously cycles through WORDMARK_PALETTE (interpolateColor)
+// rather than resting on one fixed brand color. Uses Reanimated's own
+// Animated.Text directly (not a wrapped ThemedText, and nothing inside an
+// SVG <Defs> the way the About row icon almost got animated) — Text is a
+// real host component Reanimated forwards a ref to safely, unlike SVG's
+// Stop/LinearGradient defs, which don't render a host view at all and crash
+// on unmount ("Cannot find host instance for this component") when wrapped
+// with Animated.createAnimatedComponent.
+function CitinetWordmark() {
+  const hue = useSharedValue(0);
+
+  useEffect(() => {
+    hue.value = withRepeat(
+      withTiming(WORDMARK_PALETTE.length, { duration: WORDMARK_CYCLE_MS, easing: Easing.linear }),
+      -1,
+      false
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(hue.value % WORDMARK_PALETTE.length, WORDMARK_INPUT_RANGE, WORDMARK_OUTPUT_RANGE),
+  }));
+
+  return (
+    <Animated.Text style={[styles.logoLabel, animatedStyle]} accessibilityRole="header">
+      citinet
+    </Animated.Text>
+  );
+}
 
 /**
  * A custom edge-swipe drawer -- not @react-navigation/drawer, hand-built on
@@ -35,11 +83,13 @@ const FLING_VELOCITY = 800;
  * a full-screen modal like call setup.
  *
  * Holds only destinations that don't already have bottom-tab real estate
- * (Atlas, Initiatives, Events, About) -- Home/Discover/Messages/Profile
- * staying out of here is deliberate, so this doesn't become a second,
- * redundant navigation surface. "About" opens the existing HubInfoModal
- * (icon/name/description/QR) instead of a route -- there's no dedicated
- * about screen, and that modal already covers exactly this.
+ * (Atlas, Initiatives, Events, Discussions, About) -- Home/Discover/Messages/
+ * Profile staying out of here is deliberate, so this doesn't become a
+ * second, redundant navigation surface. "About" opens CitinetAboutModal
+ * (about Citinet itself, not this hub) instead of a route -- there's no
+ * dedicated about screen. Hub-specific info (icon/description/QR) stays on
+ * HubInfoModal, reachable by tapping the hub name on Home -- duplicating
+ * that here would just be the same info in two places.
  */
 export function AppDrawer({ children }: { children: ReactNode }) {
   const colorScheme = useColorScheme() ?? 'light';
@@ -130,25 +180,16 @@ export function AppDrawer({ children }: { children: ReactNode }) {
           { paddingTop: insets.top + 24, backgroundColor: Colors[colorScheme].background },
           drawerStyle,
         ]}>
-        {/* icon-512x512.png's "C" is a pale lavender-gray -- the same asset
-            used (composited onto a solid #151718 chip) for the app's own
-            home-screen icon, for the same reason: it needs a dark backdrop
-            for real contrast, which the drawer's own background can't
-            guarantee (white in light mode). */}
         <View style={styles.logoRow}>
-          <View style={styles.logoWrap}>
-            <Image source={require('@/assets/images/icon-512x512.png')} style={styles.logo} contentFit="contain" />
-          </View>
-          <ThemedText type="title" style={styles.logoLabel}>
-            Citinet
-          </ThemedText>
+          <CitinetWordmark />
         </View>
         <DrawerRow icon={<CustomIcon name="landLayerLocation" size={26} color={rowColor} />} label="Atlas" onPress={() => go('/atlas')} />
         <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Initiatives" onPress={() => go('/initiatives')} />
         <DrawerRow icon={<IconSymbol name="calendar" size={26} color={rowColor} />} label="Events" onPress={() => go('/events')} />
+        <DrawerRow icon={<CustomIcon name="commentDots" size={26} color={rowColor} />} label="Discussions" onPress={() => go('/feed')} />
         <View style={styles.divider} />
         <DrawerRow
-          icon={<IconSymbol name="info.circle" size={26} color={rowColor} />}
+          icon={<CustomIcon name="citinetLogo" size={26} color={rowColor} />}
           label="About"
           onPress={() => {
             close();
@@ -170,14 +211,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
         <View style={styles.edgeCatcher} />
       </GestureDetector>
 
-      {session && (
-        <HubInfoModal
-          visible={showAbout}
-          onClose={() => setShowAbout(false)}
-          hub={session.hub}
-          isLocalConnection={isLocalConnection(session.hub.tunnelUrl)}
-        />
-      )}
+      {session && <CitinetAboutModal visible={showAbout} onClose={() => setShowAbout(false)} hubName={session.hub.name} />}
     </View>
   );
 }
@@ -207,26 +241,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   logoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
     marginLeft: 12,
     marginBottom: 20,
   },
-  logoWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: '#151718',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   logoLabel: {
     fontSize: 20,
-  },
-  logo: {
-    width: 36,
-    height: 36,
+    fontWeight: 'bold',
   },
   divider: {
     height: StyleSheet.hairlineWidth,

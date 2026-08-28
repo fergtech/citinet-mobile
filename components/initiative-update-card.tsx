@@ -6,7 +6,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { initiativeBannerUrl } from '@/lib/api/hubService';
 import { InitiativeActivityEntry } from '@/lib/api/types';
-import { initiativeCategoryMeta, initiativeColor } from '@/lib/initiatives/meta';
+import { initiativeCategoryMeta, initiativeCategoryPresetImage, initiativeColor } from '@/lib/initiatives/meta';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 // One activity row from a hub's initiatives, paired with enough of its
@@ -29,9 +29,11 @@ export type InitiativeUpdateRow = {
 // image/gradient-scrim/white-text language as components/featured-carousel.tsx,
 // just narrower (3:5 vs Featured's 4:5) and shorter in absolute height since
 // this is a Home preview strip, not the main draw. When the initiative has no
-// uploaded banner (Initiative.banner_mode !== 'image'), the category's own
-// color fills the card instead of a photo — the scrim still applies over it
-// so the text block reads identically either way.
+// uploaded banner (Initiative.banner_mode !== 'image'), a preset photo for its
+// category fills the card instead (see initiativeCategoryPresetImage) — the
+// plain solid-color tile is now only a last-resort fallback for a category
+// outside the four presets cover. The scrim applies over all three cases
+// identically, so the text block reads the same regardless of source.
 export function InitiativeUpdateCard({
   row,
   tunnelUrl,
@@ -46,11 +48,14 @@ export function InitiativeUpdateCard({
   const { entry, initiativeId, initiativeTitle, initiativeCategory, initiativeColorName, hasBannerImage } = row;
   const category = initiativeCategoryMeta(initiativeCategory);
   const color = initiativeColor(initiativeColorName);
+  const presetImage = initiativeCategoryPresetImage(initiativeCategory);
 
   return (
     <Pressable style={[styles.card, style]} onPress={onPress}>
       {hasBannerImage ? (
         <Image source={{ uri: initiativeBannerUrl(tunnelUrl, initiativeId) }} style={styles.fullBleedMedia} contentFit="cover" />
+      ) : presetImage ? (
+        <Image source={presetImage} style={styles.fullBleedMedia} contentFit="cover" />
       ) : (
         <View style={[styles.fullBleedMedia, { backgroundColor: color }]} />
       )}
