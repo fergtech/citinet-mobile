@@ -10,6 +10,7 @@ import { EventAtlasLink } from '@/components/event-atlas-link';
 import { FeaturedCarousel } from '@/components/featured-carousel';
 import { HubInfoModal } from '@/components/hub-info-modal';
 import { HubMedia } from '@/components/hub-media';
+import { InitiativeUpdateCard, type InitiativeUpdateRow } from '@/components/initiative-update-card';
 import { ListingCard } from '@/components/marketplace/listing-card';
 import { PostRow } from '@/components/post-row';
 import { ThemedText } from '@/components/themed-text';
@@ -24,7 +25,6 @@ import {
   getInitiativeActivity,
   getPosts,
   getUpcomingEvents,
-  initiativeBannerUrl,
   listAtlasPins,
   listFiles,
   listInitiativeResources,
@@ -41,7 +41,6 @@ import {
   HubFile,
   HubMember,
   HubPost,
-  InitiativeActivityEntry,
   InitiativeResource,
   InitiativeTaskSummary,
   MarketplaceListing,
@@ -51,32 +50,14 @@ import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
 import { useHubCenter } from '@/lib/atlas/hub-center';
 import { findNearestPanoramaxImage, type PanoramaxImage } from '@/lib/atlas/panoramax';
 import { FILE_KIND_META, fileKind } from '@/lib/files/kind';
-import { initiativeCategoryMeta, initiativeColor } from '@/lib/initiatives/meta';
 import { useSession } from '@/lib/session/session-context';
 import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { isLocalConnection } from '@/lib/ui/is-local-connection';
 import { applyVote } from '@/lib/ui/poll';
 import { timeAgo } from '@/lib/ui/time-ago';
 
-type InitiativeUpdateRow = {
-  entry: InitiativeActivityEntry;
-  initiativeId: string;
-  initiativeTitle: string;
-  // Carried alongside the activity entry so the row can render the same
-  // category tile Discover's own InitiativeDiscoverRow uses — the entry
-  // itself has no category/color/banner, only the parent Initiative does.
-  initiativeCategory: string;
-  initiativeColorName: string;
-  // Real banner image wins over the category tile when the initiative
-  // actually has one uploaded (banner_mode/banner_image_file_name are only
-  // set together — see api/server.js's POST .../banner).
-  hasBannerImage: boolean;
-  // Only ever set for entry.kind === 'task' — see the taskId-resolution
-  // comment below. Undefined means "couldn't resolve a specific task" (or
-  // this isn't a task entry), and the row falls back to the initiative's
-  // own overview screen.
-  taskId?: string;
-};
+// InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
+// the card that renders it — this just builds the array.
 
 // There's no hub-wide "recent activity across all initiatives" endpoint —
 // GET /api/initiatives/:id/activity is per-initiative (see hubService's
@@ -696,43 +677,20 @@ export default function HomeScreen() {
       node: (
         <View style={styles.section} key="initiatives">
           <ThemedText style={styles.sectionLabel}>Initiatives</ThemedText>
-          {initiativeUpdates.map(({ entry, initiativeId, initiativeTitle, initiativeCategory, initiativeColorName, hasBannerImage, taskId }) => {
-            const category = initiativeCategoryMeta(initiativeCategory);
-            const color = initiativeColor(initiativeColorName);
-            return (
-              <Pressable
-                key={entry.id}
-                style={styles.atlasLatestRow}
-                onPress={() => router.push(initiativeActivityHref(initiativeId, entry.kind, taskId))}>
-                {hasBannerImage ? (
-                  // A real uploaded banner (see api/server.js's
-                  // GET/POST .../:id/banner) wins over the category tile —
-                  // 113px/1:1, same scale/radius as the tile it replaces.
-                  <Image
-                    source={{ uri: initiativeBannerUrl(session.hub.tunnelUrl, initiativeId) }}
-                    style={styles.initiativeTile}
-                    contentFit="cover"
-                  />
-                ) : (
-                  // No banner uploaded — falls back to Discover's own
-                  // InitiativeDiscoverRow tile treatment, at the same
-                  // standard 44px "no photo" icon size fileLatestIcon
-                  // already establishes elsewhere on this screen.
-                  <View style={[styles.fileLatestIcon, { backgroundColor: color }]}>
-                    <IconSymbol name={category.icon} size={18} color="#fff" />
-                  </View>
-                )}
-                <View style={styles.atlasLatestContent}>
-                  <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
-                    {entry.text}
-                  </ThemedText>
-                  <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-                    {initiativeTitle} · {timeAgo(entry.created_at)}
-                  </ThemedText>
-                </View>
-              </Pressable>
-            );
-          })}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.edgeToEdgeScroll}
+            contentContainerStyle={styles.initiativeStrip}>
+            {initiativeUpdates.map((row) => (
+              <InitiativeUpdateCard
+                key={row.entry.id}
+                row={row}
+                tunnelUrl={session.hub.tunnelUrl}
+                onPress={() => router.push(initiativeActivityHref(row.initiativeId, row.entry.kind, row.taskId))}
+              />
+            ))}
+          </ScrollView>
           <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/initiatives' as Href)}>
             <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
               <CustomIcon name="bullseyeArrow" size={18} color={Brand} />
@@ -1062,16 +1020,9 @@ const styles = StyleSheet.create({
     width: 150,
     borderRadius: 10,
   },
-  // Same idea as Discover's own InitiativeDiscoverRow tile (colored swatch +
-  // category icon), just scaled way up — 113px/1:1 per product ask, with a
-  // rounded radius proportional to that size rather than Discover's 10 (its
-  // tile is only 36px there).
-  initiativeTile: {
-    width: 113,
-    height: 113,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
+  // Same edge-to-edge/gap convention as marketplaceStrip above — the cards
+  // themselves (InitiativeUpdateCard) own their own fixed width/aspect ratio.
+  initiativeStrip: {
+    gap: 10,
   },
 });

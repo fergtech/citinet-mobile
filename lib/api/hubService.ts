@@ -1402,6 +1402,47 @@ export function initiativeBannerUrl(tunnelUrl: string, initiativeId: string): st
   return `${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/banner`;
 }
 
+// POST /api/initiatives/:id/banner — multipart upload under the 'banner'
+// field (api/server.js's uploadBg.single('banner'), 4MB limit, image/* only
+// by client convention). Writes straight to MinIO under
+// initiative-banners/<id>/<filename> and sets banner_mode to 'image' — same
+// dedicated route initiativeBannerUrl() reads from, not the generic
+// uploadFile()/hub_files path. Creator-only server-side
+// (assertInitiativeCreator, 403 otherwise) — gate the UI on
+// initiative.viewerIsCreator.
+export async function uploadInitiativeBanner(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  file: { uri: string; name: string; type: string }
+): Promise<{ file_name: string; file_key: string }> {
+  const form = new FormData();
+  form.append('banner', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
+
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/banner`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't upload that cover image."));
+  }
+  return res.json();
+}
+
+// DELETE /api/initiatives/:id/banner — clears banner_mode and every banner_*
+// field, reverting the detail screen back to its plain-color banner.
+// Creator-only, same as the upload route above.
+export async function removeInitiativeBanner(tunnelUrl: string, token: string, initiativeId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/banner`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that cover image."));
+  }
+}
+
 export async function getInitiativeShareLink(tunnelUrl: string, token: string, initiativeId: string): Promise<string> {
   const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/share-link`, {
     headers: { Authorization: `Bearer ${token}` },

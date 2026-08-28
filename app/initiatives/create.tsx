@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -7,7 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { createInitiative } from '@/lib/api/hubService';
+import { createInitiative, uploadInitiativeBanner } from '@/lib/api/hubService';
 import { INITIATIVE_CATEGORIES, INITIATIVE_CATEGORY_ORDER, INITIATIVE_COLORS } from '@/lib/initiatives/meta';
 import { useSession } from '@/lib/session/session-context';
 
@@ -33,8 +35,37 @@ export default function CreateInitiativeScreen() {
   const [goal, setGoal] = useState('');
   const [description, setDescription] = useState('');
   const [color, setColor] = useState('purple');
+  const [bannerUri, setBannerUri] = useState<string | null>(null);
+  const [bannerAsset, setBannerAsset] = useState<{ uri: string; name: string; type: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function handlePickBanner() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      setError('Photo library permission is needed to add a cover image.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      allowsEditing: true,
+      aspect: [3, 1],
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    setBannerUri(asset.uri);
+    setBannerAsset({
+      uri: asset.uri,
+      name: asset.fileName ?? `initiative-banner-${Date.now()}.jpg`,
+      type: asset.mimeType ?? 'image/jpeg',
+    });
+  }
+
+  function handleClearBanner() {
+    setBannerUri(null);
+    setBannerAsset(null);
+  }
 
   function handleSave() {
     if (!session || !title.trim() || saving) return;
@@ -48,7 +79,14 @@ export default function CreateInitiativeScreen() {
       color,
       space_id: spaceId || undefined,
     })
-      .then((created) => {
+      .then(async (created) => {
+        // Banner upload needs a real initiative id first (create-then-upload,
+        // same order citinet web's NewInitiativeModal uses) — a failure here
+        // is non-critical since the initiative itself already exists; the
+        // detail screen's own banner control lets the creator retry.
+        if (bannerAsset) {
+          await uploadInitiativeBanner(session.hub.tunnelUrl, session.token, created.id, bannerAsset).catch(() => {});
+        }
         router.replace({ pathname: '/initiatives/[id]', params: { id: created.id } });
       })
       .catch((err) => {
@@ -99,6 +137,23 @@ export default function CreateInitiativeScreen() {
           maxLength={200}
           style={[styles.input, { color: Colors[colorScheme].text }]}
         />
+
+        <ThemedText style={styles.sectionLabel}>Cover image</ThemedText>
+        <Pressable onPress={handlePickBanner} style={styles.bannerPicker}>
+          {bannerUri ? (
+            <>
+              <Image source={{ uri: bannerUri }} style={styles.bannerPreview} contentFit="cover" />
+              <Pressable onPress={handleClearBanner} hitSlop={8} style={styles.bannerRemove} accessibilityLabel="Remove cover image">
+                <IconSymbol name="xmark" size={12} color="#fff" />
+              </Pressable>
+            </>
+          ) : (
+            <View style={styles.bannerPickerEmpty}>
+              <IconSymbol name="photo" size={18} color={Colors[colorScheme].icon} />
+              <ThemedText style={styles.bannerPickerLabel}>Add a cover image (optional)</ThemedText>
+            </View>
+          )}
+        </Pressable>
 
         <ThemedText style={styles.sectionLabel}>Category</ThemedText>
         <View style={styles.chipGrid}>
@@ -216,6 +271,41 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
+  },
+  bannerPicker: {
+    height: 96,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#8881',
+  },
+  bannerPreview: {
+    width: '100%',
+    height: '100%',
+  },
+  bannerRemove: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerPickerEmpty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#8884',
+    borderStyle: 'dashed',
+    borderRadius: 16,
+  },
+  bannerPickerLabel: {
+    fontSize: 13,
+    opacity: 0.6,
   },
   textarea: {
     fontSize: 15,

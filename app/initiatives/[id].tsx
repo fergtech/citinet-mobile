@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -11,7 +12,14 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getInitiative, getInitiativeActivity, initiativeBannerUrl, joinInitiative } from '@/lib/api/hubService';
+import {
+  getInitiative,
+  getInitiativeActivity,
+  initiativeBannerUrl,
+  joinInitiative,
+  removeInitiativeBanner,
+  uploadInitiativeBanner,
+} from '@/lib/api/hubService';
 import { Initiative, InitiativeActivityEntry } from '@/lib/api/types';
 import {
   initiativeCategoryMeta,
@@ -59,6 +67,7 @@ export default function InitiativeDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
 
   const load = useCallback(() => {
     if (!session || !id) return;
@@ -101,6 +110,50 @@ export default function InitiativeDetailScreen() {
       .then(setInitiative)
       .catch(() => setInitiative(prior))
       .finally(() => setJoining(false));
+  }
+
+  // Creator-only, mirrored server-side (assertInitiativeCreator, 403
+  // otherwise) — gated in the UI on initiative.viewerIsCreator, same as
+  // citinet web's InitiativeBannerUpload.
+  async function handlePickBanner() {
+    if (!session || !initiative || uploadingBanner) return;
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      setError('Photo library permission is needed to change the cover image.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      allowsEditing: true,
+      aspect: [3, 1],
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    setUploadingBanner(true);
+    setError(null);
+    try {
+      await uploadInitiativeBanner(session.hub.tunnelUrl, session.token, initiative.id, {
+        uri: asset.uri,
+        name: asset.fileName ?? `initiative-banner-${Date.now()}.jpg`,
+        type: asset.mimeType ?? 'image/jpeg',
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't upload that cover image.");
+    } finally {
+      setUploadingBanner(false);
+    }
+  }
+
+  function handleRemoveBanner() {
+    if (!session || !initiative || uploadingBanner) return;
+    setUploadingBanner(true);
+    setError(null);
+    removeInitiativeBanner(session.hub.tunnelUrl, session.token, initiative.id)
+      .then(load)
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't remove that cover image."))
+      .finally(() => setUploadingBanner(false));
   }
 
   if (!session) return null;
@@ -156,6 +209,28 @@ export default function InitiativeDetailScreen() {
                 {initiative.space_name ? `In ${initiative.space_name}` : 'Hub-wide'}
               </ThemedText>
             </View>
+            {initiative.viewerIsCreator && (
+              <View style={styles.bannerEditControls}>
+                <Pressable
+                  onPress={handlePickBanner}
+                  disabled={uploadingBanner}
+                  style={styles.bannerEditButton}
+                  accessibilityLabel={initiative.banner_mode === 'image' ? 'Change cover image' : 'Add cover image'}
+                  accessibilityRole="button">
+                  {uploadingBanner ? <ActivityIndicator size="small" color="#fff" /> : <IconSymbol name="camera.fill" size={14} color="#fff" />}
+                </Pressable>
+                {!!initiative.banner_mode && (
+                  <Pressable
+                    onPress={handleRemoveBanner}
+                    disabled={uploadingBanner}
+                    style={styles.bannerEditButton}
+                    accessibilityLabel="Remove cover image"
+                    accessibilityRole="button">
+                    <IconSymbol name="trash.fill" size={14} color="#fff" />
+                  </Pressable>
+                )}
+              </View>
+            )}
           </View>
 
           <View style={styles.statusLine}>
@@ -336,6 +411,21 @@ const styles = StyleSheet.create({
   },
   bannerSpace: {
     fontSize: 12.5,
+  },
+  bannerEditControls: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  bannerEditButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   statusLine: {
     flexDirection: 'row',
