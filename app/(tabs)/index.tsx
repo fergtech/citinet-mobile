@@ -2,12 +2,13 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useScrollToTop } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router, useFocusEffect, type Href } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { LeafletMap } from '@/components/atlas/leaflet-map';
 import { EventAtlasLink } from '@/components/event-atlas-link';
 import { FeaturedCarousel } from '@/components/featured-carousel';
+import { HubInfoModal } from '@/components/hub-info-modal';
 import { HubMedia } from '@/components/hub-media';
 import { ListingCard } from '@/components/marketplace/listing-card';
 import { PostRow } from '@/components/post-row';
@@ -19,12 +20,14 @@ import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
   getFeatured,
+  getInitiative,
   getInitiativeActivity,
   getPosts,
   getUpcomingEvents,
   initiativeBannerUrl,
   listAtlasPins,
   listFiles,
+  listInitiativeResources,
   listInitiatives,
   listMarketplaceListings,
   listMembers,
@@ -39,6 +42,8 @@ import {
   HubMember,
   HubPost,
   InitiativeActivityEntry,
+  InitiativeResource,
+  InitiativeTaskSummary,
   MarketplaceListing,
 } from '@/lib/api/types';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
@@ -65,6 +70,11 @@ type InitiativeUpdateRow = {
   // actually has one uploaded (banner_mode/banner_image_file_name are only
   // set together — see api/server.js's POST .../banner).
   hasBannerImage: boolean;
+  // Only ever set for entry.kind === 'task' — see the taskId-resolution
+  // comment below. Undefined means "couldn't resolve a specific task" (or
+  // this isn't a task entry), and the row falls back to the initiative's
+  // own overview screen.
+  taskId?: string;
 };
 
 // There's no hub-wide "recent activity across all initiatives" endpoint —
@@ -97,11 +107,90 @@ async function fetchInitiativeUpdates(tunnelUrl: string, token: string): Promise
         .catch(() => [] as InitiativeUpdateRow[])
     )
   );
-  return perInitiative
+  const candidates = perInitiative
     .flat()
     .filter((row) => row.entry.kind === 'task' || row.entry.kind === 'team' || row.entry.kind === 'resource')
-    .sort((a, b) => new Date(b.entry.created_at).getTime() - new Date(a.entry.created_at).getTime())
-    .slice(0, 3);
+    .sort((a, b) => new Date(b.entry.created_at).getTime() - new Date(a.entry.created_at).getTime());
+
+  // The activity feed is an immutable log, not a live status snapshot —
+  // "Completed X" and "marked X as provided" rows stay exactly as written
+  // even after the task gets reopened or the pledge gets undone. Checked
+  // every task/resource mutation in this file: updateTaskStatus logs a
+  // "completed <title>" row only when status flips to 'done' (nothing logs
+  // one for reopening), and provideResource is the only resource mutation
+  // that appears to log anything (nothing logs an "unprovided" row either).
+  // So a 'task' row is only ever about completion, and a 'resource' row is
+  // only ever about being provided — meaning each one is trustworthy only
+  // as long as that's still true right now. hub_initiative_activity rows
+  // also carry no ref_id back to what they're about (see
+  // InitiativeActivityEntry) — only a rendered sentence like "Completed
+  // 'Track device inventory sheet'" — so both the link target *and* the
+  // staleness check below resolve the same way: substring-matching that
+  // sentence against the initiative's current task/resource list (exact
+  // quoting isn't guaranteed, so this doesn't try to parse it out).
+  //
+  // 'team' rows are left unvalidated — unlike tasks/resources, it's not
+  // confirmed here whether they're exclusively about role fills (which can
+  // similarly revert via stepDownFromRole) or plain roster joins (which
+  // can't in the same binary way), and guessing wrong risks hiding valid
+  // updates instead of fixing stale ones.
+  //
+  // Both fetches only cover initiatives that actually have a task/resource
+  // candidate above, not every initiative in the hub.
+  const taskInitiativeIds = [...new Set(candidates.filter((row) => row.entry.kind === 'task').map((row) => row.initiativeId))];
+  const resourceInitiativeIds = [...new Set(candidates.filter((row) => row.entry.kind === 'resource').map((row) => row.initiativeId))];
+
+  const [taskListByInitiative, resourceListByInitiative] = await Promise.all([
+    Promise.all(
+      taskInitiativeIds.map((initiativeId) =>
+        getInitiative(tunnelUrl, token, initiativeId)
+          .then((initiative): [string, InitiativeTaskSummary[]] => [initiativeId, initiative.tasks])
+          .catch((): [string, InitiativeTaskSummary[]] => [initiativeId, []])
+      )
+    ).then((entries) => new Map(entries)),
+    Promise.all(
+      resourceInitiativeIds.map((initiativeId) =>
+        listInitiativeResources(tunnelUrl, token, initiativeId)
+          .then((resources): [string, InitiativeResource[]] => [initiativeId, resources])
+          .catch((): [string, InitiativeResource[]] => [initiativeId, []])
+      )
+    ).then((entries) => new Map(entries)),
+  ]);
+
+  const resolved = candidates
+    .map((row) => {
+      if (row.entry.kind === 'task') {
+        const tasks = taskListByInitiative.get(row.initiativeId) ?? [];
+        const matchedTask = tasks.find((task) => row.entry.text.includes(task.title));
+        if (!matchedTask || matchedTask.status !== 'done') return null;
+        return { ...row, taskId: matchedTask.id };
+      }
+      if (row.entry.kind === 'resource') {
+        const resources = resourceListByInitiative.get(row.initiativeId) ?? [];
+        const matchedResource = resources.find((resource) => row.entry.text.includes(resource.item));
+        if (!matchedResource || !matchedResource.provided) return null;
+        return row;
+      }
+      return row;
+    })
+    .filter((row): row is InitiativeUpdateRow => row !== null);
+
+  return resolved.slice(0, 3);
+}
+
+// Where a given activity row should actually land. 'task' goes to the real
+// task detail screen when taskId resolution (above) succeeded; 'resource'
+// and 'team' fall back to their tab rather than the single item, since
+// neither has a per-item detail route anywhere in this app (only tasks do —
+// see app/initiatives/[id]/tasks/[taskId].tsx). Any other case (an
+// unresolved task match, or a future activity kind) falls back to the
+// initiative's own overview, same as before this row linked anywhere more
+// specific.
+function initiativeActivityHref(initiativeId: string, kind: string, taskId: string | undefined): Href {
+  if (kind === 'task' && taskId) return `/initiatives/${initiativeId}/tasks/${taskId}` as unknown as Href;
+  if (kind === 'resource') return `/initiatives/${initiativeId}/resources` as unknown as Href;
+  if (kind === 'team') return `/initiatives/${initiativeId}/team` as unknown as Href;
+  return { pathname: '/initiatives/[id]', params: { id: initiativeId } } as unknown as Href;
 }
 
 // Each Home section is a bounded preview with a "View more" link to its own
@@ -204,18 +293,18 @@ function LatestAtlasRow({
 function LatestEventRow({ event }: { event: HubPost }) {
   return (
     <Pressable
-      style={styles.atlasLatestRow}
+      style={[styles.atlasLatestRow, styles.eventRowCompact]}
       onPress={() => router.push({ pathname: '/post/[id]', params: { id: event.id } })}>
-      <View style={styles.atlasLatestContent}>
-        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
+      <View style={[styles.atlasLatestContent, styles.eventContentCompact]}>
+        <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, styles.eventTitleLarger]} numberOfLines={2}>
           {event.title ?? 'Event'}
         </ThemedText>
         <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-          {event.event_date ? formatEventWhen(event.event_date) : 'Date TBA'}
+          {event.event_date ? formatEventWhen(event.event_date, true) : 'Date TBA'}
           {event.rsvp_count > 0 ? ` · ${event.rsvp_count} going` : ''}
         </ThemedText>
         {!!event.body?.trim() && (
-          <ThemedText style={styles.atlasLatestDescription} numberOfLines={4}>
+          <ThemedText style={styles.atlasLatestDescription} numberOfLines={2}>
             {event.body}
           </ThemedText>
         )}
@@ -307,6 +396,7 @@ export default function HomeScreen() {
   // Dismissing a featured card only clears it for this session (plain component
   // state, never persisted) — it comes back next time the user signs in.
   const [dismissedFeaturedIds, setDismissedFeaturedIds] = useState<Set<string>>(new Set());
+  const [showHubInfo, setShowHubInfo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -399,7 +489,9 @@ export default function HomeScreen() {
     return [...visible].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, 6);
   }, [files]);
 
-  const latestListing = listings[0] ?? null;
+  // Already newest-first (see hubService's listMarketplaceListings comment),
+  // same slice-without-resorting Discover's own recentListings strip uses.
+  const latestListings = listings.slice(0, 5);
 
   const latestPost = useMemo(
     () => [...posts].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null,
@@ -416,6 +508,21 @@ export default function HomeScreen() {
     return posts
       .filter((post) => post.category === 'EVENT' && post.event_date && !upcomingIds.has(post.id))
       .sort((a, b) => new Date(b.event_date!).getTime() - new Date(a.event_date!).getTime())[0] ?? null;
+  }, [events, posts]);
+
+  // Section ordering keys off when a section last got something new, not
+  // what that latest thing happens to be about — so this deliberately uses
+  // created_at (when the event was posted), not event_date (when it's
+  // scheduled to happen). A just-added event pushes the whole Events
+  // section to the top even if it's scheduled a month out; the one actually
+  // displayed there stays featuredEvent (soonest upcoming) as before, this
+  // is only a separate signal for section placement. Same
+  // events + EVENT-category-posts union featuredEvent itself draws from.
+  const eventsLatestAt = useMemo(() => {
+    const eventIds = new Set(events.map((event) => event.id));
+    const relevant = [...events, ...posts.filter((post) => post.category === 'EVENT' && !eventIds.has(post.id))];
+    if (relevant.length === 0) return null;
+    return Math.max(...relevant.map((item) => new Date(item.created_at).getTime()));
   }, [events, posts]);
 
   function handleVotePoll(post: HubPost, optionIndex: number) {
@@ -450,12 +557,266 @@ export default function HomeScreen() {
 
   const visibleFeatured = featured.filter((item) => !dismissedFeaturedIds.has(item.id));
 
+  // Sections reorder by recency — whichever one has the most recent new
+  // thing (a post, an event, a pin, a file, a listing, an initiative
+  // update) leads, then the next-most-recent, and so on. FeaturedCarousel
+  // is curated/pinned separately above and isn't part of this ranking.
+  // Discussions always has an entry (even with 0 posts, "No posts yet."
+  // still renders, same as before) so it needs a real sort key too — 0
+  // (oldest possible) rather than being left out, so it naturally settles
+  // to the bottom rather than winning ties against genuinely-empty timestamps.
+  const homeSections: { key: string; latestAt: number; node: ReactNode }[] = [];
+
+  if (featuredEvent) {
+    homeSections.push({
+      key: 'events',
+      latestAt: eventsLatestAt ?? 0,
+      node: (
+        <View style={styles.section} key="events">
+          <ThemedText style={styles.sectionLabel}>Events</ThemedText>
+          <LatestEventRow event={featuredEvent} />
+          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/events')}>
+            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+              <IconSymbol name="calendar" size={18} color={Brand} />
+            </View>
+            <View style={styles.atlasLatestContent}>
+              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                See all events
+              </ThemedText>
+            </View>
+          </Pressable>
+        </View>
+      ),
+    });
+  }
+
+  if (latestPin) {
+    homeSections.push({
+      key: 'atlas',
+      latestAt: new Date(latestPin.created_at).getTime(),
+      node: (
+        <View style={styles.section} key="atlas">
+          <ThemedText style={styles.sectionLabel}>From the Atlas</ThemedText>
+          <LatestAtlasRow
+            pin={latestPin}
+            meters={hubCenter ? distanceMeters(hubCenter[0], hubCenter[1], latestPin.latitude, latestPin.longitude) : null}
+            tunnelUrl={session.hub.tunnelUrl}
+            token={session.token}
+          />
+          {/* Trailing "See all" row instead of the header link — same
+              concept as Discover's in-list "See all" cards/rows, just a
+              single row here since this section only ever previews one
+              pin (no real list to append to). */}
+          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/atlas' as Href)}>
+            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+              <CustomIcon name="landLayerLocation" size={18} color={Brand} />
+            </View>
+            <View style={styles.atlasLatestContent}>
+              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                See all Atlas pins
+              </ThemedText>
+            </View>
+          </Pressable>
+        </View>
+      ),
+    });
+  }
+
+  if (latestPublicFiles.length > 0) {
+    homeSections.push({
+      key: 'files',
+      latestAt: new Date(latestPublicFiles[0].uploaded_at).getTime(),
+      node: (
+        <View style={styles.section} key="files">
+          <ThemedText style={styles.sectionLabel}>Latest uploads to {session.hub.name}</ThemedText>
+          <View style={styles.fileGrid}>
+            {latestPublicFiles.map((file) => (
+              <FileHomeRow
+                key={file.file_id}
+                file={file}
+                tunnelUrl={session.hub.tunnelUrl}
+                token={session.token}
+                uploaderUsername={members.get(file.owner_id)?.username}
+              />
+            ))}
+          </View>
+          <SeeAllFilesRow />
+        </View>
+      ),
+    });
+  }
+
+  if (latestListings.length > 0) {
+    homeSections.push({
+      key: 'marketplace',
+      latestAt: new Date(latestListings[0].created_at).getTime(),
+      node: (
+        <View style={styles.section} key="marketplace">
+          <ThemedText style={styles.sectionLabel}>Marketplace</ThemedText>
+          {/* Same horizontal-strip shape as FeaturedCarousel atop the
+              screen — edgeToEdgeScroll cancels the section's own 20px
+              padding so cards start flush at the screen edge, same trick
+              atlasLatestPreview uses for its own full-bleed preview. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.edgeToEdgeScroll}
+            contentContainerStyle={styles.marketplaceStrip}>
+            {latestListings.map((listing) => (
+              <ListingCard
+                key={listing.id}
+                listing={listing}
+                tunnelUrl={session.hub.tunnelUrl}
+                token={session.token}
+                onPress={() => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } })}
+                style={styles.marketplaceStripCard}
+              />
+            ))}
+          </ScrollView>
+          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/marketplace' as Href)}>
+            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+              <IconSymbol name="storefront.fill" size={18} color={Brand} />
+            </View>
+            <View style={styles.atlasLatestContent}>
+              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                See all marketplace
+              </ThemedText>
+            </View>
+          </Pressable>
+        </View>
+      ),
+    });
+  }
+
+  if (initiativeUpdates.length > 0) {
+    homeSections.push({
+      key: 'initiatives',
+      latestAt: new Date(initiativeUpdates[0].entry.created_at).getTime(),
+      node: (
+        <View style={styles.section} key="initiatives">
+          <ThemedText style={styles.sectionLabel}>Initiatives</ThemedText>
+          {initiativeUpdates.map(({ entry, initiativeId, initiativeTitle, initiativeCategory, initiativeColorName, hasBannerImage, taskId }) => {
+            const category = initiativeCategoryMeta(initiativeCategory);
+            const color = initiativeColor(initiativeColorName);
+            return (
+              <Pressable
+                key={entry.id}
+                style={styles.atlasLatestRow}
+                onPress={() => router.push(initiativeActivityHref(initiativeId, entry.kind, taskId))}>
+                {hasBannerImage ? (
+                  // A real uploaded banner (see api/server.js's
+                  // GET/POST .../:id/banner) wins over the category tile —
+                  // 113px/1:1, same scale/radius as the tile it replaces.
+                  <Image
+                    source={{ uri: initiativeBannerUrl(session.hub.tunnelUrl, initiativeId) }}
+                    style={styles.initiativeTile}
+                    contentFit="cover"
+                  />
+                ) : (
+                  // No banner uploaded — falls back to Discover's own
+                  // InitiativeDiscoverRow tile treatment, at the same
+                  // standard 44px "no photo" icon size fileLatestIcon
+                  // already establishes elsewhere on this screen.
+                  <View style={[styles.fileLatestIcon, { backgroundColor: color }]}>
+                    <IconSymbol name={category.icon} size={18} color="#fff" />
+                  </View>
+                )}
+                <View style={styles.atlasLatestContent}>
+                  <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
+                    {entry.text}
+                  </ThemedText>
+                  <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
+                    {initiativeTitle} · {timeAgo(entry.created_at)}
+                  </ThemedText>
+                </View>
+              </Pressable>
+            );
+          })}
+          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/initiatives' as Href)}>
+            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+              <CustomIcon name="bullseyeArrow" size={18} color={Brand} />
+            </View>
+            <View style={styles.atlasLatestContent}>
+              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                See all initiatives
+              </ThemedText>
+            </View>
+          </Pressable>
+        </View>
+      ),
+    });
+  }
+
+  homeSections.push({
+    key: 'discussions',
+    latestAt: latestPost ? new Date(latestPost.created_at).getTime() : 0,
+    node: (
+      <View style={styles.section} key="discussions">
+        <ThemedText style={styles.sectionLabel}>Discussions</ThemedText>
+        {latestPost && (
+          <PostRow
+            post={latestPost}
+            tunnelUrl={session.hub.tunnelUrl}
+            token={session.token}
+            onToggleLike={handleToggleLike}
+            onVotePoll={handleVotePoll}
+            onToggleRsvp={handleToggleRsvp}
+            compactAuthor
+          />
+        )}
+        {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
+        {posts.length > 1 && (
+          <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/feed')}>
+            <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
+              <IconSymbol name="message.fill" size={18} color={Brand} />
+            </View>
+            <View style={styles.atlasLatestContent}>
+              <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
+                See all discussions
+              </ThemedText>
+            </View>
+          </Pressable>
+        )}
+      </View>
+    ),
+  });
+
+  homeSections.sort((a, b) => b.latestAt - a.latestAt);
+
+  // Both of these connect straight to the hub's own LAN IP, no relay in
+  // between -- http:// is mDNS/manual entry (see nearbyHubs.ts and
+  // hub-select.tsx), and https://<slug>.hub.citinet.cloud is citinet-web's
+  // own HTTPS bridge (docs/hub-https-bridge.md): a public DNS A record that
+  // resolves straight to the hub's private LAN IP, just wrapped in a real
+  // trusted cert so Web Crypto works. Neither ever leaves the LAN. A hub
+  // whose tunnel_url is instead a genuine public tunnel (a Tailscale Funnel
+  // *.ts.net URL, a real Cloudflare Tunnel domain) is the only case that's
+  // actually reachable from anywhere -- that's "Web".
+  const isLocalConnection =
+    session.hub.tunnelUrl.startsWith('http://') || /^https:\/\/[^/]+\.hub\.citinet\.cloud(\/|$)/.test(session.hub.tunnelUrl);
+
   return (
     <ThemedView style={styles.container}>
       <View style={styles.header}>
-        <ThemedText type="title" style={styles.headerTitle} numberOfLines={1}>
-          {session.hub.name}
-        </ThemedText>
+        <Pressable
+          style={styles.headerTitleRow}
+          onPress={() => setShowHubInfo(true)}
+          accessibilityLabel={`${session.hub.name} hub info`}
+          accessibilityRole="button">
+          <ThemedText type="title" style={styles.headerTitle} numberOfLines={1}>
+            {session.hub.name}
+          </ThemedText>
+          {/* http:// only ever comes from a LAN connection (mDNS-discovered
+              or manually entered, per lib/discovery/nearbyHubs.ts and
+              hub-select.tsx's handleManualConnect) -- every registry/tunnel
+              hub uses https://, so this needs no new plumbing to tell them
+              apart. */}
+          <View style={[styles.connectionBadge, isLocalConnection ? styles.connectionBadgeLocal : styles.connectionBadgeWeb]}>
+            <ThemedText style={[styles.connectionBadgeText, { color: isLocalConnection ? '#22c55e' : Colors[colorScheme].icon }]}>
+              {isLocalConnection ? 'Local' : 'Web'}
+            </ThemedText>
+          </View>
+        </Pressable>
         {/* Pulled off the tab bar — that slot now shows notifications
             instead (see app/(tabs)/_layout.tsx) — same CustomIcon "search"
             vector this button used to render there, just relocated. */}
@@ -463,6 +824,13 @@ export default function HomeScreen() {
           <CustomIcon size={24} name="search" color={Colors[colorScheme].text} />
         </Pressable>
       </View>
+
+      <HubInfoModal
+        visible={showHubInfo}
+        onClose={() => setShowHubInfo(false)}
+        hub={session.hub}
+        isLocalConnection={isLocalConnection}
+      />
 
       {loading && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -478,172 +846,7 @@ export default function HomeScreen() {
           onDismiss={handleDismissFeatured}
         />
 
-        {featuredEvent && (
-          <View style={styles.section}>
-            <ThemedText style={styles.sectionLabel}>Events</ThemedText>
-            <LatestEventRow event={featuredEvent} />
-            <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/events')}>
-              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-                <IconSymbol name="calendar" size={18} color={Brand} />
-              </View>
-              <View style={styles.atlasLatestContent}>
-                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                  See all events
-                </ThemedText>
-              </View>
-            </Pressable>
-          </View>
-        )}
-
-        {latestPin && (
-          <View style={styles.section}>
-            <ThemedText style={styles.sectionLabel}>From the Atlas</ThemedText>
-            <LatestAtlasRow
-              pin={latestPin}
-              meters={hubCenter ? distanceMeters(hubCenter[0], hubCenter[1], latestPin.latitude, latestPin.longitude) : null}
-              tunnelUrl={session.hub.tunnelUrl}
-              token={session.token}
-            />
-            {/* Trailing "See all" row instead of the header link — same
-                concept as Discover's in-list "See all" cards/rows, just a
-                single row here since this section only ever previews one
-                pin (no real list to append to). */}
-            <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/atlas' as Href)}>
-              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-                <IconSymbol name="chevron.right" size={18} color={Brand} />
-              </View>
-              <View style={styles.atlasLatestContent}>
-                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                  See all Atlas pins
-                </ThemedText>
-              </View>
-            </Pressable>
-          </View>
-        )}
-
-        {latestPublicFiles.length > 0 && (
-          <View style={styles.section}>
-            <ThemedText style={styles.sectionLabel}>Latest uploads to {session.hub.name}</ThemedText>
-            <View style={styles.fileGrid}>
-              {latestPublicFiles.map((file) => (
-                <FileHomeRow
-                  key={file.file_id}
-                  file={file}
-                  tunnelUrl={session.hub.tunnelUrl}
-                  token={session.token}
-                  uploaderUsername={members.get(file.owner_id)?.username}
-                />
-              ))}
-            </View>
-            <SeeAllFilesRow />
-          </View>
-        )}
-
-        {latestListing && (
-          <View style={styles.section}>
-            <ThemedText style={styles.sectionLabel}>Marketplace</ThemedText>
-            <ListingCard
-              listing={latestListing}
-              tunnelUrl={session.hub.tunnelUrl}
-              token={session.token}
-              onPress={() => router.push({ pathname: '/marketplace/[id]', params: { id: latestListing.id } })}
-              style={styles.marketplaceFeatureCard}
-              imageAspectRatio={1}
-            />
-            <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/marketplace' as Href)}>
-              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-                <IconSymbol name="storefront.fill" size={18} color={Brand} />
-              </View>
-              <View style={styles.atlasLatestContent}>
-                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                  See all marketplace
-                </ThemedText>
-              </View>
-            </Pressable>
-          </View>
-        )}
-
-        {initiativeUpdates.length > 0 && (
-          <View style={styles.section}>
-            <ThemedText style={styles.sectionLabel}>Initiatives</ThemedText>
-            {initiativeUpdates.map(({ entry, initiativeId, initiativeTitle, initiativeCategory, initiativeColorName, hasBannerImage }) => {
-              const category = initiativeCategoryMeta(initiativeCategory);
-              const color = initiativeColor(initiativeColorName);
-              return (
-                <Pressable
-                  key={entry.id}
-                  style={styles.atlasLatestRow}
-                  onPress={() => router.push({ pathname: '/initiatives/[id]', params: { id: initiativeId } })}>
-                  {hasBannerImage ? (
-                    // A real uploaded banner (see api/server.js's
-                    // GET/POST .../:id/banner) wins over the category tile —
-                    // 113px/1:1, same scale/radius as the tile it replaces.
-                    <Image
-                      source={{ uri: initiativeBannerUrl(session.hub.tunnelUrl, initiativeId) }}
-                      style={styles.initiativeTile}
-                      contentFit="cover"
-                    />
-                  ) : (
-                    // No banner uploaded — falls back to Discover's own
-                    // InitiativeDiscoverRow tile treatment, at the same
-                    // standard 44px "no photo" icon size fileLatestIcon
-                    // already establishes elsewhere on this screen.
-                    <View style={[styles.fileLatestIcon, { backgroundColor: color }]}>
-                      <IconSymbol name={category.icon} size={18} color="#fff" />
-                    </View>
-                  )}
-                  <View style={styles.atlasLatestContent}>
-                    <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
-                      {entry.text}
-                    </ThemedText>
-                    <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-                      {initiativeTitle} · {timeAgo(entry.created_at)}
-                    </ThemedText>
-                  </View>
-                </Pressable>
-              );
-            })}
-            <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/initiatives' as Href)}>
-              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-                <IconSymbol name="target" size={18} color={Brand} />
-              </View>
-              <View style={styles.atlasLatestContent}>
-                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                  See all initiatives
-                </ThemedText>
-              </View>
-            </Pressable>
-          </View>
-        )}
-
-        <View style={styles.section}>
-          <ThemedText style={styles.sectionLabel}>Discussions</ThemedText>
-          {latestPost && (
-            <PostRow
-              post={latestPost}
-              tunnelUrl={session.hub.tunnelUrl}
-              token={session.token}
-              onToggleLike={handleToggleLike}
-              onVotePoll={handleVotePoll}
-              onToggleRsvp={handleToggleRsvp}
-              compactAuthor
-            />
-          )}
-          {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
-          {posts.length > 1 && (
-            <Pressable style={[styles.atlasLatestRow, styles.trailingSeparator]} onPress={() => router.push('/feed')}>
-              <View style={[styles.atlasLatestIcon, { backgroundColor: Brand + '22' }]}>
-                <IconSymbol name="message.fill" size={18} color={Brand} />
-              </View>
-              <View style={styles.atlasLatestContent}>
-                <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]}>
-                  See all discussions
-                </ThemedText>
-              </View>
-            </Pressable>
-          )}
-        </View>
-
+        {homeSections.map((section) => section.node)}
       </ScrollView>
     </ThemedView>
   );
@@ -662,9 +865,35 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 12,
   },
-  headerTitle: {
+  headerTitleRow: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerTitle: {
+    flexShrink: 1,
     fontSize: 22,
+  },
+  connectionBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  connectionBadgeLocal: {
+    backgroundColor: '#22c55e22',
+    borderColor: '#22c55e55',
+  },
+  connectionBadgeWeb: {
+    backgroundColor: '#8882',
+    borderColor: '#8884',
+  },
+  connectionBadgeText: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
   },
   spinner: {
     marginTop: 24,
@@ -770,6 +999,21 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
+  // Scoped to LatestEventRow only -- every other row sharing atlasLatestRow/
+  // atlasLatestContent (Atlas, Files, Marketplace, Initiatives) keeps the
+  // normal spacing; this section specifically asked for a tighter card.
+  eventRowCompact: {
+    paddingVertical: 10,
+  },
+  eventContentCompact: {
+    gap: 2,
+  },
+  // atlasLatestTitle is 16/21 (fontSize/lineHeight) -- same +2 bump asked
+  // for here, scoped to just this row like eventRowCompact above.
+  eventTitleLarger: {
+    fontSize: 18,
+    lineHeight: 23,
+  },
   atlasLatestTitle: {
     fontSize: 16,
     lineHeight: 21,
@@ -806,15 +1050,26 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
-  // ListingCard is normally a fixed-width strip card with rounded corners
-  // (Discover's own marketplaceCard is 180px) — this cancels the section's
-  // 20px padding on both sides (same trick as atlasLatestPreview/
-  // fileLatestThumb) so the single showcased item bleeds flush to the
-  // screen edges, and overrides ListingCard's own borderRadius: 14 to sharp
-  // corners, matching the other Home visuals.
-  marketplaceFeatureCard: {
+  // Cancels the section's own 20px horizontal padding (same trick as
+  // atlasLatestPreview/fileLatestThumb) so the strip's cards start flush at
+  // the screen edge, same as FeaturedCarousel/Discover's own strips.
+  edgeToEdgeScroll: {
     marginHorizontal: -20,
-    borderRadius: 0,
+  },
+  // No horizontal padding on purpose — matches FeaturedCarousel/Discover's
+  // own strips, which start flush at the exact screen edge (draggable from
+  // the edge, first card touching it) rather than inset like the section
+  // label above it.
+  marketplaceStrip: {
+    gap: 10,
+  },
+  // Smaller than Discover's own marketplaceCard (180px, ListingCard's
+  // default borderRadius: 14) — this strip is a Home preview, not
+  // Discover's full browsing shelf, so a touch narrower and a touch less
+  // rounded reads as the more compact of the two.
+  marketplaceStripCard: {
+    width: 150,
+    borderRadius: 10,
   },
   // Same idea as Discover's own InitiativeDiscoverRow tile (colored swatch +
   // category icon), just scaled way up — 113px/1:1 per product ask, with a

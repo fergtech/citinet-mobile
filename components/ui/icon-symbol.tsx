@@ -128,6 +128,7 @@ const MAPPING = {
   'square.grid.2x2': 'grid-view',
   'dot.radiowaves.left.and.right': 'sensors',
   'paperclip': 'attach-file',
+  'info.circle': 'info',
 } as IconMapping;
 
 /**

@@ -70,11 +70,8 @@ export function EventAtlasLink({ location, eventTitle, eventId }: Props) {
         <IconSymbol name="mappin.and.ellipse" size={18} color={Brand} />
       </View>
       <View style={styles.content}>
-        <ThemedText type="defaultSemiBold" numberOfLines={2} adjustsFontSizeToFit>
+        <ThemedText type="defaultSemiBold" numberOfLines={1}>
           {location}
-        </ThemedText>
-        <ThemedText style={styles.meta} numberOfLines={1}>
-          {pin ? 'Atlas pin' : 'Open in Atlas'}
         </ThemedText>
       </View>
       <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
@@ -85,9 +82,7 @@ export function EventAtlasLink({ location, eventTitle, eventId }: Props) {
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
-    // flex-start (not center) so the icon and chevron stay aligned with the
-    // first line when a long location name wraps to two lines.
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
@@ -104,10 +99,5 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    gap: 2,
-  },
-  meta: {
-    opacity: 0.6,
-    fontSize: 12,
   },
 });

@@ -164,11 +164,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  // Media posts get a fixed, taller shape so the full-bleed background has a
-  // deliberate frame — text-only cards (no media to sit behind) stay
-  // content-sized instead of inheriting this and leaving empty space.
+  // Media posts get a fixed, portrait shape -- most media-heavy apps favor
+  // a phone-like silhouette for card art these days rather than a wide
+  // landscape frame. 4:5 reads as clearly portrait without going as tall as
+  // a full Stories/Reels strip (9:16), which would dominate the row. Text-
+  // only cards (no media to sit behind) stay content-sized instead of
+  // inheriting this and leaving empty space.
   cardMedia: {
-    aspectRatio: 8 / 5,
+    aspectRatio: 4 / 5,
   },
   dismiss: {
     position: 'absolute',

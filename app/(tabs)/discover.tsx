@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { router, useFocusEffect, useNavigation, type Href } from 'expo-router';
 import { useBottomTabBarHeight, type BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 
@@ -26,13 +26,21 @@ import { categoryMeta } from '@/lib/marketplace/categories';
 import { useSession } from '@/lib/session/session-context';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
 
-type TabId = 'all' | 'posts' | 'people' | 'events' | 'hubs';
+type TabId = 'all' | 'posts' | 'events' | 'atlas' | 'marketplace' | 'initiatives' | 'files' | 'people' | 'hubs';
 
+// Same order as the sections appear in the "All" tab below, so the pill row
+// reads as a direct index into it — every section shown there has its own
+// dedicated filter here now (previously Atlas/Marketplace/Initiatives/Files
+// were shown in "All" with no way to filter down to just one of them).
 const TABS: { id: TabId; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'posts', label: 'Posts' },
-  { id: 'people', label: 'People' },
   { id: 'events', label: 'Events' },
+  { id: 'atlas', label: 'Atlas' },
+  { id: 'marketplace', label: 'Marketplace' },
+  { id: 'initiatives', label: 'Initiatives' },
+  { id: 'files', label: 'Files' },
+  { id: 'people', label: 'People' },
   { id: 'hubs', label: 'Other hubs' },
 ];
 
@@ -147,6 +155,15 @@ export default function DiscoverScreen() {
   const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
   const navigation = useNavigation<BottomTabNavigationProp<Record<string, undefined>>>();
   const scrollRef = useRef<ScrollView>(null);
+  // Files gets its own FlatList (see listWrap below) instead of sharing the
+  // ScrollView every other tab renders inside of, so it can actually
+  // virtualize -- a plain .map() inside a ScrollView mounts every row at
+  // once regardless of scroll position, which meant every image/video row's
+  // HubMedia fired its own POST /api/files/:name/token the instant the tab
+  // rendered (dozens of simultaneous requests on a file-heavy hub, tripping
+  // the server's rate limiter). FlatList only mounts what's near the
+  // viewport, so requests spread out as the user actually scrolls instead.
+  const filesListRef = useRef<FlatList>(null);
   const scrollOffset = useRef(0);
 
   const [query, setQuery] = useState('');
@@ -172,6 +189,7 @@ export default function DiscoverScreen() {
       event.preventDefault();
       if (scrollOffset.current > 0) {
         scrollRef.current?.scrollTo({ y: 0, animated: true });
+        filesListRef.current?.scrollToOffset({ offset: 0, animated: true });
         return;
       }
       setActiveTab('all');
@@ -293,13 +311,20 @@ export default function DiscoverScreen() {
     );
   }, [listings, query]);
 
-  // Most recently uploaded first — listFiles() is already scoped server-side
-  // to "mine + is_public" (see hubService), same visibility Files' own list
-  // screen shows, so this preview never teases something the viewer can't
-  // actually open.
+  // listFiles() is scoped server-side to "mine + is_public" (see hubService)
+  // — right for the Files screen itself (a personal file manager: you want
+  // to see your own files, private ones included), but Discover is a
+  // browsing/discovery surface, not "my stuff" — narrowed further here to
+  // is_public only, which covers both the 'hub' and 'web' visibility tiers
+  // (server derives is_public = visibility !== 'private', web_public =
+  // visibility === 'web' — see api/server.js's PATCH /api/files/:filename),
+  // excluding just the viewer's own private files that listFiles() mixes in.
+  const publicFiles = useMemo(() => files.filter((f) => f.is_public), [files]);
+
+  // Most recently uploaded first, from the public-only set above.
   const recentFiles = useMemo(
-    () => [...files].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, PREVIEW_COUNT),
-    [files]
+    () => [...publicFiles].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, PREVIEW_COUNT),
+    [publicFiles]
   );
 
   // Most recently updated first — most likely to have fresh activity worth
@@ -316,8 +341,8 @@ export default function DiscoverScreen() {
   const matchingFiles = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q.length < 2) return [];
-    return files.filter((f) => f.file_name.toLowerCase().includes(q));
-  }, [files, query]);
+    return publicFiles.filter((f) => f.file_name.toLowerCase().includes(q));
+  }, [publicFiles, query]);
 
   if (!session) return null;
 
@@ -387,6 +412,32 @@ export default function DiscoverScreen() {
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
       <View style={styles.listWrap}>
+        {activeTab === 'files' && !isSearching ? (
+          <FlatList
+            ref={filesListRef}
+            data={publicFiles}
+            keyExtractor={(file) => file.file_id}
+            renderItem={({ item }) => (
+              <FileRow
+                file={item}
+                starred={isStarred(item.file_id)}
+                tunnelUrl={session.hub.tunnelUrl}
+                token={session.token}
+                onPress={() => router.push({ pathname: '/files/[id]', params: { id: item.file_id } })}
+                onToggleStar={() => toggleStarred(item.file_id)}
+              />
+            )}
+            style={styles.list}
+            contentContainerStyle={[styles.section, { paddingBottom: 24 + extraBottomInset }]}
+            onScroll={(event) => {
+              scrollOffset.current = event.nativeEvent.contentOffset.y;
+            }}
+            scrollEventThrottle={16}
+            ListEmptyComponent={
+              !loading ? <ThemedText style={styles.rowMeta}>No files in the hub yet.</ThemedText> : null
+            }
+          />
+        ) : (
         <ScrollView
           ref={scrollRef}
           style={styles.list}
@@ -712,8 +763,8 @@ export default function DiscoverScreen() {
                   onToggleStar={() => toggleStarred(file.file_id)}
                 />
               ))}
-              {!loading && files.length === 0 && <ThemedText style={styles.rowMeta}>No files in the hub yet.</ThemedText>}
-              {files.length > PREVIEW_COUNT && (
+              {!loading && publicFiles.length === 0 && <ThemedText style={styles.rowMeta}>No files in the hub yet.</ThemedText>}
+              {publicFiles.length > PREVIEW_COUNT && (
                 <Pressable style={styles.seeAllRow} onPress={() => router.push('/files' as Href)}>
                   <View style={styles.seeAllRowIcon}>
                     <IconSymbol name="externaldrive.fill" size={16} color={Brand} />
@@ -841,6 +892,58 @@ export default function DiscoverScreen() {
             ))}
             {!loading && events.length === 0 && <ThemedText style={styles.rowMeta}>No upcoming events.</ThemedText>}
           </View>
+        ) : activeTab === 'atlas' ? (
+          <View style={styles.section}>
+            {atlasPins.map((pin) => {
+              const meta = ATLAS_CATEGORIES[pin.category];
+              const meters = hubCenter ? distanceMeters(hubCenter[0], hubCenter[1], pin.latitude, pin.longitude) : null;
+              return (
+                <Pressable
+                  key={pin.id}
+                  style={styles.hubRow}
+                  onPress={() => router.push({ pathname: '/atlas/[id]', params: { id: pin.id } })}>
+                  <View style={[styles.hubIcon, { backgroundColor: meta.color }]}>
+                    <IconSymbol name={meta.icon} size={16} color="#fff" />
+                  </View>
+                  <View style={styles.memberText}>
+                    <ThemedText type="defaultSemiBold" numberOfLines={1}>
+                      {pin.title}
+                    </ThemedText>
+                    <ThemedText numberOfLines={1} style={styles.rowMeta}>
+                      {meta.label}
+                      {meters !== null ? ` · ${formatDistanceMiles(meters)}` : ''}
+                    </ThemedText>
+                  </View>
+                </Pressable>
+              );
+            })}
+            {!loading && atlasPins.length === 0 && <ThemedText style={styles.rowMeta}>No pins yet.</ThemedText>}
+          </View>
+        ) : activeTab === 'marketplace' ? (
+          <View style={styles.section}>
+            <View style={styles.grid}>
+              {listings.map((listing) => (
+                <ListingCard
+                  key={listing.id}
+                  listing={listing}
+                  tunnelUrl={session.hub.tunnelUrl}
+                  token={session.token}
+                  onPress={() => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } })}
+                  style={styles.marketplaceGridCard}
+                />
+              ))}
+            </View>
+            {!loading && listings.length === 0 && <ThemedText style={styles.rowMeta}>Nothing listed yet.</ThemedText>}
+          </View>
+        ) : activeTab === 'initiatives' ? (
+          <View style={styles.section}>
+            {initiatives.map((initiative) => (
+              <InitiativeDiscoverRow key={initiative.id} initiative={initiative} />
+            ))}
+            {!loading && initiatives.length === 0 && (
+              <ThemedText style={styles.rowMeta}>No initiatives yet — anyone in the hub can start one.</ThemedText>
+            )}
+          </View>
         ) : (
           <View style={styles.section}>
             {hubs.map((h) => (
@@ -850,6 +953,7 @@ export default function DiscoverScreen() {
           </View>
         )}
         </ScrollView>
+        )}
       </View>
     </ThemedView>
   );
@@ -987,6 +1091,14 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     rowGap: 12,
+  },
+  // ListingCard has no default width of its own (unlike PostGridCard's
+  // baked-in 48%) since it's normally sized by whatever strip/grid it's
+  // dropped into (see the fixed-width marketplaceCard used for the
+  // horizontal "All" strip) -- this is that same 2-column sizing for the
+  // Marketplace tab's full vertical grid instead.
+  marketplaceGridCard: {
+    width: '48%',
   },
   atlasStrip: {
     gap: 10,

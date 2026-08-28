@@ -26,7 +26,30 @@ const DOMAIN = 'local.';
 // (member_count/online_now/uptime) while this hook stays mounted.
 const HEARTBEAT_REFRESH_MS = 15_000;
 
-type Enrichment = Pick<RegistryHub, 'name' | 'slug' | 'location' | 'description' | 'member_count' | 'online_now' | 'uptime'>;
+type Enrichment = Pick<
+  RegistryHub,
+  | 'name'
+  | 'slug'
+  | 'location'
+  | 'description'
+  | 'member_count'
+  | 'online_now'
+  | 'uptime'
+  | 'tunnel_url'
+  | 'hub_icon_mode'
+  | 'hub_icon_symbol'
+  | 'hub_icon_bg_mode'
+  | 'hub_icon_gradient_from'
+  | 'hub_icon_gradient_to'
+  | 'hub_icon_solid_color'
+  | 'hub_icon_image_file_name'
+>;
+
+// How long a single candidate-address probe gets before moving on to the
+// next one -- keeps a bad first guess (an unreachable Docker/WSL bridge
+// address) from stalling identity enrichment for the platform default
+// fetch timeout (tens of seconds) while other candidates sit untried.
+const CANDIDATE_PROBE_TIMEOUT_MS = 2_500;
 
 /**
  * Maps a resolved mDNS service to the same RegistryHub shape the online
@@ -39,10 +62,25 @@ type Enrichment = Pick<RegistryHub, 'name' | 'slug' | 'location' | 'description'
  * MVP (see citinet-web's hub_wireless_reach_https_bridge work for that,
  * to be layered in later).
  */
+// A hub with multiple network interfaces (Docker bridges, WSL vEthernet
+// adapters, VPNs) advertises every one of them via mDNS -- the OS doesn't
+// tell bonjour-service which address is actually the physical LAN. Only
+// one of these is ever reachable from a phone on the same WiFi, and
+// os.networkInterfaces() ordering (what determines service.addresses'
+// order) isn't a reliability guarantee. So this keeps every dotted-IPv4
+// candidate, not just the first, letting the identity-probe step below try
+// each one and lock onto whichever actually answers.
+function ipv4Candidates(service: Service): string[] {
+  // A service that was found via browse but never successfully resolved
+  // (e.g. iOS's resolveWithTimeout expiring -- NSNetServicesErrorCode
+  // -72007 -- on a flaky network) stays in zeroconf.getServices() with no
+  // addresses at all, not an empty array. Both this and serviceToHub's
+  // fallback below need to tolerate that instead of throwing.
+  return [...new Set((service.addresses ?? []).filter((a) => a.includes('.')))];
+}
+
 function serviceToHub(service: Service): RegistryHub | null {
-  // Prefer an IPv4 address (contains dots) over IPv6 (colons) -- simpler and
-  // more universally reachable for a first connection attempt.
-  const address = service.addresses.find((a) => a.includes('.')) ?? service.addresses[0];
+  const address = ipv4Candidates(service)[0] ?? service.addresses?.[0];
   if (!address) return null;
 
   const slug = typeof service.txt.slug === 'string' && service.txt.slug ? service.txt.slug : service.name;
@@ -77,6 +115,11 @@ export function useNearbyHubs(): RegistryHub[] {
   const [hubs, setHubs] = useState<RegistryHub[]>([]);
   const enrichmentRef = useRef<Map<string, Partial<Enrichment>>>(new Map());
   const identityFetchedRef = useRef<Set<string>>(new Set());
+  // Every dotted-IPv4 candidate mDNS reported for a hub, keyed by that
+  // hub's id (which itself is only ever derived from the first candidate --
+  // see serviceToHub) -- lets the identity probe below try the rest when
+  // the first guess turns out to be a virtual adapter, not the real LAN.
+  const candidatesRef = useRef<Map<string, string[]>>(new Map());
 
   useEffect(() => {
     if (!isNearbyDiscoveryAvailable) {
@@ -95,30 +138,59 @@ export function useNearbyHubs(): RegistryHub[] {
     };
 
     const recompute = () => {
-      const resolved = Object.values(zeroconf.getServices())
+      const services = Object.values(zeroconf.getServices());
+      for (const service of services) {
+        const candidates = ipv4Candidates(service);
+        const hub = serviceToHub(service);
+        if (hub && candidates.length > 0) candidatesRef.current.set(hub.id, candidates);
+      }
+
+      const resolved = services
         .map(serviceToHub)
         .filter((hub): hub is RegistryHub => hub !== null)
         .map((hub) => ({ ...hub, ...enrichmentRef.current.get(hub.id) }));
       setHubs(resolved);
 
       // Layer 2 (identity) -- one-time per hub, real data instead of the
-      // bare TXT-record fallback.
+      // bare TXT-record fallback. Tries every candidate address mDNS
+      // reported for this hub, in order, stopping at the first that
+      // actually answers -- a multi-homed host (Docker/WSL bridges, VPNs)
+      // advertises addresses no phone on the LAN can reach, and nothing
+      // about their order in the mDNS record guarantees the real LAN
+      // address comes first.
       for (const hub of resolved) {
         if (identityFetchedRef.current.has(hub.id)) continue;
         identityFetchedRef.current.add(hub.id);
-        getHubInfo(hub.tunnel_url)
-          .then((info) =>
-            applyEnrichment(hub.id, {
-              name: info.hub_name || hub.name,
-              slug: info.hub_slug || hub.slug,
-              location: info.location,
-              description: info.description,
-              member_count: info.member_count,
-            })
-          )
-          .catch(() => {
-            /* not enriched yet -- row still shows the bare mDNS name */
-          });
+        const port = hub.tunnel_url.split(':').pop();
+        const candidates = candidatesRef.current.get(hub.id) ?? [];
+
+        (async () => {
+          for (const address of candidates) {
+            const tunnelUrl = `http://${address}:${port}`;
+            try {
+              const info = await getHubInfo(tunnelUrl, CANDIDATE_PROBE_TIMEOUT_MS);
+              applyEnrichment(hub.id, {
+                name: info.hub_name || hub.name,
+                slug: info.hub_slug || hub.slug,
+                location: info.location,
+                description: info.description,
+                member_count: info.member_count,
+                tunnel_url: tunnelUrl,
+                hub_icon_mode: info.hub_icon_mode,
+                hub_icon_symbol: info.hub_icon_symbol,
+                hub_icon_bg_mode: info.hub_icon_bg_mode,
+                hub_icon_gradient_from: info.hub_icon_gradient_from,
+                hub_icon_gradient_to: info.hub_icon_gradient_to,
+                hub_icon_solid_color: info.hub_icon_solid_color,
+                hub_icon_image_file_name: info.hub_icon_image_file_name,
+              });
+              return;
+            } catch {
+              /* this candidate didn't answer -- try the next one */
+            }
+          }
+          /* none of the candidates answered -- row still shows the bare mDNS name */
+        })();
       }
     };
 
@@ -128,8 +200,15 @@ export function useNearbyHubs(): RegistryHub[] {
     // already keeps in sync) is simpler and more correct than trying to
     // reverse-map name -> id ourselves.
     zeroconf.on('remove', recompute);
+    // console.warn, not .error -- a single service failing to resolve (e.g.
+    // iOS's resolveWithTimeout expiring on a flaky WiFi<->Ethernet bridge)
+    // is expected and already handled gracefully elsewhere (that hub just
+    // doesn't show up yet). console.error triggers LogBox's full-screen
+    // overlay in dev builds, which doesn't fit an expected, non-fatal,
+    // already-recovered-from condition -- especially since react-native-
+    // zeroconf can re-fire this per unresolved service on every scan retry.
     zeroconf.on('error', (err) => {
-      console.error('[nearbyHubs] zeroconf error', err);
+      console.warn('[nearbyHubs] zeroconf error', err);
     });
 
     zeroconf.scan(SERVICE_TYPE, PROTOCOL, DOMAIN);
@@ -140,7 +219,12 @@ export function useNearbyHubs(): RegistryHub[] {
     const heartbeatTimer = setInterval(() => {
       const current = Object.values(zeroconf.getServices())
         .map(serviceToHub)
-        .filter((hub): hub is RegistryHub => hub !== null);
+        .filter((hub): hub is RegistryHub => hub !== null)
+        // Without this merge, a hub whose first mDNS-reported address
+        // turned out unreachable (see the Layer 2 candidate probe above)
+        // would have its heartbeat polled against that same dead address
+        // forever, since serviceToHub always starts back at candidate zero.
+        .map((hub) => ({ ...hub, ...enrichmentRef.current.get(hub.id) }));
       for (const hub of current) {
         getHubStatus(hub.tunnel_url)
           .then((status) =>

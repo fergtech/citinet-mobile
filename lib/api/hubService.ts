@@ -1,4 +1,4 @@
-import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -99,7 +99,7 @@ export async function getSessionStatus(tunnelUrl: string, token: string): Promis
   return status;
 }
 
-export type HubInfo = {
+export type HubInfo = HubIconFields & {
   hub_name: string;
   hub_slug: string;
   member_count: number;
@@ -115,12 +115,16 @@ export type HubInfo = {
  * letting the user continue, and to confirm/enrich an mDNS-discovered
  * result before listing it as connectable.
  */
-export async function getHubInfo(tunnelUrl: string): Promise<HubInfo> {
+export async function getHubInfo(tunnelUrl: string, timeoutMs?: number): Promise<HubInfo> {
   let res: Response;
+  const controller = timeoutMs ? new AbortController() : undefined;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
   try {
-    res = await fetch(`${tunnelUrl}/api/info`);
+    res = await fetch(`${tunnelUrl}/api/info`, controller ? { signal: controller.signal } : undefined);
   } catch {
     throw new Error("Couldn't reach a hub at that address. Check it's correct and try again.");
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (!res.ok) {
     throw new Error("That doesn't look like a Citinet hub.");

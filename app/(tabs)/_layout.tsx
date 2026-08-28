@@ -7,7 +7,6 @@ import { CreateTabButton } from '@/components/create-tab-button';
 import { HapticTab } from '@/components/haptic-tab';
 import { HubAvatar } from '@/components/hub-avatar';
 import { CustomIcon } from '@/components/ui/custom-icon';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { TabBarBackground } from '@/components/ui/tab-bar-background';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -173,12 +172,7 @@ export default function TabLayout() {
         name="messages"
         options={{
           title: 'Chat',
-          // Same name resolves differently per platform automatically —
-          // components/ui/icon-symbol.ios.tsx renders the real native
-          // SF Symbol "paperplane.fill" here, while icon-symbol.tsx (used
-          // everywhere else) maps it to MaterialIcons' "send" glyph. No
-          // per-platform branching needed at the call site.
-          tabBarIcon: ({ color }) => <IconSymbol size={30} name="paperplane.fill" color={color} />,
+          tabBarIcon: ({ color }) => <CustomIcon size={30} name="satelliteDish" color={color} />,
         }}
       />
       <Tabs.Screen

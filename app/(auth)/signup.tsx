@@ -7,6 +7,7 @@ import { BrandGradient } from '@/components/brand-gradient';
 import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { authCardBackground, authStyles } from '@/constants/auth-styles';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSession } from '@/lib/session/session-context';
@@ -79,8 +80,8 @@ export default function SignupScreen() {
       <ThemedView style={[styles.container, styles.transparentBg]}>
         <AuthBackground />
         <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
-        <View style={styles.centerWrap} pointerEvents="box-none">
-          <View style={[styles.card, { backgroundColor: colorScheme === 'dark' ? 'rgba(21,23,24,0.82)' : 'rgba(255,255,255,0.88)' }]}>
+          {/* Bottom sheet, same shape as hub-select.tsx/login.tsx (authStyles.panel). */}
+          <View style={[authStyles.panel, { backgroundColor: authCardBackground(colorScheme) }]}>
             <View style={styles.identity}>
               <HubIcon
                 hub={hubIcon}
@@ -95,16 +96,16 @@ export default function SignupScreen() {
               <ThemedText style={[styles.subheading, styles.centerText]}>Create an account for this hub.</ThemedText>
             </View>
 
-            <ThemedText style={styles.label}>Display name</ThemedText>
+            <ThemedText style={authStyles.label}>Display name</ThemedText>
             <TextInput
               value={displayName}
               onChangeText={setDisplayName}
               placeholder="How neighbors will see you"
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text }]}
+              style={[authStyles.input, { color: Colors[colorScheme].text }]}
             />
 
-            <ThemedText style={styles.label}>Username</ThemedText>
+            <ThemedText style={authStyles.label}>Username</ThemedText>
             <TextInput
               value={username}
               onChangeText={setUsername}
@@ -112,37 +113,37 @@ export default function SignupScreen() {
               autoCorrect={false}
               placeholder="username"
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text }]}
+              style={[authStyles.input, { color: Colors[colorScheme].text }]}
             />
 
-            <ThemedText style={styles.label}>Password</ThemedText>
+            <ThemedText style={authStyles.label}>Password</ThemedText>
             <TextInput
               value={password}
               onChangeText={setPassword}
               secureTextEntry
               placeholder="At least 10 characters"
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text }]}
+              style={[authStyles.input, { color: Colors[colorScheme].text }]}
             />
 
-            <ThemedText style={styles.label}>Confirm password</ThemedText>
+            <ThemedText style={authStyles.label}>Confirm password</ThemedText>
             <TextInput
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               secureTextEntry
               placeholder="Re-enter your password"
               placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, { color: Colors[colorScheme].text }]}
+              style={[authStyles.input, { color: Colors[colorScheme].text }]}
             />
 
-            {error && <ThemedText style={styles.error}>{error}</ThemedText>}
+            {error && <ThemedText style={authStyles.error}>{error}</ThemedText>}
 
-            <Pressable onPress={handleSubmit} disabled={submitting || !canSubmit} style={[styles.button, { opacity: submitting || !canSubmit ? 0.5 : 1 }]}>
-              <BrandGradient style={styles.buttonFill}>
+            <Pressable onPress={handleSubmit} disabled={submitting || !canSubmit} style={[authStyles.button, styles.buttonMargin, { opacity: submitting || !canSubmit ? 0.5 : 1 }]}>
+              <BrandGradient style={authStyles.buttonFill}>
                 {submitting ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <ThemedText style={styles.buttonLabel} lightColor="#fff" darkColor="#fff">
+                  <ThemedText style={authStyles.buttonLabel} lightColor="#fff" darkColor="#fff">
                     Create account
                   </ThemedText>
                 )}
@@ -153,7 +154,6 @@ export default function SignupScreen() {
               <ThemedText style={styles.backLinkLabel}>Already have an account? Log in</ThemedText>
             </Pressable>
           </View>
-        </View>
       </ThemedView>
     </KeyboardAvoidingView>
   );
@@ -165,21 +165,13 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    paddingHorizontal: 20,
+    justifyContent: 'flex-end',
   },
   transparentBg: {
     backgroundColor: 'transparent',
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-  },
-  centerWrap: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  card: {
-    borderRadius: 20,
-    padding: 20,
   },
   identity: {
     alignItems: 'center',
@@ -198,39 +190,8 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     opacity: 0.7,
   },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    opacity: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: '#8881',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    marginBottom: 18,
-  },
-  error: {
-    color: '#b0392f',
-    marginBottom: 12,
-  },
-  button: {
-    height: 52,
-    borderRadius: 12,
-    overflow: 'hidden',
+  buttonMargin: {
     marginTop: 8,
-  },
-  buttonFill: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  buttonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
   },
   backLink: {
     marginTop: 16,

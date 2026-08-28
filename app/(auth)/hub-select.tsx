@@ -1,13 +1,15 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { AuthBackground } from '@/components/auth-background';
 import { BrandGradient } from '@/components/brand-gradient';
+import { HubDescriptionSheet } from '@/components/hub-description-sheet';
 import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { authCardBackground, authStyles } from '@/constants/auth-styles';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getHubInfo } from '@/lib/api/hubService';
@@ -24,6 +26,7 @@ export default function HubSelectScreen() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [descriptionHub, setDescriptionHub] = useState<RegistryHub | null>(null);
   const nearbyHubs = useNearbyHubs();
 
   const [manualOpen, setManualOpen] = useState(false);
@@ -85,6 +88,13 @@ export default function HubSelectScreen() {
         slug: info.hub_slug,
         location: info.location,
         tunnel_url: tunnelUrl,
+        hub_icon_mode: info.hub_icon_mode,
+        hub_icon_symbol: info.hub_icon_symbol,
+        hub_icon_bg_mode: info.hub_icon_bg_mode,
+        hub_icon_gradient_from: info.hub_icon_gradient_from,
+        hub_icon_gradient_to: info.hub_icon_gradient_to,
+        hub_icon_solid_color: info.hub_icon_solid_color,
+        hub_icon_image_file_name: info.hub_icon_image_file_name,
       });
     } catch (err) {
       setManualError(err instanceof Error ? err.message : "Couldn't reach that address.");
@@ -126,6 +136,14 @@ export default function HubSelectScreen() {
         <View style={styles.rowText}>
           <ThemedText type="defaultSemiBold">{item.name}</ThemedText>
           <ThemedText style={styles.rowMeta}>{hubMetaLine(item)}</ThemedText>
+          {item.description ? (
+            <Pressable onPress={() => setDescriptionHub(item)} style={styles.descriptionRow} hitSlop={6}>
+              <ThemedText style={styles.rowDescription} numberOfLines={1}>
+                {item.description}
+              </ThemedText>
+              <IconSymbol name="info.circle" size={12} color={Colors[colorScheme].icon} />
+            </Pressable>
+          ) : null}
         </View>
         <IconSymbol
           name={selected ? 'checkmark.circle.fill' : 'circle'}
@@ -140,19 +158,14 @@ export default function HubSelectScreen() {
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={[styles.container, styles.transparentBg]}>
         <AuthBackground />
-      {/* A panel, not edge-to-edge, for the same reason login.tsx uses a card:
-          the content underneath is a moving video, not the app's own themed
-          background — rows/text need a stable, opaque-enough surface. Sized to
-          content (not flex: 1) and anchored to the bottom via the container's
-          justifyContent, so with only a few hubs the panel stays compact and
-          the video shows through above it, the same way login's card does —
-          the hub list itself is capped/scrollable so a long list still can't
-          push the panel to fill the screen. */}
-      <View
-        style={[
-          styles.panel,
-          { backgroundColor: colorScheme === 'dark' ? 'rgba(21,23,24,0.86)' : 'rgba(255,255,255,0.9)' },
-        ]}>
+        <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />
+      {/* Bottom sheet, same shape as login.tsx/signup.tsx now (authStyles.panel)
+          — anchored to the bottom via the container's justifyContent, sized to
+          content rather than flex: 1 so a short hub list doesn't stretch the
+          panel to fill the screen. The hub list itself is height-capped/
+          scrollable (styles.listBox) so a long list can't grow it past that
+          either. */}
+      <View style={[authStyles.panel, { backgroundColor: authCardBackground(colorScheme) }]}>
         <ThemedText type="title" style={styles.heading}>
           Find your hub
         </ThemedText>
@@ -176,11 +189,11 @@ export default function HubSelectScreen() {
         onChangeText={setQuery}
         placeholder="Search hubs"
         placeholderTextColor={Colors[colorScheme].icon}
-        style={[styles.searchInput, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
+        style={[authStyles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
       />
 
         {loading && <ActivityIndicator style={styles.spinner} />}
-        {error && <ThemedText style={styles.error}>{error}</ThemedText>}
+        {error && <ThemedText style={authStyles.error}>{error}</ThemedText>}
 
       <ThemedText style={styles.sectionLabel}>Directory</ThemedText>
       <FlatList
@@ -197,9 +210,9 @@ export default function HubSelectScreen() {
       <Pressable
         onPress={handleContinue}
         disabled={!selectedHub}
-        style={[styles.continueButton, { opacity: selectedHub ? 1 : 0.4 }]}>
-        <BrandGradient style={styles.continueFill}>
-          <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
+        style={[authStyles.button, styles.continueButtonMargin, { opacity: selectedHub ? 1 : 0.4 }]}>
+        <BrandGradient style={authStyles.buttonFill}>
+          <ThemedText style={authStyles.buttonLabel} lightColor="#fff" darkColor="#fff">
             Continue
           </ThemedText>
         </BrandGradient>
@@ -220,18 +233,18 @@ export default function HubSelectScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             placeholderTextColor={Colors[colorScheme].icon}
-            style={[styles.searchInput, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
+            style={[authStyles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
           />
-          {manualError && <ThemedText style={styles.error}>{manualError}</ThemedText>}
+          {manualError && <ThemedText style={authStyles.error}>{manualError}</ThemedText>}
           <Pressable
             onPress={handleManualConnect}
             disabled={manualBusy || !manualAddress.trim()}
-            style={[styles.continueButton, { opacity: manualBusy || !manualAddress.trim() ? 0.4 : 1 }]}>
-            <BrandGradient style={styles.continueFill}>
+            style={[authStyles.button, styles.continueButtonMargin, { opacity: manualBusy || !manualAddress.trim() ? 0.4 : 1 }]}>
+            <BrandGradient style={authStyles.buttonFill}>
               {manualBusy ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <ThemedText style={styles.continueLabel} lightColor="#fff" darkColor="#fff">
+                <ThemedText style={authStyles.buttonLabel} lightColor="#fff" darkColor="#fff">
                   Connect
                 </ThemedText>
               )}
@@ -241,6 +254,7 @@ export default function HubSelectScreen() {
       )}
       </View>
       </ThemedView>
+      <HubDescriptionSheet visible={!!descriptionHub} hub={descriptionHub} onClose={() => setDescriptionHub(null)} />
     </KeyboardAvoidingView>
   );
 }
@@ -256,11 +270,8 @@ const styles = StyleSheet.create({
   transparentBg: {
     backgroundColor: 'transparent',
   },
-  panel: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 20,
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
   },
   heading: {
     marginBottom: 4,
@@ -297,20 +308,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 12,
   },
-  searchInput: {
-    backgroundColor: '#8881',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    marginBottom: 12,
-  },
   spinner: {
     marginTop: 24,
-  },
-  error: {
-    color: '#b0392f',
-    marginBottom: 12,
   },
   // Caps how tall the hub list can grow before it scrolls internally — without
   // this a long hub list would keep expanding the panel (flex-sized to
@@ -352,19 +351,18 @@ const styles = StyleSheet.create({
     opacity: 0.6,
     fontSize: 13,
   },
-  continueButton: {
-    height: 52,
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 24,
-  },
-  continueFill: {
-    flex: 1,
+  descriptionRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    marginTop: 2,
   },
-  continueLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+  rowDescription: {
+    flexShrink: 1,
+    opacity: 0.5,
+    fontSize: 12,
+  },
+  continueButtonMargin: {
+    marginBottom: 24,
   },
 });
