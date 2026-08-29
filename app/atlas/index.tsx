@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Keyboard, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Keyboard, Platform, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { LeafletMap } from '@/components/atlas/leaflet-map';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -19,6 +22,16 @@ import { useSession } from '@/lib/session/session-context';
 
 type CategoryFilter = 'all' | AtlasPinCategory;
 
+// Draggable map/list divider — same hand-built gesture-handler/reanimated
+// approach as components/app-drawer.tsx (both already project dependencies).
+// The list itself needs no explicit sizing: it already sits in a flex:1
+// wrapper (styles.listWrap) below the map, search bar, and category chips,
+// so growing/shrinking the map's own height is all that's needed — flexbox
+// gives the list whatever's left automatically.
+const MAP_HEIGHT_MIN = 140; // "list focused" — map still gives geographic context, list does the work
+const MAP_HEIGHT_DEFAULT = 220; // unchanged from the fixed height this replaces
+const DIVIDER_HEIGHT = 22;
+
 // A short, single-line label for a Nominatim result — display_name is a full
 // comma-separated address ("123 Main St, Springfield, ... , USA"), too long
 // for a suggestion row's first line.
@@ -32,6 +45,52 @@ export default function AtlasScreen() {
   const hubCenter = useHubCenter();
   const { isSaved, toggleSaved } = useSavedPins();
   const { saved: savedParam, query: queryParam } = useLocalSearchParams<{ saved?: string; query?: string }>();
+
+  // Draggable map/list divider — 3 snap points (compact/balanced/expanded),
+  // matching Apple/Google Maps' resizable sheet feel. Max is a fraction of
+  // window height, not a fixed pixel value, so it scales sensibly across
+  // phone sizes while still always leaving room below for the header, search
+  // bar, category chips, and a peek of the results list.
+  const { height: windowHeight } = useWindowDimensions();
+  const mapHeightMax = Math.round(windowHeight * 0.72);
+  const mapSnapPoints = useMemo(
+    () => [MAP_HEIGHT_MIN, Math.round((MAP_HEIGHT_MIN + mapHeightMax) / 2), mapHeightMax],
+    [mapHeightMax]
+  );
+  const mapHeight = useSharedValue(MAP_HEIGHT_DEFAULT);
+  const dragStartHeight = useSharedValue(MAP_HEIGHT_DEFAULT);
+
+  function nearestSnapPoint(value: number, points: number[]): number {
+    'worklet';
+    return points.reduce((closest, point) => (Math.abs(point - value) < Math.abs(closest - value) ? point : closest), points[0]);
+  }
+
+  function hapticGrab() {
+    if (Platform.OS === 'ios') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }
+
+  const dividerPan = Gesture.Pan()
+    // Widens the actual hit-test area beyond the thin visible handle — a
+    // gesture-object property, not a plain View prop (RN's View has no
+    // native hitSlop; that's Pressable/Touchable-only).
+    .hitSlop({ top: 10, bottom: 10 })
+    .onStart(() => {
+      dragStartHeight.value = mapHeight.value;
+      runOnJS(hapticGrab)();
+    })
+    .onUpdate((e) => {
+      mapHeight.value = Math.min(mapHeightMax, Math.max(MAP_HEIGHT_MIN, dragStartHeight.value + e.translationY));
+    })
+    .onEnd((e) => {
+      // Slight velocity-aware projection — a fast flick lands on the next
+      // snap point in that direction even if the finger didn't travel all
+      // the way there, same "fling" feel as AppDrawer's own commit logic.
+      const projected = mapHeight.value + e.velocityY * 0.15;
+      const target = nearestSnapPoint(projected, mapSnapPoints);
+      mapHeight.value = withSpring(target, { damping: 22, stiffness: 220 });
+    });
+
+  const mapContainerStyle = useAnimatedStyle(() => ({ height: mapHeight.value }));
 
   const [pins, setPins] = useState<AtlasPin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,15 +108,19 @@ export default function AtlasScreen() {
   // map actually travels to; it's independent from `query` so map position
   // doesn't jump on every keystroke, only on a real pick/submit.
   const { suggestions, showSuggestions, setShowSuggestions } = useGeocodeSuggestions(query, hubCenter);
-  const [searchedLocation, setSearchedLocation] = useState<{ lat: number; lng: number } | null>(null);
+  // `label` is what a tapped-empty-state "Create a pin here" pre-fills as the
+  // new pin's title — the short display name from whichever source resolved
+  // this location (a picked suggestion, the raw typed query, or a ?query=
+  // deep-link), not the full comma-separated Nominatim address.
+  const [searchedLocation, setSearchedLocation] = useState<{ lat: number; lng: number; label: string } | null>(null);
 
   // Clearing the search box resets the map back to its normal all-pins view.
   useEffect(() => {
     if (!query.trim()) setSearchedLocation(null);
   }, [query]);
 
-  function travelTo(lat: number, lng: number) {
-    setSearchedLocation({ lat, lng });
+  function travelTo(lat: number, lng: number, label: string) {
+    setSearchedLocation({ lat, lng, label });
     setShowSuggestions(false);
     Keyboard.dismiss();
   }
@@ -66,7 +129,7 @@ export default function AtlasScreen() {
   // itself is left as typed (not overwritten with the full address), so it
   // keeps working as a plain pin-title filter too.
   function selectSuggestion(result: NominatimResult) {
-    travelTo(parseFloat(result.lat), parseFloat(result.lon));
+    travelTo(parseFloat(result.lat), parseFloat(result.lon), shortLabel(result));
   }
 
   // Enter/submit: reuse the top already-fetched suggestion when there is one
@@ -80,7 +143,9 @@ export default function AtlasScreen() {
       return;
     }
     const coords = await geocodeLocation(q, hubCenter ?? undefined);
-    if (coords) travelTo(coords[0], coords[1]);
+    // geocodeLocation only ever returns coordinates, not a place name — the
+    // typed query itself is the best available title in this path.
+    if (coords) travelTo(coords[0], coords[1], q);
   }
 
   // A generic `?query=` deep-link entry point — e.g. `/atlas?query=<place>` —
@@ -91,11 +156,24 @@ export default function AtlasScreen() {
   // the "couldn't find it" case — but this stays useful as a general
   // deep-link shape into Atlas.)
   useEffect(() => {
-    if (!queryParam?.trim()) return;
-    geocodeLocation(queryParam.trim(), hubCenter ?? undefined).then((coords) => {
-      if (coords) setSearchedLocation({ lat: coords[0], lng: coords[1] });
+    const q = queryParam?.trim();
+    if (!q) return;
+    geocodeLocation(q, hubCenter ?? undefined).then((coords) => {
+      if (coords) setSearchedLocation({ lat: coords[0], lng: coords[1], label: q });
     });
   }, [queryParam, hubCenter]);
+
+  // Deep-links straight into a pre-filled "New pin" — coordinates and title
+  // already known, all that's left is category/description/photo. Same
+  // param shape app/atlas/location.tsx's own "Add this to the Atlas" CTA
+  // already uses, so the editor needs no changes to support this too.
+  function createPinAtSearchedLocation() {
+    if (!searchedLocation) return;
+    router.push({
+      pathname: '/atlas/editor',
+      params: { lat: String(searchedLocation.lat), lng: String(searchedLocation.lng), title: searchedLocation.label },
+    });
+  }
 
   const load = useCallback(() => {
     if (!session) return;
@@ -136,6 +214,7 @@ export default function AtlasScreen() {
     [filtered, hubCenter]
   );
 
+
   const mapCenter = hubCenter ?? DEFAULT_MAP_CENTER;
 
   if (!session) return null;
@@ -163,18 +242,31 @@ export default function AtlasScreen() {
         </View>
       </View>
 
-      <LeafletMap
-        pins={filtered}
-        center={searchedLocation ? [searchedLocation.lat, searchedLocation.lng] : mapCenter}
-        zoom={searchedLocation ? 15 : fallbackMapZoom(hubCenter)}
-        // A searched real-world location takes over from the usual
-        // fit-every-pin view — the whole point of searching is to travel
-        // somewhere specific, not to keep showing every pin at once.
-        fitToPins={!searchedLocation}
-        pendingMarker={searchedLocation ? [searchedLocation.lat, searchedLocation.lng] : null}
-        onMarkerPress={(id) => router.push({ pathname: '/atlas/[id]', params: { id } })}
-        style={styles.map}
-      />
+      <Animated.View style={mapContainerStyle}>
+        <LeafletMap
+          pins={filtered}
+          center={searchedLocation ? [searchedLocation.lat, searchedLocation.lng] : mapCenter}
+          zoom={searchedLocation ? 15 : fallbackMapZoom(hubCenter)}
+          // A searched real-world location takes over from the usual
+          // fit-every-pin view — the whole point of searching is to travel
+          // somewhere specific, not to keep showing every pin at once.
+          fitToPins={!searchedLocation}
+          pendingMarker={searchedLocation ? [searchedLocation.lat, searchedLocation.lng] : null}
+          onMarkerPress={(id) => router.push({ pathname: '/atlas/[id]', params: { id } })}
+          style={styles.mapFill}
+        />
+      </Animated.View>
+
+      {/* Drag to resize the map/list split — 3 snap points (compact/
+          balanced/expanded), same gesture-handler + reanimated approach as
+          components/app-drawer.tsx. The list below needs no explicit
+          resizing of its own: it's already flex:1 (styles.listWrap), so it
+          simply fills whatever the map doesn't take. */}
+      <GestureDetector gesture={dividerPan}>
+        <View style={styles.divider}>
+          <View style={styles.dividerHandle} />
+        </View>
+      </GestureDetector>
 
       <View style={styles.searchRow}>
         <IconSymbol name="magnifyingglass" size={17} color={Colors[colorScheme].icon} />
@@ -206,9 +298,22 @@ export default function AtlasScreen() {
           them, since RN has no reliable cross-platform way for an
           absolutely-positioned child to paint above unrelated later
           siblings without a portal. Same "search state changes what's below
-          it" precedent as Discover's own search results view. */}
+          it" precedent as Discover's own search results view.
+          A ScrollView (not a plain View) capped at maxHeight — a real-world
+          Nominatim result set often runs longer than fits above the
+          keyboard, and a plain View has no way to reveal what's cut off.
+          keyboardDismissMode="on-drag" + keyboardShouldPersistTaps="handled"
+          is the same pair the pin list's own FlatList already uses below:
+          dragging the results dismisses the keyboard (the "touch the list,
+          keyboard gets out of the way" behavior every polished search UI
+          has) while a tap still lands on the row underneath instead of
+          just eating the first tap as a keyboard-dismiss. */}
       {showSuggestions && (
-        <View style={styles.suggestionsBox}>
+        <ScrollView
+          style={styles.suggestionsBox}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          nestedScrollEnabled>
           {suggestions.map((result) => (
             <Pressable key={result.place_id} style={styles.suggestionRow} onPress={() => selectSuggestion(result)}>
               <IconSymbol name="mappin.and.ellipse" size={15} color={Colors[colorScheme].icon} />
@@ -222,7 +327,7 @@ export default function AtlasScreen() {
               </View>
             </Pressable>
           ))}
-        </View>
+        </ScrollView>
       )}
 
       <View style={styles.chipsWrap}>
@@ -296,13 +401,35 @@ export default function AtlasScreen() {
           }}
           ListEmptyComponent={
             !loading ? (
-              <ThemedText style={styles.empty}>
-                {query.trim()
-                  ? 'No pins match your search.'
-                  : savedOnly
-                    ? 'No saved pins yet — tap the bookmark on any pin to save it here.'
-                    : 'No pins yet — be the first to drop one.'}
-              </ThemedText>
+              // A real, geocoded place with nothing pinned there yet is a
+              // create opportunity, not a dead end — same "Add this to the
+              // Atlas" idea as app/atlas/location.tsx's recovery flow, just
+              // reached from a plain empty search result instead of an
+              // unresolved event location. Takes priority over the plain
+              // empty-state text regardless of savedOnly/category filters:
+              // creating a pin here doesn't depend on either.
+              searchedLocation ? (
+                <Pressable style={styles.createHereRow} onPress={createPinAtSearchedLocation}>
+                  <View style={styles.createHereIcon}>
+                    <IconSymbol name="plus" size={18} color="#fff" />
+                  </View>
+                  <View style={styles.rowText}>
+                    <ThemedText type="defaultSemiBold" numberOfLines={1}>
+                      {searchedLocation.label}
+                    </ThemedText>
+                    <ThemedText style={styles.rowMeta}>No pin here yet — tap to create one</ThemedText>
+                  </View>
+                  <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
+                </Pressable>
+              ) : (
+                <ThemedText style={styles.empty}>
+                  {query.trim()
+                    ? 'No pins match your search.'
+                    : savedOnly
+                      ? 'No saved pins yet — tap the bookmark on any pin to save it here.'
+                      : 'No pins yet — be the first to drop one.'}
+                </ThemedText>
+              )
             ) : null
           }
         />
@@ -337,8 +464,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 18,
   },
-  map: {
-    height: 220,
+  mapFill: {
+    flex: 1,
+  },
+  divider: {
+    height: DIVIDER_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dividerHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#8886',
   },
   searchRow: {
     flexDirection: 'row',
@@ -359,6 +497,7 @@ const styles = StyleSheet.create({
   suggestionsBox: {
     marginHorizontal: 20,
     marginTop: 8,
+    maxHeight: 260,
     borderRadius: 10,
     backgroundColor: '#8881',
     overflow: 'hidden',
@@ -433,6 +572,26 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  createHereRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: Brand,
+    backgroundColor: `${Brand}14`,
+  },
+  createHereIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Brand,
   },
   rowText: {
     flex: 1,

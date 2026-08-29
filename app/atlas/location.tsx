@@ -113,6 +113,7 @@ export default function LocationPreviewScreen() {
     setCoords([parseFloat(result.lat), parseFloat(result.lon)]);
     setNotFound(false);
     setShowSuggestions(false);
+    Keyboard.dismiss();
   }
 
   async function handleSubmitManualSearch() {
@@ -250,7 +251,20 @@ export default function LocationPreviewScreen() {
                   />
                 </View>
                 {showSuggestions && (
-                  <View style={styles.suggestionsBox}>
+                  // ScrollView, capped at maxHeight, not a plain View — see
+                  // app/atlas/index.tsx's own note (same useGeocodeSuggestions
+                  // dropdown, same fix): a real result set can run longer
+                  // than what's visible above the keyboard, and being inside
+                  // this screen's own outer ScrollView doesn't help since a
+                  // plain View still just grows to full content height rather
+                  // than becoming independently scrollable. nestedScrollEnabled
+                  // is what lets this inner list scroll on Android instead of
+                  // the outer page stealing the gesture.
+                  <ScrollView
+                    style={styles.suggestionsBox}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    nestedScrollEnabled>
                     {suggestions.map((result) => (
                       <Pressable key={result.place_id} style={styles.suggestionRow} onPress={() => selectSuggestion(result)}>
                         <IconSymbol name="mappin.and.ellipse" size={15} color={Colors[colorScheme].icon} />
@@ -264,7 +278,7 @@ export default function LocationPreviewScreen() {
                         </View>
                       </Pressable>
                     ))}
-                  </View>
+                  </ScrollView>
                 )}
               </View>
             )}
@@ -408,6 +422,7 @@ const styles = StyleSheet.create({
   },
   suggestionsBox: {
     marginTop: 8,
+    maxHeight: 260,
     borderRadius: 10,
     backgroundColor: '#8881',
     overflow: 'hidden',

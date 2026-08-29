@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { StyleProp, StyleSheet, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, View, ViewStyle, type LayoutChangeEvent } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import { AtlasPin, AtlasPinCategory } from '@/lib/api/types';
@@ -134,6 +134,7 @@ export function LeafletMap({
 }) {
   const webviewRef = useRef<WebView>(null);
   const readyRef = useRef(false);
+  const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const markerData: MarkerData[] = useMemo(
     () =>
@@ -150,6 +151,22 @@ export function LeafletMap({
   function inject(js: string) {
     webviewRef.current?.injectJavaScript(`${js}; true;`);
   }
+
+  // Leaflet caches the pixel size it measured at init — a container resize
+  // (e.g. Atlas's draggable map/list divider) leaves it drawing at the old
+  // size until told otherwise via invalidateSize(). Debounced rather than
+  // injected on every single layout event: a drag gesture can commit a new
+  // RN layout on every animation frame, and firing across the WebView bridge
+  // that often would be needless overhead for a resize that's still settling.
+  function handleLayout(_e: LayoutChangeEvent) {
+    if (!readyRef.current) return;
+    if (invalidateTimerRef.current) clearTimeout(invalidateTimerRef.current);
+    invalidateTimerRef.current = setTimeout(() => inject('map.invalidateSize()'), 120);
+  }
+
+  useEffect(() => () => {
+    if (invalidateTimerRef.current) clearTimeout(invalidateTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!readyRef.current) return;
@@ -195,20 +212,23 @@ export function LeafletMap({
   }
 
   return (
-    <WebView
-      ref={webviewRef}
-      source={{ html: HTML }}
-      onMessage={handleMessage}
-      style={[styles.webview, style]}
-      originWhitelist={['*']}
-      javaScriptEnabled
-      domStorageEnabled={false}
-    />
+    <View style={style} onLayout={handleLayout}>
+      <WebView
+        ref={webviewRef}
+        source={{ html: HTML }}
+        onMessage={handleMessage}
+        style={styles.webview}
+        originWhitelist={['*']}
+        javaScriptEnabled
+        domStorageEnabled={false}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   webview: {
+    flex: 1,
     backgroundColor: '#e5e7eb',
   },
 });
