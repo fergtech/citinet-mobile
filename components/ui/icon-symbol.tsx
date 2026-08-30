@@ -129,6 +129,9 @@ const MAPPING = {
   'dot.radiowaves.left.and.right': 'sensors',
   'paperclip': 'attach-file',
   'info.circle': 'info',
+  // Folders (files' folder-organization feature)
+  'folder.fill': 'folder',
+  'folder.badge.plus': 'create-new-folder',
 } as IconMapping;
 
 /**

@@ -492,12 +492,29 @@ export type HubFile = {
   is_public: boolean;
   web_public: boolean;
   uploaded_at: string;
+  // Folder this file lives in — null/undefined means the dashboard root.
+  folder_id?: string | null;
 };
 
 // The three-tier shape this app already uses for Notes (is_public/
 // is_web_public) — PATCH /api/files/:filename takes this exact field name
 // and derives is_public/web_public server-side itself.
 export type FileVisibility = 'private' | 'hub' | 'web';
+
+// A folder in the Files dashboard's folder hierarchy. Matches GET/POST
+// /api/folders' real SELECT/RETURNING lists (hub_folders table) — folders
+// are hub-wide (visible to every member), one level of drill-down today via
+// parent_folder_id, with deeper nesting already supported server-side.
+export type HubFolder = {
+  id: string;
+  name: string;
+  color: string;
+  parent_folder_id: string | null;
+  owner_id?: string;
+  file_count: number;
+  created_at?: string;
+  updated_at?: string;
+};
 
 // ── Initiatives ──────────────────────────────────────────────────────
 // Field shapes below started as inferences from the mobile design handoff

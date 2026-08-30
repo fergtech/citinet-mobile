@@ -1,4 +1,4 @@
-import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -942,14 +942,16 @@ export async function uploadFile(
   tunnelUrl: string,
   token: string,
   file: { uri: string; name: string; type: string },
-  isPublic = false
+  isPublic = false,
+  folderId?: string | null
 ): Promise<UploadedFile> {
   const form = new FormData();
   // RN's FormData accepts this { uri, name, type } shape directly; it isn't
   // a real Blob/File, but fetch on RN knows how to stream it from the uri.
   form.append('file', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
 
-  const res = await fetch(`${tunnelUrl}/api/files?is_public=${isPublic}`, {
+  const folderQuery = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : '';
+  const res = await fetch(`${tunnelUrl}/api/files?is_public=${isPublic}${folderQuery}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: form,
@@ -975,11 +977,13 @@ export function uploadFileWithProgress(
   token: string,
   file: { uri: string; name: string; type: string },
   isPublic: boolean,
-  onProgress: (percent: number) => void
+  onProgress: (percent: number) => void,
+  folderId?: string | null
 ): Promise<UploadedFile> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${tunnelUrl}/api/files?is_public=${isPublic}`);
+    const folderQuery = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : '';
+    xhr.open('POST', `${tunnelUrl}/api/files?is_public=${isPublic}${folderQuery}`);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
@@ -1101,6 +1105,62 @@ export async function setFileVisibility(
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't update that file's visibility."));
   }
+}
+
+// Move a file into a folder, or back to the dashboard root (folderId: null).
+// PATCH /api/files/{filename} — same route as setFileVisibility, keyed by name.
+export async function moveFileToFolder(
+  tunnelUrl: string,
+  token: string,
+  fileName: string,
+  folderId: string | null
+): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/files/${encodeURIComponent(fileName)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder_id: folderId }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't move that file."));
+  }
+}
+
+// List child folders of a given parent (null/undefined = dashboard root).
+// GET /api/folders?parent_id=<uuid>
+export async function listFolders(tunnelUrl: string, token: string, parentId?: string | null): Promise<HubFolder[]> {
+  const query = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : '';
+  const res = await fetch(`${tunnelUrl}/api/folders${query}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load folders."));
+  }
+  const data = await res.json();
+  const raw: HubFolder[] = Array.isArray(data.folders) ? data.folders : [];
+  // file_count comes back as a Postgres COUNT(*) — a string, same BIGINT
+  // deserialization quirk as size_bytes elsewhere in this file.
+  return raw.map((f) => ({ ...f, file_count: Number(f.file_count) || 0 }));
+}
+
+// Create a folder, optionally nested under a parent folder.
+// POST /api/folders
+export async function createFolder(
+  tunnelUrl: string,
+  token: string,
+  name: string,
+  color: string,
+  parentFolderId?: string | null
+): Promise<HubFolder> {
+  const res = await fetch(`${tunnelUrl}/api/folders`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, color, parent_folder_id: parentFolderId || null }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't create that folder."));
+  }
+  const folder = await res.json();
+  return { ...folder, file_count: Number(folder.file_count) || 0 };
 }
 
 // ── Marketplace ─────────────────────────────────────────────────────────

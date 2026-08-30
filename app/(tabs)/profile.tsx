@@ -75,9 +75,9 @@ export default function ProfileScreen() {
             will join this group later) — kept separate from Settings below,
             same grouping treatment as the "Leave hub" section. */}
         <View style={styles.section}>
-          <Pressable onPress={() => router.push('/files' as Href)} style={styles.row}>
+          <Pressable onPress={() => router.push({ pathname: '/files', params: { tab: 'mine' } } as Href)} style={styles.row}>
             <IconSymbol name="externaldrive.fill" size={20} color={Colors[colorScheme].icon} />
-            <ThemedText style={styles.rowLabel}>Files</ThemedText>
+            <ThemedText style={styles.rowLabel}>Your files</ThemedText>
             <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
           </Pressable>
           <Pressable onPress={() => router.push('/notes' as Href)} style={styles.row}>

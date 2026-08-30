@@ -39,7 +39,7 @@ const EXT_FOR_MIME: Record<string, string> = {
 export default function UploadFileScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
-  const { from } = useLocalSearchParams<{ from?: string }>();
+  const { from, folderId, folderName } = useLocalSearchParams<{ from?: string; folderId?: string; folderName?: string }>();
   const fromComposeLauncher = from === 'compose';
 
   const [picked, setPicked] = useState<PickedFile | null>(null);
@@ -89,7 +89,8 @@ export default function UploadFileScreen() {
         session.token,
         { uri: picked.uri, name: picked.name, type: picked.mimeType },
         visibility !== 'private',
-        setProgress
+        setProgress,
+        folderId ?? null
       );
       if (visibility === 'web') {
         await setFileVisibility(session.hub.tunnelUrl, session.token, uploaded.file_name, 'web');
@@ -142,6 +143,12 @@ export default function UploadFileScreen() {
           </View>
         ) : (
           <>
+            {folderId && (
+              <View style={styles.folderBanner}>
+                <IconSymbol name="folder.fill" size={15} color={Colors[colorScheme].icon} />
+                <ThemedText style={styles.folderBannerText}>Uploading into “{folderName || 'this folder'}”</ThemedText>
+              </View>
+            )}
             <View style={styles.pickerRow}>
               <Pressable onPress={handlePickMedia} style={[styles.pickerButton, styles.pickerButtonHalf]}>
                 <IconSymbol name="photo" size={18} color={Colors[colorScheme].icon} />
@@ -251,6 +258,20 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: Brand,
     borderRadius: 4,
+  },
+  folderBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#8881',
+  },
+  folderBannerText: {
+    fontSize: 12.5,
+    opacity: 0.75,
   },
   pickerRow: {
     flexDirection: 'row',

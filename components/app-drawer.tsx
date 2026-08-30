@@ -64,7 +64,7 @@ function CitinetWordmark() {
 
   return (
     <Animated.Text style={[styles.logoLabel, animatedStyle]} accessibilityRole="header">
-      citinet
+      [citinet]
     </Animated.Text>
   );
 }
@@ -83,7 +83,7 @@ function CitinetWordmark() {
  * a full-screen modal like call setup.
  *
  * Holds only destinations that don't already have bottom-tab real estate
- * (Atlas, Initiatives, Events, Discussions, About) -- Home/Discover/Messages/
+ * (Atlas, Initiatives, Events, Discussions, Files, About) -- Home/Discover/Messages/
  * Profile staying out of here is deliberate, so this doesn't become a
  * second, redundant navigation surface. "About" opens CitinetAboutModal
  * (about Citinet itself, not this hub) instead of a route -- there's no
@@ -187,6 +187,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
         <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Initiatives" onPress={() => go('/initiatives')} />
         <DrawerRow icon={<IconSymbol name="calendar" size={26} color={rowColor} />} label="Events" onPress={() => go('/events')} />
         <DrawerRow icon={<CustomIcon name="commentDots" size={26} color={rowColor} />} label="Discussions" onPress={() => go('/feed')} />
+        <DrawerRow icon={<IconSymbol name="folder.fill" size={26} color={rowColor} />} label="Files" onPress={() => go('/files')} />
         <View style={styles.divider} />
         <DrawerRow
           icon={<CustomIcon name="citinetLogo" size={26} color={rowColor} />}

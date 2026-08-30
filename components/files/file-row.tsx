@@ -22,6 +22,7 @@ export function FileRow({
   token,
   onPress,
   onToggleStar,
+  onMove,
 }: {
   file: HubFile;
   starred: boolean;
@@ -29,6 +30,9 @@ export function FileRow({
   token: string;
   onPress: () => void;
   onToggleStar: () => void;
+  // Owner-only "move to folder" action — omitted entirely when there's
+  // nowhere to move this file to/from (see app/files/index.tsx's canMove).
+  onMove?: () => void;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
   const kind = fileKind(file.file_name, file.mime_type);
@@ -65,6 +69,11 @@ export function FileRow({
           </View>
         </View>
       </Pressable>
+      {onMove && (
+        <Pressable onPress={onMove} hitSlop={12} style={styles.starButton} accessibilityLabel="Move to folder">
+          <IconSymbol name="folder.fill" size={17} color={Colors[colorScheme].icon} />
+        </Pressable>
+      )}
       <Pressable onPress={onToggleStar} hitSlop={12} style={styles.starButton} accessibilityLabel={starred ? 'Unstar' : 'Star'}>
         <IconSymbol name={starred ? 'star.fill' : 'star'} size={18} color={starred ? Brand : Colors[colorScheme].icon} />
       </Pressable>
