@@ -30,13 +30,10 @@ type Props = {
   onToggleLike: (post: HubPost) => void;
   onVotePoll: (post: HubPost, optionIndex: number) => void;
   onToggleRsvp: (post: HubPost) => void;
-  // Experiment (Home's Events section, for now): drops the avatar+name
-  // header entirely and moves attribution to a small "@username · time"
-  // byline near the bottom, above the RSVP/like/comment row — mirrors how
-  // FeaturedCarousel already attributes its cards. Opt-in so every other
-  // PostRow usage (Discussions, Feed, the standalone Events screen) keeps
-  // the current header treatment until/unless this lands well enough to
-  // extend further.
+  // Both treatments now sit in the same spot — just above the timestamp,
+  // below the post content — differing only in avatar size and the "@"
+  // prefix. compactAuthor is the smaller, denser byline used where a post
+  // is a preview among other content (e.g. Home's Feed section).
   compactAuthor?: boolean;
 };
 
@@ -51,15 +48,6 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
 
   return (
     <Pressable style={styles.row} onPress={() => router.push({ pathname: '/post/[id]', params: { id: post.id } })}>
-      {!compactAuthor && (
-        <Pressable style={styles.header} onPress={handleAuthorPress}>
-          <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={36} />
-          <View style={styles.headerText}>
-            <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
-            
-          </View>
-        </Pressable>
-      )}
       {post.category === 'EVENT' && post.event_date && (
         <View style={styles.eventLine}>
           <IconSymbol name="calendar" size={13} color={Brand} />
@@ -87,33 +75,42 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
       {post.category === 'EVENT' && post.event_location && (
         <EventAtlasLink location={post.event_location} eventTitle={post.title} eventId={post.id} />
       )}
-      {compactAuthor && (
-        <Pressable onPress={handleAuthorPress} hitSlop={6} style={styles.compactAuthorWrap}>
-          <ThemedText style={styles.compactAuthor}>
-            @{post.author_username ?? 'citinet'} · {timeAgo(post.created_at)}
-          </ThemedText>
-        </Pressable>
-      )}
       {post.category === 'EVENT' && <EventRsvpButton post={post} onToggle={onToggleRsvp} />}
-      <ThemedText style={styles.meta}>
-        {/*{post.category.charAt(0) + post.category.slice(1).toLowerCase()} · */}{timeAgo(post.created_at)}
-      </ThemedText>
-      <View style={styles.footer}>
-        <Pressable
-          onPress={(e) => {
-            e.stopPropagation();
-            onToggleLike(post);
-          }}
-          style={styles.likeButton}
-          hitSlop={8}>
-          <IconSymbol
-            name={post.my_liked ? 'heart.fill' : 'heart'}
-            size={18}
-            color={post.my_liked ? '#d1465f' : Colors[colorScheme].icon}
-          />
-          <ThemedText style={styles.meta}>{post.like_count}</ThemedText>
-        </Pressable>
-        <ThemedText style={styles.meta}>💬 {post.reply_count}</ThemedText>
+      <View style={styles.metaRow}>
+        {compactAuthor ? (
+          <Pressable onPress={handleAuthorPress} hitSlop={6} style={styles.compactHeader}>
+            <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={24} />
+            <View style={styles.headerText}>
+              <ThemedText style={styles.compactAuthor}>@{post.author_username ?? 'citinet'}</ThemedText>
+              <ThemedText style={styles.meta}>{timeAgo(post.created_at)}</ThemedText>
+            </View>
+          </Pressable>
+        ) : (
+          <Pressable onPress={handleAuthorPress} style={styles.header}>
+            <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={30} />
+            <View style={styles.headerText}>
+              <ThemedText style={styles.authorName}>{post.author_username ?? 'Citinet'}</ThemedText>
+              <ThemedText style={styles.meta}>{timeAgo(post.created_at)}</ThemedText>
+            </View>
+          </Pressable>
+        )}
+        <View style={styles.footer}>
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              onToggleLike(post);
+            }}
+            style={styles.likeButton}
+            hitSlop={8}>
+            <IconSymbol
+              name={post.my_liked ? 'heart.fill' : 'heart'}
+              size={18}
+              color={post.my_liked ? '#d1465f' : Colors[colorScheme].icon}
+            />
+            <ThemedText style={styles.meta}>{post.like_count}</ThemedText>
+          </Pressable>
+          <ThemedText style={styles.meta}>💬 {post.reply_count}</ThemedText>
+        </View>
       </View>
     </Pressable>
   );
@@ -129,11 +126,15 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
+    alignSelf: 'flex-start',
   },
   headerText: {
-    flex: 1,
-    gap: 2,
+    gap: 1,
+  },
+  authorName: {
+    fontSize: 13.5,
+    fontWeight: '600',
   },
   meta: {
     opacity: 0.6,
@@ -158,18 +159,25 @@ const styles = StyleSheet.create({
   mediaWrap: {
     marginTop: 4,
   },
-  compactAuthorWrap: {
+  compactHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     alignSelf: 'flex-start',
   },
   compactAuthor: {
     fontSize: 12.5,
-    opacity: 0.6,
+    fontWeight: '600',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 20,
-    marginTop: 4,
   },
   likeButton: {
     flexDirection: 'row',

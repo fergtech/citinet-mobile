@@ -725,7 +725,7 @@ export default function HomeScreen() {
     key: 'discussions',
     latestAt: latestPost ? new Date(latestPost.created_at).getTime() : 0,
     node: (
-      <View style={styles.section} key="discussions">
+      <View style={styles.feedSection} key="discussions">
         <ThemedText style={styles.sectionLabel}>Feed</ThemedText>
         {latestPost && (
           <PostRow
@@ -857,6 +857,12 @@ const styles = StyleSheet.create({
   },
   section: {
     paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  // Narrower than `section` — Feed's PostRow content (body text, media) benefits
+  // from the extra width more than the other home sections do.
+  feedSection: {
+    paddingHorizontal: 10,
     marginBottom: 24,
   },
   // Closes off a section's content the same way PostRow's own

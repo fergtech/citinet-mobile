@@ -104,11 +104,11 @@ const styles = StyleSheet.create({
   },
   error: {
     color: '#b0392f',
-    paddingHorizontal: 20,
+    paddingHorizontal: 10,
     marginBottom: 12,
   },
   list: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 10,
     paddingBottom: 24,
   },
   empty: {

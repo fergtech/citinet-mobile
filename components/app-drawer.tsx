@@ -64,7 +64,7 @@ function CitinetWordmark() {
 
   return (
     <Animated.Text style={[styles.logoLabel, animatedStyle]} accessibilityRole="header">
-      citinet.
+      citinet
     </Animated.Text>
   );
 }

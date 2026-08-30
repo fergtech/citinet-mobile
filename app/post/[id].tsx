@@ -301,22 +301,6 @@ export default function PostDetailScreen() {
             )}
             ListHeaderComponent={
               <View style={styles.postSection}>
-                <Pressable
-                  style={styles.commentRow}
-                  onPress={() => goToProfile(post.author_id, session.userId)}>
-                  <HubAvatar
-                    userId={post.author_id}
-                    displayName={post.author_username ?? '?'}
-                    tunnelUrl={session.hub.tunnelUrl}
-                    size={38}
-                  />
-                  <View style={styles.commentBody}>
-                    <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
-                    <ThemedText style={styles.rowMeta}>
-                      {post.category.charAt(0) + post.category.slice(1).toLowerCase()} · {timeAgo(post.created_at)}
-                    </ThemedText>
-                  </View>
-                </Pressable>
                 {post.category === 'EVENT' && post.event_date && (
                   <View style={styles.eventLine}>
                     <IconSymbol name="calendar" size={14} color={Brand} />
@@ -372,6 +356,25 @@ export default function PostDetailScreen() {
                     )}
                   </View>
                 )}
+                <Pressable
+                  style={styles.postAuthorRow}
+                  onPress={() => goToProfile(post.author_id, session.userId)}>
+                  <View style={styles.postAuthorLeft}>
+                    <HubAvatar
+                      userId={post.author_id}
+                      displayName={post.author_username ?? '?'}
+                      tunnelUrl={session.hub.tunnelUrl}
+                      size={38}
+                    />
+                    <View style={styles.postAuthorNameRow}>
+                      <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
+                      <ThemedText style={styles.rowMeta}>· {timeAgo(post.created_at)}</ThemedText>
+                    </View>
+                  </View>
+                  <ThemedText style={styles.rowMeta}>
+                    {post.category.charAt(0) + post.category.slice(1).toLowerCase()}
+                  </ThemedText>
+                </Pressable>
                 <View style={styles.postFooter}>
                   <Pressable onPress={handleToggleLike} style={styles.likeButton} hitSlop={8}>
                     <IconSymbol
@@ -458,7 +461,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     paddingTop: 56,
     paddingBottom: 12,
   },
@@ -467,11 +470,11 @@ const styles = StyleSheet.create({
   },
   error: {
     color: '#b0392f',
-    paddingHorizontal: 20,
+    paddingHorizontal: 10,
     marginBottom: 12,
   },
   list: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 10,
     paddingBottom: 24,
   },
   postSection: {
@@ -485,6 +488,22 @@ const styles = StyleSheet.create({
   commentBody: {
     flex: 1,
     gap: 2,
+  },
+  postAuthorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  postAuthorLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  postAuthorNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   // The border-left is the thread connector line — offset to roughly align
   // with the avatar column above it, so a reply visibly hangs off its parent
@@ -604,7 +623,7 @@ const styles = StyleSheet.create({
   composer: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#8884',
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     paddingTop: 8,
     paddingBottom: Platform.OS === 'ios' ? 8 : 16,
   },
