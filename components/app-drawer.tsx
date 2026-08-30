@@ -11,7 +11,6 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,6 +27,7 @@ const EDGE_WIDTH = 24; // only this strip at the physical left edge can start op
 const DRAWER_WIDTH = 280;
 const COMMIT_RATIO = 0.4;
 const FLING_VELOCITY = 800;
+const SETTLE_DURATION_MS = 240;
 
 // Same trio as components/ambient-glow.tsx's ORBS — reused here (rather than
 // the blue/purple/cyan/teal/pink first floated) so the wordmark pulls from
@@ -64,7 +64,7 @@ function CitinetWordmark() {
 
   return (
     <Animated.Text style={[styles.logoLabel, animatedStyle]} accessibilityRole="header">
-      [citinet]
+      citinet.
     </Animated.Text>
   );
 }
@@ -83,7 +83,7 @@ function CitinetWordmark() {
  * a full-screen modal like call setup.
  *
  * Holds only destinations that don't already have bottom-tab real estate
- * (Atlas, Initiatives, Events, Discussions, Files, About) -- Home/Discover/Messages/
+ * (Atlas, Initiatives, Events, Feed, Files, About) -- Home/Discover/Messages/
  * Profile staying out of here is deliberate, so this doesn't become a
  * second, redundant navigation surface. "About" opens CitinetAboutModal
  * (about Citinet itself, not this hub) instead of a route -- there's no
@@ -104,14 +104,19 @@ export function AppDrawer({ children }: { children: ReactNode }) {
     setOpen(next);
   }
 
+  // withTiming + a plain ease-out, not withSpring -- a spring here (even a
+  // fairly damped one) still overshoots past its target and settles back,
+  // which read as the whole drawer "rocking"/shaking briefly after opening.
+  // A timing curve reaches DRAWER_WIDTH/0 once and stops, so open and close
+  // both read as one smooth slide with no bounce-back.
   function settle(next: boolean) {
     'worklet';
-    translateX.value = withSpring(next ? DRAWER_WIDTH : 0, { damping: 22, stiffness: 220 });
+    translateX.value = withTiming(next ? DRAWER_WIDTH : 0, { duration: SETTLE_DURATION_MS, easing: Easing.out(Easing.cubic) });
     runOnJS(setOpenJS)(next);
   }
 
   function close() {
-    translateX.value = withSpring(0, { damping: 22, stiffness: 220 });
+    translateX.value = withTiming(0, { duration: SETTLE_DURATION_MS, easing: Easing.out(Easing.cubic) });
     setOpenJS(false);
   }
 
@@ -186,11 +191,11 @@ export function AppDrawer({ children }: { children: ReactNode }) {
         <DrawerRow icon={<CustomIcon name="landLayerLocation" size={26} color={rowColor} />} label="Atlas" onPress={() => go('/atlas')} />
         <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Initiatives" onPress={() => go('/initiatives')} />
         <DrawerRow icon={<IconSymbol name="calendar" size={26} color={rowColor} />} label="Events" onPress={() => go('/events')} />
-        <DrawerRow icon={<CustomIcon name="commentDots" size={26} color={rowColor} />} label="Discussions" onPress={() => go('/feed')} />
+        <DrawerRow icon={<CustomIcon name="feedGlyph" size={26} color={rowColor} />} label="Feed" onPress={() => go('/feed')} />
         <DrawerRow icon={<IconSymbol name="folder.fill" size={26} color={rowColor} />} label="Files" onPress={() => go('/files')} />
         <View style={styles.divider} />
         <DrawerRow
-          icon={<CustomIcon name="citinetLogo" size={26} color={rowColor} />}
+          icon={<IconSymbol name="info.circle" size={26} color={rowColor} />}
           label="About"
           onPress={() => {
             close();

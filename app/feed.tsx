@@ -70,7 +70,7 @@ export default function FeedScreen() {
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title="Discussions" />
+      <ScreenHeader title="Feed" />
       {loading && posts.length === 0 && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
       <FlatList

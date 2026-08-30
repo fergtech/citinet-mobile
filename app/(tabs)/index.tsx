@@ -726,7 +726,7 @@ export default function HomeScreen() {
     latestAt: latestPost ? new Date(latestPost.created_at).getTime() : 0,
     node: (
       <View style={styles.section} key="discussions">
-        <ThemedText style={styles.sectionLabel}>Discussions</ThemedText>
+        <ThemedText style={styles.sectionLabel}>Feed</ThemedText>
         {latestPost && (
           <PostRow
             post={latestPost}

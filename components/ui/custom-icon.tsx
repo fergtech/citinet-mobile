@@ -59,6 +59,14 @@ import Svg, { Path } from 'react-native-svg';
 // pass as every other icon here — this pathData needed zero adjustment,
 // it was already an exact match.
 //
+// "feedGlyph" (replaces the app drawer's Feed row's "commentDots", from when
+// that row was still labeled "Discussions") is lifted verbatim from
+// citinet-web's own FeedGlyph (src/app/components/icons.tsx) — the icon its
+// sidebar/bottom-dock nav already uses for the same destination, so the two
+// clients now share one glyph for it. Already a 0-24 viewBox, no rescale
+// needed. Three subpaths: a wide top block, a wide bottom block, and a
+// narrow full-height left column — reads as a stacked news/article layout.
+//
 // "citinetLogo" (replaces the app drawer's About row IconSymbol
 // "info.circle") is hand-authored, not lifted — H:\Apps\custom-icons\
 // apple-touch-icon.svg turned out to be a raster PNG (the same "C" mark
@@ -90,6 +98,7 @@ export const ICON_PATHS = {
     'M24,12c0,6.62-5.38,12-12,12S0,18.62,0,12,5.38,0,12,0c.19,0,.38,0,.57,.01,.83,.04,1.47,.74,1.43,1.57-.04,.83-.72,1.45-1.57,1.43-.14,0-.29-.01-.43-.01C7.04,3,3,7.04,3,12s4.04,9,9,9,9-4.04,9-9c0-.14,0-.29-.01-.43-.04-.83,.6-1.53,1.43-1.57,.85-.03,1.53,.6,1.57,1.43,0,.19,.01,.38,.01,.57Zm-13.09-3.85c.8-.23,1.26-1.05,1.04-1.85s-1.06-1.26-1.85-1.04c-3,.85-5.09,3.62-5.09,6.74,0,3.86,3.14,7,7,7,3.12,0,5.89-2.09,6.74-5.09,.23-.8-.24-1.63-1.04-1.85-.8-.23-1.63,.24-1.85,1.04-.48,1.71-2.07,2.91-3.85,2.91-2.21,0-4-1.79-4-4,0-1.78,1.2-3.37,2.91-3.85Zm.03,2.79c-.59,.59-.59,1.54,0,2.12,.29,.29,.68,.44,1.06,.44s.77-.15,1.06-.44l5.06-5.06h2.38c.4,0,.78-.16,1.06-.44l2-2c.43-.43,.56-1.07,.33-1.63-.23-.56-.78-.93-1.39-.93h-1.5V1.5c0-.61-.37-1.15-.93-1.39-.56-.23-1.21-.1-1.63,.33l-2,2c-.28,.28-.44,.66-.44,1.06v2.38l-5.06,5.06Z',
   commentDots:
     'm12,0C5.383,0,0,5.383,0,12s5.383,12,12,12h12v-12C24,5.383,18.617,0,12,0Zm11,23h-11c-6.065,0-11-4.935-11-11S5.935,1,12,1s11,4.935,11,11v11Zm-10-11c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Zm5,0c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Zm-10,0c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Z',
+  feedGlyph: 'M7,2h14c1.654,0,3,1.346,3,3v6H7V2Zm0,11v9H24V13H7ZM5,2H3C1.346,2,0,3.346,0,5V22H5V2Z',
   citinetLogo:
     'M21,6 A10,10 0 1 0 21,18 A1.54,1.54 0 0 0 18.5,16.2 A7,7 0 1 1 18.5,7.8 A1.54,1.54 0 0 0 21,6 Z M8.6,13.8 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0 M11.9,12 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0 M15.2,10.2 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0',
 } as const;

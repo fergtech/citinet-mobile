@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Keyboard, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Keyboard, Modal, Pressable, ScrollView, StyleSheet, TextInput, View, type NativeSyntheticEvent, type NativeScrollEvent } from 'react-native';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 
 import { ActionSheet, type ActionSheetOption } from '@/components/action-sheet';
@@ -11,8 +13,8 @@ import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { createFolder, listFiles, listFolders, listMembers, moveFileToFolder } from '@/lib/api/hubService';
-import { HubFile, HubFolder, HubMember } from '@/lib/api/types';
-import { formatBytes } from '@/lib/files/kind';
+import { HubFile, HubFolder, HubMember, type FileKind } from '@/lib/api/types';
+import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
 import { useStarredFiles } from '@/lib/files/starred-files';
 import { useSession } from '@/lib/session/session-context';
 
@@ -21,6 +23,13 @@ type SortKey = 'recent' | 'name' | 'size';
 
 const NEXT_SORT: Record<SortKey, SortKey> = { recent: 'name', name: 'size', size: 'recent' };
 const SORT_LABEL: Record<SortKey, string> = { recent: 'Recent', name: 'Name', size: 'Size' };
+
+// Same order FILE_KIND_META is declared in — deliberate (pdf/doc/sheet/slides
+// grouped as "documents", then media, then archive/other last).
+const KIND_ORDER = Object.keys(FILE_KIND_META) as FileKind[];
+
+// How far down the list has to scroll before the "back to top" FAB appears.
+const SCROLL_TOP_THRESHOLD = 280;
 
 // Solid representative colors for each folder color key — matches the set
 // citinet web offers when creating a folder (hub_folders.color is a shared
@@ -38,8 +47,11 @@ const FOLDER_COLOR_KEYS = Object.keys(FOLDER_COLORS);
 
 export default function FilesListScreen() {
   const colorScheme = useColorScheme() ?? 'light';
+  const insets = useSafeAreaInsets();
   const { session } = useSession();
   const { isStarred, toggleStarred } = useStarredFiles();
+  const listRef = useRef<FlatList>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   // Home's "Latest upload" preview only surfaces is_public/web_public files
   // (see index.tsx's latestPublicFile), so its "See all" deep-links straight
   // into the matching Shared tab instead of dropping the viewer on All.
@@ -53,6 +65,7 @@ export default function FilesListScreen() {
   const [tab, setTab] = useState<FilterTab>(() =>
     initialTab === 'mine' || initialTab === 'shared' || initialTab === 'starred' ? initialTab : 'all'
   );
+  const [kindFilter, setKindFilter] = useState<FileKind | null>(null);
   const [sort, setSort] = useState<SortKey>('recent');
 
   // ── folders ──────────────────────────────────────────────────────────────
@@ -95,6 +108,22 @@ export default function FilesListScreen() {
 
   useEffect(fetchFolders, [fetchFolders]);
 
+  // Jumping between folders (breadcrumb/folder tap) starts the new list at
+  // the top rather than leaving it at whatever offset the previous folder's
+  // list happened to be scrolled to.
+  useEffect(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+    setShowScrollTop(false);
+  }, [currentFolderId]);
+
+  const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    setShowScrollTop(e.nativeEvent.contentOffset.y > SCROLL_TOP_THRESHOLD);
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+
   const uploaderName = useCallback(
     (ownerId: string) => members.get(ownerId)?.display_name || members.get(ownerId)?.username || '',
     [members]
@@ -118,12 +147,14 @@ export default function FilesListScreen() {
       next = next.filter((f) => f.file_name.toLowerCase().includes(q) || uploaderName(f.owner_id).toLowerCase().includes(q));
     }
 
+    if (kindFilter) next = next.filter((f) => fileKind(f.file_name, f.mime_type) === kindFilter);
+
     const sorted = [...next];
     if (sort === 'recent') sorted.sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime());
     else if (sort === 'name') sorted.sort((a, b) => a.file_name.localeCompare(b.file_name));
     else sorted.sort((a, b) => b.size_bytes - a.size_bytes);
     return sorted;
-  }, [folderScopedFiles, tab, query, sort, session, isStarred, uploaderName]);
+  }, [folderScopedFiles, tab, query, kindFilter, sort, session, isStarred, uploaderName]);
 
   const totalSize = useMemo(() => filtered.reduce((sum, f) => sum + (f.size_bytes || 0), 0), [filtered]);
 
@@ -183,15 +214,17 @@ export default function FilesListScreen() {
 
   const emptyMessage = query.trim()
     ? 'No files match your search.'
-    : tab === 'starred'
-      ? "Nothing starred yet — tap a file's star to keep it handy here."
-      : tab === 'mine'
-        ? "You haven't uploaded anything yet."
-        : tab === 'shared'
-          ? 'Nothing shared with the hub yet.'
-          : currentFolderId
-            ? 'This folder is empty.'
-            : 'No files in the hub yet.';
+    : kindFilter
+      ? `No ${FILE_KIND_META[kindFilter].label.toLowerCase()} files here.`
+      : tab === 'starred'
+        ? "Nothing starred yet — tap a file's star to keep it handy here."
+        : tab === 'mine'
+          ? "You haven't uploaded anything yet."
+          : tab === 'shared'
+            ? 'Nothing shared with the hub yet.'
+            : currentFolderId
+              ? 'This folder is empty.'
+              : 'No files in the hub yet.';
 
   return (
     <ThemedView style={styles.flex}>
@@ -262,27 +295,6 @@ export default function FilesListScreen() {
           </View>
         )}
 
-        {/* Folder grid — child folders of the current level */}
-        {folders.length > 0 && (
-          <View style={styles.folderGrid}>
-            {folders.map((folder) => (
-              <Pressable key={folder.id} onPress={() => openFolder(folder)} style={styles.folderCard}>
-                <View style={[styles.folderIconWrap, { backgroundColor: FOLDER_COLORS[folder.color] || FOLDER_COLORS.amber }]}>
-                  <IconSymbol name="folder.fill" size={17} color="#fff" />
-                </View>
-                <View style={styles.folderText}>
-                  <ThemedText type="defaultSemiBold" numberOfLines={1} style={styles.folderName}>
-                    {folder.name}
-                  </ThemedText>
-                  <ThemedText style={styles.folderMeta}>
-                    {folder.file_count} {folder.file_count === 1 ? 'file' : 'files'}
-                  </ThemedText>
-                </View>
-              </Pressable>
-            ))}
-          </View>
-        )}
-
         {/* Fixed-height wrapper around the horizontal ScrollView — its own
             reported height isn't reliable on its own (same fix already
             applied to Notes' visFilterRowWrap/Discover's tab row), so the
@@ -315,6 +327,35 @@ export default function FilesListScreen() {
           </ScrollView>
         </View>
 
+        {/* File-type filter — icon-only, fixed above the list like the tabs
+            row above it (not folded into the scrollable content the way the
+            folder grid now is). Tapping the active kind again clears it. */}
+        <View style={styles.kindRowWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kindRow}>
+            <Pressable
+              onPress={() => setKindFilter(null)}
+              accessibilityLabel="All file types"
+              accessibilityState={{ selected: !kindFilter }}
+              style={[styles.kindButton, { backgroundColor: !kindFilter ? Brand : '#8881' }]}>
+              <IconSymbol name="square.grid.2x2" size={16} color={!kindFilter ? '#fff' : Colors[colorScheme].icon} />
+            </Pressable>
+            {KIND_ORDER.map((kind) => {
+              const meta = FILE_KIND_META[kind];
+              const active = kindFilter === kind;
+              return (
+                <Pressable
+                  key={kind}
+                  onPress={() => setKindFilter((prev) => (prev === kind ? null : kind))}
+                  accessibilityLabel={meta.label}
+                  accessibilityState={{ selected: active }}
+                  style={[styles.kindButton, { backgroundColor: active ? meta.color : meta.color + '22' }]}>
+                  <IconSymbol name={meta.icon} size={16} color={active ? '#fff' : meta.color} />
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+
         <View style={styles.countRow}>
           <ThemedText style={styles.countText}>
             {filtered.length} {filtered.length === 1 ? 'file' : 'files'} · {formatBytes(totalSize)}
@@ -325,14 +366,47 @@ export default function FilesListScreen() {
         </View>
 
         <FlatList
+          ref={listRef}
           data={filtered}
           keyExtractor={(item) => item.file_id}
           style={styles.listFlex}
           contentContainerStyle={styles.list}
           onRefresh={load}
           refreshing={loading}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          // Folders live just above the actual files — inside the list's own
+          // scrollable content (not the fixed search/breadcrumb/tabs section
+          // above), so they scroll away with everything else rather than
+          // pinning to the top. They'll eventually carry their own
+          // hub/web visibility toggle just like files do, so they belong in
+          // the same scrollable surface as the files list, not a separate one.
+          ListHeaderComponent={
+            folders.length > 0 ? (
+              <>
+                <View style={styles.folderGrid}>
+                  {folders.map((folder) => (
+                    <Pressable key={folder.id} onPress={() => openFolder(folder)} style={styles.folderCard}>
+                      <View style={[styles.folderIconWrap, { backgroundColor: FOLDER_COLORS[folder.color] || FOLDER_COLORS.amber }]}>
+                        <IconSymbol name="folder.fill" size={17} color="#fff" />
+                      </View>
+                      <View style={styles.folderText}>
+                        <ThemedText type="defaultSemiBold" numberOfLines={1} style={styles.folderName}>
+                          {folder.name}
+                        </ThemedText>
+                        <ThemedText style={styles.folderMeta}>
+                          {folder.file_count} {folder.file_count === 1 ? 'file' : 'files'}
+                        </ThemedText>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+                <View style={styles.sectionDivider} />
+              </>
+            ) : null
+          }
           renderItem={({ item }) => {
             const isOwner = item.owner_id === session.userId;
             const canMove = isOwner && (item.folder_id != null || folders.length > 0);
@@ -356,6 +430,21 @@ export default function FilesListScreen() {
           }
         />
       </View>
+
+      {/* Back-to-top FAB — appears once the list is scrolled past
+          SCROLL_TOP_THRESHOLD, since the folder grid now scrolls away with
+          the rest of the list instead of staying pinned above it. */}
+      {showScrollTop && (
+        <Animated.View
+          entering={FadeIn.duration(150)}
+          exiting={FadeOut.duration(150)}
+          style={[styles.scrollTopFab, { bottom: 24 + insets.bottom }]}
+          pointerEvents="box-none">
+          <Pressable onPress={scrollToTop} style={styles.scrollTopButton} accessibilityLabel="Scroll to top" accessibilityRole="button">
+            <IconSymbol name="chevron.up" size={22} color="#fff" />
+          </Pressable>
+        </Animated.View>
+      )}
 
       {/* Move-to-folder action sheet — destinations are the folders visible
           at this level, same scope the file picker/breadcrumb already show. */}
@@ -488,6 +577,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  kindRowWrap: {
+    paddingBottom: 12,
+  },
+  kindRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 20,
+  },
+  kindButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   countRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -545,11 +649,13 @@ const styles = StyleSheet.create({
     opacity: 0.7,
     maxWidth: 140,
   },
+  // No horizontal margin — this now renders as the FlatList's
+  // ListHeaderComponent, inside the list's own contentContainerStyle
+  // (styles.list) padding, not the fixed section above it.
   folderGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginHorizontal: 20,
     marginBottom: 14,
   },
   folderCard: {
@@ -578,6 +684,13 @@ const styles = StyleSheet.create({
   folderMeta: {
     fontSize: 11,
     opacity: 0.6,
+  },
+  // Separates the folder grid from the files below it — same hairline
+  // treatment as the drawer's own section divider.
+  sectionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#8884',
+    marginBottom: 14,
   },
   modalBackdrop: {
     flex: 1,
@@ -651,5 +764,22 @@ const styles = StyleSheet.create({
   modalCreateLabel: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  scrollTopFab: {
+    position: 'absolute',
+    right: 20,
+  },
+  scrollTopButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: Brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
   },
 });
