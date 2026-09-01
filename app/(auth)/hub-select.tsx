@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { AuthBackground } from '@/components/auth-background';
@@ -12,14 +12,25 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { authCardBackground, authStyles } from '@/constants/auth-styles';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getHubInfo } from '@/lib/api/hubService';
+import { getHubInfo, getSessionStatus } from '@/lib/api/hubService';
 import { getHubs } from '@/lib/api/registryService';
 import { RegistryHub } from '@/lib/api/types';
 import { isNearbyDiscoveryAvailable, useNearbyHubs } from '@/lib/discovery/nearbyHubs';
+import { getHubSession } from '@/lib/session/multi-hub-storage';
+import { useSession } from '@/lib/session/session-context';
 
 export default function HubSelectScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
+  const { session, switchToHub } = useSession();
+  // Reachable two ways: fresh onboarding (status starts 'signedOut', so a
+  // successful sign-in flips Stack.Protected's guard and the router swaps
+  // screens for us) and "Switch Hub" from an already-active session (status
+  // stays 'signedIn' throughout — the guard never fires, so quick-enter and
+  // a fresh sign-in both need to navigate away explicitly instead). This is
+  // fixed at mount, not re-read live, so signing in partway through doesn't
+  // change which behavior the rest of this screen uses.
+  const cameFromActiveSession = useRef(session !== null).current;
 
   const [hubs, setHubs] = useState<RegistryHub[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +44,23 @@ export default function HubSelectScreen() {
   const [manualAddress, setManualAddress] = useState('');
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
+  // Busy state for handleContinue's quick-enter check (a network round trip
+  // to verify a stored token, distinct from manualBusy above).
+  const [continuing, setContinuing] = useState(false);
+
+  // A hub on the same network as this phone is often reachable directly and
+  // faster (no internet needed) -- but "nearby" only means mDNS heard
+  // *something* answer on this network right now, not that it's actually
+  // reachable from wherever the phone ends up connecting from (client
+  // isolation, a different subnet/VLAN, the hub's Wi-Fi being temporarily
+  // down while its Tailscale/registry address still works fine, etc.). This
+  // used to hide the Directory whenever a nearby hub was found and only
+  // reveal it behind an extra "Browse hubs online instead" tap -- if the
+  // nearby candidate then didn't pan out, the reliable Directory path was
+  // hidden right when it was needed, looking like the hub couldn't be
+  // reached at all. Directory now always stays visible; Nearby is purely
+  // additive above it, never gating the fallback that actually works.
+  const hasNearby = nearbyHubs.length > 0;
 
   useEffect(() => {
     getHubs()
@@ -51,7 +79,12 @@ export default function HubSelectScreen() {
 
   function navigateToLogin(hub: RegistryHub) {
     router.push({
-      pathname: '/(auth)/login',
+      // (auth)/login only exists in the navigator while status is
+      // 'signedOut' (app/_layout.tsx's Stack.Protected) -- reached via
+      // "Switch Hub" it's still 'signedIn' throughout, so that path
+      // silently fails to resolve. switch-hub-login is the same screen,
+      // registered where it's actually reachable from here.
+      pathname: cameFromActiveSession ? '/switch-hub-login' : '/(auth)/login',
       params: {
         hubId: hub.id,
         hubSlug: hub.slug,
@@ -69,8 +102,35 @@ export default function HubSelectScreen() {
     });
   }
 
-  function handleContinue() {
+  // Shared by handleContinue and handleManualConnect: a hub this device
+  // already has a stored session for skips straight past the password
+  // screen, but only once that token's re-confirmed with the hub's own
+  // server (a stale/expired one would otherwise look like a successful
+  // "quick enter" while every authenticated call fails right after). Returns
+  // true if it handled entry (quick or otherwise nothing left to do here);
+  // false means the caller should fall through to a normal login.
+  async function tryQuickEnter(hub: RegistryHub): Promise<boolean> {
+    const stored = await getHubSession(hub.slug);
+    if (!stored) return false;
+    const status = await getSessionStatus(hub.tunnel_url, stored.token).catch(() => null);
+    if (status !== 'approved') return false;
+    await switchToHub(hub.slug);
+    // Guard-driven navigation (see cameFromActiveSession above) only fires
+    // on a genuine signedOut->signedIn transition; switching between two
+    // already-signed-in hubs never changes top-level status, so this screen
+    // has to get itself out of the way.
+    if (cameFromActiveSession) router.replace('/(tabs)');
+    return true;
+  }
+
+  async function handleContinue() {
     if (!selectedHub) return;
+    setContinuing(true);
+    try {
+      if (await tryQuickEnter(selectedHub)) return;
+    } finally {
+      setContinuing(false);
+    }
     navigateToLogin(selectedHub);
   }
 
@@ -82,7 +142,7 @@ export default function HubSelectScreen() {
     try {
       const tunnelUrl = /^https?:\/\//i.test(address) ? address : `http://${address}`;
       const info = await getHubInfo(tunnelUrl);
-      navigateToLogin({
+      const hub: RegistryHub = {
         id: tunnelUrl,
         name: info.hub_name,
         slug: info.hub_slug,
@@ -95,7 +155,9 @@ export default function HubSelectScreen() {
         hub_icon_gradient_to: info.hub_icon_gradient_to,
         hub_icon_solid_color: info.hub_icon_solid_color,
         hub_icon_image_file_name: info.hub_icon_image_file_name,
-      });
+      };
+      if (await tryQuickEnter(hub)) return;
+      navigateToLogin(hub);
     } catch (err) {
       setManualError(err instanceof Error ? err.message : "Couldn't reach that address.");
     } finally {
@@ -167,11 +229,15 @@ export default function HubSelectScreen() {
           either. */}
       <View style={[authStyles.panel, { backgroundColor: authCardBackground(colorScheme) }]}>
         <ThemedText type="title" style={styles.heading}>
-          Find your hub
+          {hasNearby ? 'Hub found nearby' : 'Find your hub'}
         </ThemedText>
-        <ThemedText style={styles.subheading}>Search by name or pick from the list.</ThemedText>
+        <ThemedText style={styles.subheading}>
+          {hasNearby
+            ? 'Connect directly over your network — no internet needed.'
+            : 'Search by name or pick from the list.'}
+        </ThemedText>
 
-      {nearbyHubs.length > 0 && (
+      {hasNearby && (
         <View style={styles.nearbySection}>
           <ThemedText style={styles.sectionLabel}>Nearby</ThemedText>
           {nearbyHubs.map(renderHubRow)}
@@ -192,8 +258,8 @@ export default function HubSelectScreen() {
         style={[authStyles.input, { color: Colors[colorScheme].text, borderColor: Colors[colorScheme].icon }]}
       />
 
-        {loading && <ActivityIndicator style={styles.spinner} />}
-        {error && <ThemedText style={authStyles.error}>{error}</ThemedText>}
+      {loading && <ActivityIndicator style={styles.spinner} />}
+      {error && <ThemedText style={authStyles.error}>{error}</ThemedText>}
 
       <ThemedText style={styles.sectionLabel}>Directory</ThemedText>
       <FlatList
@@ -209,12 +275,16 @@ export default function HubSelectScreen() {
 
       <Pressable
         onPress={handleContinue}
-        disabled={!selectedHub}
-        style={[authStyles.button, styles.continueButtonMargin, { opacity: selectedHub ? 1 : 0.4 }]}>
+        disabled={!selectedHub || continuing}
+        style={[authStyles.button, styles.continueButtonMargin, { opacity: selectedHub && !continuing ? 1 : 0.4 }]}>
         <BrandGradient style={authStyles.buttonFill}>
-          <ThemedText style={authStyles.buttonLabel} lightColor="#fff" darkColor="#fff">
-            Continue
-          </ThemedText>
+          {continuing ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <ThemedText style={authStyles.buttonLabel} lightColor="#fff" darkColor="#fff">
+              Continue
+            </ThemedText>
+          )}
         </BrandGradient>
       </Pressable>
 

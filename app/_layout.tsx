@@ -63,6 +63,9 @@ function RootNavigator() {
       <Stack.Protected guard={status === 'signedIn'}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
+        <Stack.Screen name="switch-hub" options={{ presentation: 'modal', headerShown: false }} />
+        <Stack.Screen name="switch-hub-login" options={{ presentation: 'modal', headerShown: false }} />
+        <Stack.Screen name="switch-hub-signup" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="compose-post" options={{ headerShown: false }} />
         <Stack.Screen name="event-editor" options={{ headerShown: false }} />
         <Stack.Screen name="post/[id]" options={{ headerShown: false }} />

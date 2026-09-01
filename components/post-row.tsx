@@ -30,14 +30,9 @@ type Props = {
   onToggleLike: (post: HubPost) => void;
   onVotePoll: (post: HubPost, optionIndex: number) => void;
   onToggleRsvp: (post: HubPost) => void;
-  // Both treatments now sit in the same spot — just above the timestamp,
-  // below the post content — differing only in avatar size and the "@"
-  // prefix. compactAuthor is the smaller, denser byline used where a post
-  // is a preview among other content (e.g. Home's Feed section).
-  compactAuthor?: boolean;
 };
 
-export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp, compactAuthor }: Props) {
+export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp }: Props) {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
 
@@ -77,23 +72,12 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
       )}
       {post.category === 'EVENT' && <EventRsvpButton post={post} onToggle={onToggleRsvp} />}
       <View style={styles.metaRow}>
-        {compactAuthor ? (
-          <Pressable onPress={handleAuthorPress} hitSlop={6} style={styles.compactHeader}>
-            <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={24} />
-            <View style={styles.headerText}>
-              <ThemedText style={styles.compactAuthor}>@{post.author_username ?? 'citinet'}</ThemedText>
-              <ThemedText style={styles.meta}>{timeAgo(post.created_at)}</ThemedText>
-            </View>
-          </Pressable>
-        ) : (
-          <Pressable onPress={handleAuthorPress} style={styles.header}>
-            <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={30} />
-            <View style={styles.headerText}>
-              <ThemedText style={styles.authorName}>{post.author_username ?? 'Citinet'}</ThemedText>
-              <ThemedText style={styles.meta}>{timeAgo(post.created_at)}</ThemedText>
-            </View>
-          </Pressable>
-        )}
+        <Pressable onPress={handleAuthorPress} hitSlop={6} style={styles.compactHeader}>
+          <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={24} />
+          <ThemedText style={styles.compactAuthor}>
+            @{post.author_username ?? 'citinet'} · {timeAgo(post.created_at)}
+          </ThemedText>
+        </Pressable>
         <View style={styles.footer}>
           <Pressable
             onPress={(e) => {
@@ -122,19 +106,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#8884',
     paddingVertical: 16,
     gap: 8,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    alignSelf: 'flex-start',
-  },
-  headerText: {
-    gap: 1,
-  },
-  authorName: {
-    fontSize: 13.5,
-    fontWeight: '600',
   },
   meta: {
     opacity: 0.6,
@@ -167,7 +138,7 @@ const styles = StyleSheet.create({
   },
   compactAuthor: {
     fontSize: 12.5,
-    fontWeight: '600',
+    opacity: 0.6,
   },
   metaRow: {
     flexDirection: 'row',

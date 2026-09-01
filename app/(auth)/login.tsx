@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
@@ -41,7 +41,10 @@ export default function LoginScreen() {
     hubIconImageFileName: string;
   }>();
   const colorScheme = useColorScheme() ?? 'light';
-  const { signIn } = useSession();
+  const { session, signIn } = useSession();
+  // See hub-select.tsx's cameFromActiveSession — same reasoning, this
+  // screen is reachable via "Switch Hub" too now.
+  const cameFromActiveSession = useRef(session !== null).current;
 
   const hubIcon = {
     hub_icon_mode: hubIconMode,
@@ -63,7 +66,15 @@ export default function LoginScreen() {
     setSubmitting(true);
     setError(null);
     try {
-      await signIn({ id: hubId, slug: hubSlug, name: hubName, tunnelUrl, location: location || undefined }, { username, password });
+      const result = await signIn(
+        { id: hubId, slug: hubSlug, name: hubName, tunnelUrl, location: location || undefined },
+        { username, password }
+      );
+      // A real status change (this device's first-ever sign-in) is handled
+      // by app/_layout.tsx's Stack.Protected guard already. Signing into a
+      // new hub while another was already active doesn't change top-level
+      // status at all, so nothing else will navigate away from here.
+      if (cameFromActiveSession && result === 'signedIn') router.replace('/(tabs)');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed.');
     } finally {
@@ -146,7 +157,9 @@ export default function LoginScreen() {
         <Pressable
           onPress={() =>
             router.push({
-              pathname: '/(auth)/signup',
+              // See hub-select.tsx's navigateToLogin for why this can't
+              // always be '/(auth)/signup'.
+              pathname: cameFromActiveSession ? '/switch-hub-signup' : '/(auth)/signup',
               params: {
                 hubId,
                 hubSlug,

@@ -1,6 +1,6 @@
 import { Tabs, router, useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppDrawer } from '@/components/app-drawer';
@@ -66,45 +66,44 @@ export default function TabLayout() {
           justifyContent: 'center',
           alignItems: 'center',
         },
-        // Only iOS gets the floating pill (content scrolls visibly behind
+        // Floating pill on every platform (content scrolls visibly behind
         // it, via each tab screen's extra bottom padding — see
         // useBottomTabBarHeight() in index/discover/messages/profile).
-        // Android keeps its normal in-flow, edge-to-edge Material bar —
-        // a floating detached pill isn't a Material 3 pattern the way it's
-        // a standard iOS one, so that split is deliberate, not a gap.
         tabBarStyle: {
           backgroundColor: 'transparent',
-          ...Platform.select({
-            ios: {
-              position: 'absolute',
-              left: 16,
-              right: 16,
-              // insets.bottom already clears the home indicator; the max()
-              // just guarantees a visible gap on older devices with no
-              // inset at all (a physical home button, no safe area).
-              bottom: Math.max(insets.bottom, 16),
-              height: 60,
-              // The library always adds paddingBottom: insets.bottom inside
-              // the bar to clear the home indicator when it's flush with
-              // the screen edge — redundant now that `bottom` above already
-              // moves the whole pill above it, and left alone it would eat
-              // most of this 60pt height, cramming the icons toward the top.
-              paddingBottom: 0,
-              paddingTop: 0,
-              borderRadius: 28,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor,
-              // Clips TabBarBackground's blur fill to the pill's rounded
-              // corners — without this it paints as a plain rectangle
-              // regardless of borderRadius, since rounding a container
-              // doesn't rasterize its children unless overflow is clipped.
-              overflow: 'hidden',
-            },
-            default: {
-              borderTopWidth: StyleSheet.hairlineWidth,
-              borderTopColor: borderColor,
-            },
-          }),
+          position: 'absolute',
+          // marginHorizontal, not left/right: the library's own base style
+          // for this bar (BottomTabBar.js styles.bottom) already pins it
+          // with start: 0, end: 0 — the RTL-logical siblings of left/right,
+          // a DIFFERENT style key. Array-style merging doesn't let our
+          // left/right override those (both end up in the flattened style,
+          // and the library's start/end win), so left/right here is
+          // silently ignored no matter the value. margin composes on top
+          // of position instead of competing with it, so it isn't affected.
+          marginHorizontal: 40,
+          // insets.bottom already clears the home indicator/nav bar; the
+          // max() just guarantees a visible gap on devices with no inset at
+          // all (a physical home button, or Android's gesture-free nav).
+          bottom: Math.max(insets.bottom, 16),
+          height: 60,
+          // The library always adds paddingBottom: insets.bottom inside the
+          // bar to clear the home indicator when it's flush with the screen
+          // edge — redundant now that `bottom` above already moves the
+          // whole pill above it, and left alone it would eat most of this
+          // 60pt height, cramming the icons toward the top.
+          paddingBottom: 0,
+          paddingTop: 0,
+          borderRadius: 28,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor,
+          // Clips TabBarBackground's blur/tint fill to the pill's rounded
+          // corners — without this it paints as a plain rectangle
+          // regardless of borderRadius, since rounding a container doesn't
+          // rasterize its children unless overflow is clipped.
+          overflow: 'hidden',
+          // Android has no native elevation from being in-flow anymore now
+          // that it floats too — replaces that with its own drop shadow.
+          elevation: 8,
         },
       }}>
       <Tabs.Screen

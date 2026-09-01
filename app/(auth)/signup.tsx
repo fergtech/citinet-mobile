@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
@@ -35,7 +35,10 @@ export default function SignupScreen() {
       hubIconImageFileName: string;
     }>();
   const colorScheme = useColorScheme() ?? 'light';
-  const { signUp } = useSession();
+  const { session, signUp } = useSession();
+  // See hub-select.tsx's cameFromActiveSession — same reasoning, this
+  // screen is reachable via "Switch Hub" too now.
+  const cameFromActiveSession = useRef(session !== null).current;
 
   const hubIcon = {
     hub_icon_mode: hubIconMode,
@@ -64,10 +67,13 @@ export default function SignupScreen() {
     setSubmitting(true);
     setError(null);
     try {
-      await signUp(
+      const result = await signUp(
         { id: hubId, slug: hubSlug, name: hubName, tunnelUrl, location: location || undefined },
         { username: username.trim(), password, displayName: displayName.trim() }
       );
+      // See login.tsx's identical check — a real status change is handled
+      // by the Stack.Protected guard; switching hubs without one isn't.
+      if (cameFromActiveSession && result === 'signedIn') router.replace('/(tabs)');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed.');
     } finally {

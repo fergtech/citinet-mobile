@@ -364,12 +364,11 @@ export default function PostDetailScreen() {
                       userId={post.author_id}
                       displayName={post.author_username ?? '?'}
                       tunnelUrl={session.hub.tunnelUrl}
-                      size={38}
+                      size={24}
                     />
-                    <View style={styles.postAuthorNameRow}>
-                      <ThemedText type="defaultSemiBold">{post.author_username ?? 'Citinet'}</ThemedText>
-                      <ThemedText style={styles.rowMeta}>· {timeAgo(post.created_at)}</ThemedText>
-                    </View>
+                    <ThemedText style={styles.compactAuthor}>
+                      @{post.author_username ?? 'citinet'} · {timeAgo(post.created_at)}
+                    </ThemedText>
                   </View>
                   <ThemedText style={styles.rowMeta}>
                     {post.category.charAt(0) + post.category.slice(1).toLowerCase()}
@@ -498,12 +497,11 @@ const styles = StyleSheet.create({
   postAuthorLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 6,
   },
-  postAuthorNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+  compactAuthor: {
+    fontSize: 12.5,
+    opacity: 0.6,
   },
   // The border-left is the thread connector line — offset to roughly align
   // with the avatar column above it, so a reply visibly hangs off its parent

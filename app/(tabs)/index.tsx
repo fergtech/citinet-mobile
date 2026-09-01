@@ -415,7 +415,7 @@ function SeeAllInitiativesCard() {
 
 export default function HomeScreen() {
   const colorScheme = useColorScheme() ?? 'light';
-  const { session } = useSession();
+  const { session, otherSessions, switchToHub } = useSession();
 
   const hubCenter = useHubCenter();
   const [posts, setPosts] = useState<HubPost[]>([]);
@@ -735,7 +735,6 @@ export default function HomeScreen() {
             onToggleLike={handleToggleLike}
             onVotePoll={handleVotePoll}
             onToggleRsvp={handleToggleRsvp}
-            compactAuthor
           />
         )}
         {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
@@ -782,6 +781,8 @@ export default function HomeScreen() {
         onClose={() => setShowHubInfo(false)}
         hub={session.hub}
         isLocalConnection={isLocal}
+        otherSessions={otherSessions}
+        onSwitchHub={switchToHub}
       />
 
       {loading && <ActivityIndicator style={styles.spinner} />}

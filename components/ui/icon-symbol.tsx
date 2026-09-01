@@ -92,6 +92,7 @@ const MAPPING = {
   'paintpalette.fill': 'palette',
   'ellipsis.circle.fill': 'more-horiz',
   'arrow.up.arrow.down': 'swap-vert',
+  'arrow.left.arrow.right': 'swap-horiz',
   'doc.fill': 'picture-as-pdf',
   'doc': 'insert-drive-file',
   'tablecells.fill': 'grid-on',

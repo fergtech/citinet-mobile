@@ -1,13 +1,15 @@
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, Modal, Pressable, StyleSheet, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { HubIcon, HubLetterFallback } from '@/components/hub-icon';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getHubInfo, type HubInfo } from '@/lib/api/hubService';
-import type { HubSummary } from '@/lib/session/types';
+import type { HubSummary, StoredSession } from '@/lib/session/types';
 
 /**
  * Tapping the hub name anywhere it's shown as a header opens this -- icon,
@@ -23,11 +25,17 @@ export function HubInfoModal({
   onClose,
   hub,
   isLocalConnection,
+  otherSessions,
+  onSwitchHub,
 }: {
   visible: boolean;
   onClose: () => void;
   hub: HubSummary;
   isLocalConnection: boolean;
+  /** Other hubs this device is already signed into (excludes `hub` itself) —
+   *  renders as a "You're also signed into" switcher when non-empty. */
+  otherSessions: StoredSession[];
+  onSwitchHub: (slug: string) => void;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
   const [info, setInfo] = useState<HubInfo | null>(null);
@@ -88,6 +96,50 @@ export function HubInfoModal({
               own connection is (see isLocalConnection's doc comment). */}
           <Pressable onPress={() => Linking.openURL(`https://citinet.cloud/?hub=${encodeURIComponent(hub.slug)}`)} style={styles.openBrowserLink}>
             <ThemedText style={[styles.openBrowserLabel, { color: Brand }]}>Open in browser</ThemedText>
+          </Pressable>
+
+          {/* Every other hub this device already has a saved, valid session
+              for — tapping one swaps the active hub instantly (session-
+              context.tsx's switchToHub), no re-authentication, no network
+              call. Mirrors citinet-web's HubLayout "You're also signed
+              into" list. */}
+          {otherSessions.length > 0 && (
+            <View style={styles.switcherSection}>
+              <ThemedText style={[styles.switcherLabel, { color: Colors[colorScheme].icon }]}>
+                You&apos;re also signed into
+              </ThemedText>
+              {otherSessions.map((other) => (
+                <Pressable
+                  key={other.hub.slug}
+                  onPress={() => {
+                    onSwitchHub(other.hub.slug);
+                    onClose();
+                  }}
+                  style={styles.switcherRow}>
+                  <HubIcon
+                    hub={null}
+                    tunnelUrl={other.hub.tunnelUrl}
+                    size={32}
+                    fallback={<HubLetterFallback letter={other.hub.name.charAt(0).toUpperCase()} size={32} />}
+                  />
+                  <ThemedText style={styles.switcherName} numberOfLines={1}>
+                    {other.hub.name}
+                  </ThemedText>
+                  <IconSymbol name="arrow.left.arrow.right" size={16} color={Colors[colorScheme].icon} />
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          <Pressable
+            onPress={() => {
+              onClose();
+              router.push('/switch-hub');
+            }}
+            style={styles.switchHubLink}>
+            <ThemedText style={[styles.openBrowserLabel, { color: Brand }]}>
+              {otherSessions.length > 0 ? 'Sign into another hub' : 'Switch hub'}
+            </ThemedText>
           </Pressable>
 
           <Pressable onPress={onClose} style={styles.doneButton}>
@@ -155,6 +207,32 @@ const styles = StyleSheet.create({
   openBrowserLabel: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  switcherSection: {
+    width: '100%',
+    marginTop: 20,
+  },
+  switcherLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  switcherRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  switcherName: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  switchHubLink: {
+    marginTop: 8,
+    paddingVertical: 4,
   },
   doneButton: {
     marginTop: 12,

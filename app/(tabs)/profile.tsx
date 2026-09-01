@@ -154,6 +154,14 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.section}>
+          {/* Doesn't touch this (or any other) hub's saved session — just
+              opens the picker (app/switch-hub.tsx). Distinct from "Leave"
+              below, which actually signs out. */}
+          <Pressable onPress={() => router.push('/switch-hub')} style={styles.row}>
+            <IconSymbol name="arrow.left.arrow.right" size={20} color={Colors[colorScheme].icon} />
+            <ThemedText style={styles.rowLabel}>Switch Hub</ThemedText>
+            <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
+          </Pressable>
           <Pressable onPress={confirmSignOut} style={styles.row}>
             <IconSymbol name="rectangle.portrait.and.arrow.right" size={20} color={Colors[colorScheme].icon} />
             <ThemedText style={styles.rowLabel}>Leave {session.hub.name}</ThemedText>
