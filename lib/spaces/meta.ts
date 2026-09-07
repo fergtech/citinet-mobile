@@ -2,6 +2,30 @@ import type { IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
 import { Space, SpaceVisibility } from '@/lib/api/types';
 
+// Mirrors citinet web's SPACE_CATEGORY (SpacesScreen.tsx) — purely a Discover
+// filter aid, same as the note on Space['category'] in types.ts. Values
+// match the server's plain TEXT column exactly; anything else (including
+// null/'') falls through to spaceCategoryMeta returning null, same as an
+// unrecognized value on web.
+export type SpaceCategory = 'civic' | 'hobby' | 'outdoors' | 'parents' | 'sports';
+
+const SPACE_CATEGORY: Record<SpaceCategory, { label: string; icon: IconSymbolName }> = {
+  civic: { label: 'Civic', icon: 'building.2.fill' },
+  hobby: { label: 'Hobbies', icon: 'paintpalette.fill' },
+  outdoors: { label: 'Outdoors', icon: 'leaf.fill' },
+  parents: { label: 'Parenting', icon: 'figure.and.child.holdinghands' },
+  sports: { label: 'Sports', icon: 'dumbbell.fill' },
+};
+
+export const SPACE_CATEGORY_FILTERS: { value: SpaceCategory | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  ...(Object.keys(SPACE_CATEGORY) as SpaceCategory[]).map((value) => ({ value, label: SPACE_CATEGORY[value].label })),
+];
+
+export function spaceCategoryMeta(category: string | null): { label: string; icon: IconSymbolName } | null {
+  return category && category in SPACE_CATEGORY ? SPACE_CATEGORY[category as SpaceCategory] : null;
+}
+
 // 'invite-only' is a real visibility value on the server (POST /api/spaces,
 // PATCH /api/spaces/:slug both accept it) but the design spec only describes
 // two badge treatments (Public/globe, Private/lock) — invite-only falls back

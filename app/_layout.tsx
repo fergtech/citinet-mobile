@@ -16,6 +16,7 @@ import { BroadcastProvider } from '@/lib/comms/broadcast-context';
 import { CallProvider, useCall } from '@/lib/comms/call-context';
 import { E2EKeysProvider } from '@/lib/crypto/e2e-context';
 import { SessionProvider, useSession } from '@/lib/session/session-context';
+import { PostConsumptionProvider } from '@/lib/ui/post-consumption';
 import { ThemePreferenceProvider } from '@/lib/ui/theme-preference';
 
 export const unstable_settings = {
@@ -68,6 +69,7 @@ function RootNavigator() {
         <Stack.Screen name="switch-hub-signup" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="compose-post" options={{ headerShown: false }} />
         <Stack.Screen name="event-editor" options={{ headerShown: false }} />
+        <Stack.Screen name="poll-editor" options={{ headerShown: false }} />
         <Stack.Screen name="post/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="profile/[userId]" options={{ headerShown: false }} />
         <Stack.Screen name="account/privacy" options={{ headerShown: false }} />
@@ -115,6 +117,7 @@ function RootNavigator() {
         <Stack.Screen name="initiatives/[id]/tasks/[taskId]" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/roles" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/resources" options={{ headerShown: false }} />
+        <Stack.Screen name="spaces/index" options={{ headerShown: false }} />
         <Stack.Screen name="spaces/[slug]" options={{ headerShown: false }} />
         <Stack.Screen name="spaces/create" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
@@ -141,7 +144,9 @@ function RootLayout() {
           <E2EKeysProvider>
             <CallProvider>
               <BroadcastProvider>
-                <RootNavigator />
+                <PostConsumptionProvider>
+                  <RootNavigator />
+                </PostConsumptionProvider>
                 {/* Sibling to the Stack, not inside any one screen — this is
                     what lets a call/broadcast survive navigating to a
                     different screen (minimize) instead of unmounting with

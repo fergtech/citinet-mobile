@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { HubMedia } from '@/components/hub-media';
@@ -15,7 +16,7 @@ export function fileVisibilityMeta(file: HubFile): { icon: 'lock.fill' | 'person
   return { icon: 'lock.fill', label: 'Private' };
 }
 
-export function FileRow({
+function FileRowComponent({
   file,
   starred,
   tunnelUrl,
@@ -51,6 +52,7 @@ export function FileRow({
             token={token}
             previewSeconds={4}
             style={styles.thumb}
+            isPublic={file.is_public || file.web_public}
           />
         ) : (
           <View style={[styles.tile, { backgroundColor: meta.color }]}>
@@ -80,6 +82,8 @@ export function FileRow({
     </View>
   );
 }
+
+export const FileRow = memo(FileRowComponent);
 
 const styles = StyleSheet.create({
   row: {

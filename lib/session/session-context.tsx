@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { AppState } from 'react-native';
 
 import { getSessionStatus, loginUser, registerUser, type RegisterInput } from '@/lib/api/hubService';
 import type { LoginResponse } from '@/lib/api/types';
+import { flushWriteQueue } from '@/lib/api/write-queue';
 import {
   getActiveHubSlug,
   getAllHubSessions,
@@ -93,6 +95,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // App-wide reconnect signal for the write queue (lib/api/write-queue.ts) —
+  // mirrors citinet web's HubContext flush trigger, adapted for mobile:
+  // there's no persistent "is the hub reachable" poll here (see the /spaces
+  // AskUserQuestion decision — foreground/focus opportunistic flushing
+  // instead of a new polling loop), so this just makes one attempt whenever
+  // the app comes back to the foreground, on top of the per-screen attempts
+  // each writing screen's own focus effect makes. Each queued item carries
+  // its own tunnelUrl/token from when it was queued, so this doesn't need
+  // (and doesn't wait for) `session` — it flushes whatever's pending
+  // regardless of which hub is currently active.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') flushWriteQueue();
+    });
+    return () => sub.remove();
   }, []);
 
   const value = useMemo<SessionContextValue>(() => {

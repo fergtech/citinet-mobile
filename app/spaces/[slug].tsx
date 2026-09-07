@@ -21,15 +21,16 @@ import {
   spaceBannerUrl,
   toggleLike,
   toggleRsvp,
-  votePoll,
 } from '@/lib/api/hubService';
 import { HubPost, Initiative, Space, SpaceFile } from '@/lib/api/types';
+import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
 import { spaceVisibilityMeta } from '@/lib/spaces/meta';
 import { useSession } from '@/lib/session/session-context';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { formatEventWhen } from '@/lib/ui/format-event';
 import { applyVote } from '@/lib/ui/poll';
+import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 type TabId = 'posts' | 'events' | 'initiatives' | 'files';
@@ -102,6 +103,7 @@ export default function SpaceScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const { session } = useSession();
+  const { markEngaged } = usePostConsumption();
 
   const [space, setSpace] = useState<Space | null>(null);
   const [posts, setPosts] = useState<HubPost[]>([]);
@@ -116,6 +118,11 @@ export default function SpaceScreen() {
     if (!session || !slug) return;
     setLoading(true);
     setError(null);
+    // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
+    // fire-and-forget, not sequenced ahead of the fetch below: a write this
+    // sends will show up on this screen's next focus/refresh. A no-op, no
+    // network call, when the queue's empty.
+    flushWriteQueue().catch(() => {});
     getSpace(session.hub.tunnelUrl, session.token, slug)
       .then((nextSpace) => {
         setSpace(nextSpace);
@@ -164,6 +171,7 @@ export default function SpaceScreen() {
 
   function handleToggleLike(post: HubPost) {
     if (!session) return;
+    markEngaged(post.id);
     const wasLiked = post.my_liked;
     setPosts((prev) =>
       prev.map((p) => (p.id === post.id ? { ...p, my_liked: !wasLiked, like_count: p.like_count + (wasLiked ? -1 : 1) } : p))
@@ -175,6 +183,7 @@ export default function SpaceScreen() {
 
   function handleToggleRsvp(post: HubPost) {
     if (!session) return;
+    markEngaged(post.id);
     const wasGoing = post.my_rsvp;
     setPosts((prev) =>
       prev.map((p) => (p.id === post.id ? { ...p, my_rsvp: !wasGoing, rsvp_count: p.rsvp_count + (wasGoing ? -1 : 1) } : p))
@@ -186,9 +195,10 @@ export default function SpaceScreen() {
 
   function handleVotePoll(post: HubPost, optionIndex: number) {
     if (!session) return;
+    markEngaged(post.id);
     const previousPoll = post.poll;
     setPosts((prev) => prev.map((p) => (p.id === post.id ? applyVote(p, optionIndex) : p)));
-    votePoll(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
+    voteOrQueue(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
       setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, poll: previousPoll } : p)));
     });
   }

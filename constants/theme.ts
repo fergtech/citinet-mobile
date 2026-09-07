@@ -22,6 +22,28 @@ export const BrandGradientColors = [
   '#0d5adf', // blue
 ] as const;
 
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function toHex([r, g, b]: readonly [number, number, number]): string {
+  return '#' + [r, g, b].map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('');
+}
+
+// Solid fill for the person-icon glyph drawn over a BrandGradient avatar
+// fallback (see components/hub-avatar.tsx) — the gradient's own midpoint,
+// darkened, so the icon reads as one shade deeper within the same brand
+// color rather than a foreign accent color dropped on top of it.
+const [r1, g1, b1] = hexToRgb(BrandGradientColors[0]);
+const [r2, g2, b2] = hexToRgb(BrandGradientColors[1]);
+const AVATAR_ICON_DARKEN = 0.3;
+export const AvatarIconColor = toHex([
+  ((r1 + r2) / 2) * (1 - AVATAR_ICON_DARKEN),
+  ((g1 + g2) / 2) * (1 - AVATAR_ICON_DARKEN),
+  ((b1 + b2) / 2) * (1 - AVATAR_ICON_DARKEN),
+]);
+
 export const Colors = {
   light: {
     text: '#11181C',

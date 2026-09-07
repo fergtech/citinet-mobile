@@ -19,6 +19,7 @@ const MAPPING = {
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
   'safari.fill': 'explore',
+  'line.3.horizontal': 'menu',
   'plus': 'add',
   'message.fill': 'chat-bubble',
   'person.fill': 'person',
@@ -133,6 +134,9 @@ const MAPPING = {
   // Folders (files' folder-organization feature)
   'folder.fill': 'folder',
   'folder.badge.plus': 'create-new-folder',
+  // Space category badges (Discover filter chips)
+  'figure.and.child.holdinghands': 'family-restroom',
+  'dumbbell.fill': 'fitness-center',
 } as IconMapping;
 
 /**

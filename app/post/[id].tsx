@@ -1,6 +1,8 @@
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -9,26 +11,30 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
-import { HubAvatar } from '@/components/hub-avatar';
-import { HubMedia } from '@/components/hub-media';
 import { EventAtlasLink } from '@/components/event-atlas-link';
 import { EventRsvpButton } from '@/components/event-rsvp-button';
-import { ReportSheet } from '@/components/report-sheet';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { HubAvatar } from '@/components/hub-avatar';
+import { HubMedia } from '@/components/hub-media';
 import { PollCard } from '@/components/poll-card';
+import { ReportSheet } from '@/components/report-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ImpressionsIcon } from '@/components/ui/impressions-icon';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { createReply, getPost, listAttendees, listReplies, toggleLike, toggleRsvp, votePoll } from '@/lib/api/hubService';
+import { getPost, listAttendees, listReplies, toggleLike, toggleRsvp } from '@/lib/api/hubService';
 import { EventAttendee, HubPost, HubPostReply, ReportTargetType } from '@/lib/api/types';
-import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
-import { applyVote } from '@/lib/ui/poll';
+import { createReplyOrQueue, flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { useSession } from '@/lib/session/session-context';
+import { formatCompactCount } from '@/lib/ui/format-count';
+import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
+import { applyVote } from '@/lib/ui/poll';
+import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 type ReplyNode = HubPostReply & { children: ReplyNode[] };
@@ -151,6 +157,7 @@ export default function PostDetailScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
   const { session } = useSession();
+  const insets = useSafeAreaInsets();
   const inputRef = useRef<TextInput>(null);
 
   const [post, setPost] = useState<HubPost | null>(null);
@@ -178,10 +185,19 @@ export default function PostDetailScreen() {
     if (!session) return;
     setLoading(true);
     setError(null);
-    Promise.all([
-      getPost(session.hub.tunnelUrl, session.token, id),
-      listReplies(session.hub.tunnelUrl, session.token, id),
-    ])
+    // Opportunistic retry of anything queued (a post/reply/vote that
+    // couldn't reach the hub earlier) — sequenced ahead of the actual fetch
+    // (not parallel) so a reply this screen itself just queued already
+    // shows up in the very same refresh once it lands; a no-op when the
+    // queue's empty (its own fast path, no network call), so this doesn't
+    // add real latency to a normal load. Its own failure is swallowed —
+    // same as the AppState-foreground flush in session-context.tsx, this is
+    // opportunistic, not the only chance to retry.
+    flushWriteQueue()
+      .catch(() => {})
+      .then(() =>
+        Promise.all([getPost(session.hub.tunnelUrl, session.token, id), listReplies(session.hub.tunnelUrl, session.token, id)])
+      )
       .then(([nextPost, nextReplies]) => {
         setPost(nextPost);
         setReplies(nextReplies);
@@ -193,6 +209,13 @@ export default function PostDetailScreen() {
   // Focus-based, not mount-only — see Home/Messages for why (e.g. a new
   // reply from someone else while you were on a commenter's profile).
   useFocusEffect(load);
+
+  // Reading the full post on its own screen is the strongest "consumed"
+  // signal there is — no dwell timer needed, mark it the moment this screen
+  // is focused (covers every path in: Feed, Home, Discover, Spaces, Events,
+  // a deep link, all funnel through this one screen).
+  const { markOpened } = usePostConsumption();
+  useFocusEffect(useCallback(() => markOpened(id), [id, markOpened]));
 
   const tree = useMemo(() => buildReplyTree(replies), [replies]);
 
@@ -209,7 +232,11 @@ export default function PostDetailScreen() {
     if (!session) return;
     const prevPoll = current.poll;
     setPost((prev) => (prev ? applyVote(prev, optionIndex) : prev));
-    votePoll(session.hub.tunnelUrl, session.token, current.id, optionIndex).catch(() => {
+    // voteOrQueue only rejects for a real error now — a network failure
+    // queues the vote and resolves instead, so this revert only ever fires
+    // for a genuine rejection (the optimistic state above is correctly left
+    // in place for a queued vote, since it's what the user actually did).
+    voteOrQueue(session.hub.tunnelUrl, session.token, current.id, optionIndex).catch(() => {
       setPost((prev) => (prev ? { ...prev, poll: prevPoll } : prev));
     });
   }
@@ -246,7 +273,7 @@ export default function PostDetailScreen() {
     if (!session || !replyText.trim()) return;
     setSubmitting(true);
     try {
-      await createReply(
+      const result = await createReplyOrQueue(
         session.hub.tunnelUrl,
         session.token,
         id,
@@ -256,6 +283,13 @@ export default function PostDetailScreen() {
       );
       setReplyText('');
       setReplyTarget(null);
+      if (result.queued) {
+        // Nothing changed server-side yet, so no listReplies refresh —
+        // this reply will show up once the queue actually flushes (this
+        // screen's own load() retries it on every focus).
+        Alert.alert('Saved to send later', "You're offline or the hub is unreachable — this reply will post automatically once it's back.");
+        return;
+      }
       const nextReplies = await listReplies(session.hub.tunnelUrl, session.token, id);
       setReplies(nextReplies);
       setPost((prev) => (prev ? { ...prev, reply_count: nextReplies.length } : prev));
@@ -269,7 +303,16 @@ export default function PostDetailScreen() {
   if (!session) return null;
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    // Explicit backgroundColor here, not left to ThemedView below — this
+    // view (not ThemedView) is what actually pads for the keyboard on iOS
+    // ('padding' behavior shrinks ITS OWN flex box, ThemedView just fills
+    // whatever's left), so its bottom edge is what the keyboard's rounded
+    // top corners sit against. Left transparent, that strip fell through to
+    // the native window's black default instead of this screen's dark-grey
+    // surface (Colors[colorScheme].background) whenever the keyboard was up.
+    <KeyboardAvoidingView
+      style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={styles.flex}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
@@ -317,7 +360,7 @@ export default function PostDetailScreen() {
                 <ThemedText style={styles.postBody}>{post.body}</ThemedText>
                 {post.media_file_name && (
                   <View style={styles.mediaWrap}>
-                    <HubMedia fileName={post.media_file_name} tunnelUrl={session.hub.tunnelUrl} token={session.token} />
+                    <HubMedia fileName={post.media_file_name} tunnelUrl={session.hub.tunnelUrl} token={session.token} isPublic />
                   </View>
                 )}
                 {post.category === 'POLL' && post.poll && (
@@ -384,17 +427,21 @@ export default function PostDetailScreen() {
                     <ThemedText style={styles.rowMeta}>{post.like_count}</ThemedText>
                   </Pressable>
                   <ThemedText style={styles.rowMeta}>{post.reply_count} comments</ThemedText>
+                  <View style={styles.viewsBadge}>
+                    <ImpressionsIcon size={15} color={Colors[colorScheme].icon} />
+                    <ThemedText style={styles.rowMeta}>{formatCompactCount(post.view_count)} views</ThemedText>
+                  </View>
                 </View>
                 <ThemedText style={styles.commentsHeading}>Comments</ThemedText>
               </View>
             }
             ListEmptyComponent={
-              !loading ? <ThemedText style={styles.rowMeta}>No comments yet.</ThemedText> : null
+              !loading ? <ThemedText style={styles.rowMeta}>No comments yet. Be the first.</ThemedText> : null
             }
           />
         )}
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 8 : 16) }]}>
           {replyTarget && (
             <View style={styles.replyChip}>
               <ThemedText style={styles.rowMeta}>Replying to @{replyTarget.username ?? 'user'}</ThemedText>
@@ -577,6 +624,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  viewsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginLeft: 'auto',
+    opacity: 0.75,
+  },
   commentsHeading: {
     fontSize: 12,
     fontWeight: '600',
@@ -623,7 +677,10 @@ const styles = StyleSheet.create({
     borderTopColor: '#8884',
     paddingHorizontal: 10,
     paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 8 : 16,
+    // paddingBottom is applied inline (see the composer View itself) —
+    // Math.max(insets.bottom, ...) so the home-indicator safe area on iPhones
+    // with rounded bottom corners actually clears the placeholder text
+    // instead of a fixed 8px letting the corner curve clip into it.
   },
   replyChip: {
     flexDirection: 'row',

@@ -13,7 +13,7 @@ import { authCardBackground, authStyles } from '@/constants/auth-styles';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getHubInfo, getSessionStatus } from '@/lib/api/hubService';
-import { getHubs } from '@/lib/api/registryService';
+import { getHubs, isHubRestarting } from '@/lib/api/registryService';
 import { RegistryHub } from '@/lib/api/types';
 import { isNearbyDiscoveryAvailable, useNearbyHubs } from '@/lib/discovery/nearbyHubs';
 import { getHubSession } from '@/lib/session/multi-hub-storage';
@@ -125,6 +125,14 @@ export default function HubSelectScreen() {
 
   async function handleContinue() {
     if (!selectedHub) return;
+    // A registry-listed hub mid-planned-restart will just refuse the
+    // connection right now -- worth short-circuiting into a clear message
+    // instead of letting quick-enter/login run into that as a raw network
+    // error a few seconds later.
+    if (isHubRestarting(selectedHub)) {
+      setError(`${selectedHub.name} is restarting — try again in a minute.`);
+      return;
+    }
     setContinuing(true);
     try {
       if (await tryQuickEnter(selectedHub)) return;
@@ -167,6 +175,7 @@ export default function HubSelectScreen() {
 
   function hubMetaLine(item: RegistryHub): string {
     const parts: string[] = [];
+    if (isHubRestarting(item)) parts.push('Restarting');
     if (item.location) parts.push(item.location);
     if (typeof item.member_count === 'number') parts.push(`${item.member_count} neighbors`);
     // online_now/uptime only ever come from live heartbeat enrichment
@@ -181,6 +190,7 @@ export default function HubSelectScreen() {
   function renderHubRow(item: RegistryHub) {
     const selected = item.id === selectedId;
     const live = typeof item.online_now === 'number';
+    const restarting = isHubRestarting(item);
     return (
       <Pressable
         key={item.id}
@@ -192,12 +202,13 @@ export default function HubSelectScreen() {
             tunnelUrl={item.tunnel_url}
             size={44}
             fallback={<HubLetterFallback letter={item.name.charAt(0).toUpperCase()} size={44} />}
+            style={restarting ? styles.restartingIcon : undefined}
           />
-          {live && <View style={styles.liveDot} />}
+          {restarting ? <View style={styles.restartingDot} /> : live && <View style={styles.liveDot} />}
         </View>
         <View style={styles.rowText}>
           <ThemedText type="defaultSemiBold">{item.name}</ThemedText>
-          <ThemedText style={styles.rowMeta}>{hubMetaLine(item)}</ThemedText>
+          <ThemedText style={[styles.rowMeta, restarting && styles.restartingLabel]}>{hubMetaLine(item)}</ThemedText>
           {item.description ? (
             <Pressable onPress={() => setDescriptionHub(item)} style={styles.descriptionRow} hitSlop={6}>
               <ThemedText style={styles.rowDescription} numberOfLines={1}>
@@ -282,7 +293,7 @@ export default function HubSelectScreen() {
             <ActivityIndicator color="#fff" />
           ) : (
             <ThemedText style={authStyles.buttonLabel} lightColor="#fff" darkColor="#fff">
-              Continue
+              {selectedHub && isHubRestarting(selectedHub) ? 'Hub restarting…' : 'Continue'}
             </ThemedText>
           )}
         </BrandGradient>
@@ -413,6 +424,20 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#8884',
   },
+  restartingDot: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#f59e0b',
+    borderWidth: 2,
+    borderColor: '#8884',
+  },
+  restartingIcon: {
+    opacity: 0.5,
+  },
   rowText: {
     flex: 1,
     gap: 2,
@@ -420,6 +445,11 @@ const styles = StyleSheet.create({
   rowMeta: {
     opacity: 0.6,
     fontSize: 13,
+  },
+  restartingLabel: {
+    color: '#f59e0b',
+    opacity: 1,
+    fontWeight: '600',
   },
   descriptionRow: {
     flexDirection: 'row',

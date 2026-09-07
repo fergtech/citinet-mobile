@@ -5,7 +5,9 @@ import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
+import { useAppDrawer } from '@/components/app-drawer';
 import { LeafletMap } from '@/components/atlas/leaflet-map';
+import { useDiscoverDrawer } from '@/components/discover-drawer';
 import { EventAtlasLink } from '@/components/event-atlas-link';
 import { FeaturedCarousel } from '@/components/featured-carousel';
 import { HubInfoModal } from '@/components/hub-info-modal';
@@ -33,7 +35,6 @@ import {
   listMembers,
   toggleLike,
   toggleRsvp,
-  votePoll,
 } from '@/lib/api/hubService';
 import {
   AtlasPin,
@@ -45,6 +46,7 @@ import {
   InitiativeTaskSummary,
   MarketplaceListing,
 } from '@/lib/api/types';
+import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
 import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
 import { useHubCenter } from '@/lib/atlas/hub-center';
@@ -54,6 +56,7 @@ import { useSession } from '@/lib/session/session-context';
 import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { isLocalConnection } from '@/lib/ui/is-local-connection';
 import { applyVote } from '@/lib/ui/poll';
+import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 // InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
@@ -339,7 +342,14 @@ function FileHomeRow({
       style={styles.fileGridCard}
       onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}>
       {hasPreview ? (
-        <HubMedia fileName={file.file_name} tunnelUrl={tunnelUrl} token={token} previewSeconds={4} style={styles.fileLatestThumb} />
+        <HubMedia
+          fileName={file.file_name}
+          tunnelUrl={tunnelUrl}
+          token={token}
+          previewSeconds={4}
+          style={styles.fileLatestThumb}
+          isPublic={file.is_public || file.web_public}
+        />
       ) : (
         <View style={[styles.fileLatestIcon, { backgroundColor: meta.color }]}>
           <IconSymbol name={meta.icon} size={18} color="#fff" />
@@ -416,6 +426,8 @@ function SeeAllInitiativesCard() {
 export default function HomeScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, otherSessions, switchToHub } = useSession();
+  const appDrawer = useAppDrawer();
+  const discoverDrawer = useDiscoverDrawer();
 
   const hubCenter = useHubCenter();
   const [posts, setPosts] = useState<HubPost[]>([]);
@@ -437,6 +449,12 @@ export default function HomeScreen() {
     if (!session) return;
     setLoading(true);
     setError(null);
+    // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
+    // not sequenced ahead of the fetch below the way Feed/Post Detail do it,
+    // to avoid restructuring this already-large Promise.all; a write this
+    // flush just sent will show up on Home's next focus/refresh instead of
+    // this exact one. A no-op, no network call, when the queue's empty.
+    flushWriteQueue().catch(() => {});
     Promise.all([
       getPosts(session.hub.tunnelUrl, session.token),
       getUpcomingEvents(session.hub.tunnelUrl, session.token),
@@ -480,6 +498,11 @@ export default function HomeScreen() {
   const scrollRef = useRef<ScrollView>(null);
   useScrollToTop(scrollRef);
 
+  // Liking/voting/RSVPing the single Discussions preview counts as an
+  // immediate "consumed" signal (see lib/ui/post-consumption.tsx) — opening
+  // it into post/[id] is covered separately, by that screen's own markOpened.
+  const { markEngaged } = usePostConsumption();
+
   // Only iOS's tab bar floats over content (see app/(tabs)/_layout.tsx) —
   // compensate so the last section doesn't end up hidden behind the glass.
   const tabBarHeight = useBottomTabBarHeight();
@@ -487,6 +510,7 @@ export default function HomeScreen() {
 
   function handleToggleLike(post: HubPost) {
     if (!session) return;
+    markEngaged(post.id);
     const wasLiked = post.my_liked;
     setPosts((prev) =>
       prev.map((p) =>
@@ -563,9 +587,10 @@ export default function HomeScreen() {
 
   function handleVotePoll(post: HubPost, optionIndex: number) {
     if (!session) return;
+    markEngaged(post.id);
     const previousPoll = post.poll;
     setPosts((prev) => prev.map((item) => (item.id === post.id ? applyVote(item, optionIndex) : item)));
-    votePoll(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
+    voteOrQueue(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
       setPosts((prev) => prev.map((item) => (item.id === post.id ? { ...item, poll: previousPoll } : item)));
     });
   }
@@ -576,6 +601,7 @@ export default function HomeScreen() {
   // app/events.tsx uses for its own upcoming/past split.
   function handleToggleRsvp(event: HubPost) {
     if (!session) return;
+    markEngaged(event.id);
     const wasGoing = event.my_rsvp;
     const apply = (list: HubPost[]) =>
       list.map((e) => (e.id === event.id ? { ...e, my_rsvp: !wasGoing, rsvp_count: e.rsvp_count + (wasGoing ? -1 : 1) } : e));
@@ -749,6 +775,15 @@ export default function HomeScreen() {
   return (
     <ThemedView style={styles.container}>
       <View style={styles.header}>
+        {/* Tap-to-open fallback for AppDrawer (components/app-drawer.tsx),
+            not just its left-edge swipe — important on Android, where that
+            edge-swipe competes with (and often loses to) the system's own
+            back gesture in gesture-navigation mode, see EDGE_WIDTH's comment
+            there. A button gives Android users a reliable way in regardless
+            of how that gesture race goes. */}
+        <Pressable onPress={appDrawer.toggle} hitSlop={12} accessibilityLabel="Menu" accessibilityRole="button">
+          <IconSymbol name="line.3.horizontal" size={22} color={Colors[colorScheme].text} />
+        </Pressable>
         <Pressable
           style={styles.headerTitleRow}
           onPress={() => setShowHubInfo(true)}
@@ -770,8 +805,12 @@ export default function HomeScreen() {
         </Pressable>
         {/* Pulled off the tab bar — that slot now shows notifications
             instead (see app/(tabs)/_layout.tsx) — same CustomIcon "search"
-            vector this button used to render there, just relocated. */}
-        <Pressable onPress={() => router.push('/discover')} hitSlop={12} accessibilityLabel="Search" accessibilityRole="button">
+            vector this button used to render there, just relocated. Opens
+            the experimental right-edge DiscoverDrawer (components/
+            discover-drawer.tsx) instead of navigating to /discover — that
+            screen is still reachable directly (deep link, back-nav), this is
+            just an alternate, non-navigating entry point next to swiping. */}
+        <Pressable onPress={discoverDrawer.toggle} hitSlop={12} accessibilityLabel="Search" accessibilityRole="button">
           <CustomIcon size={24} name="search" color={Colors[colorScheme].text} />
         </Pressable>
       </View>

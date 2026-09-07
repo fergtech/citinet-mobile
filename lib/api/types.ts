@@ -31,6 +31,14 @@ export type RegistryHub = HubIconFields & {
   online_now?: number;
   /** Human-readable uptime string from GET /api/status (e.g. "2d 4h"). */
   uptime?: string;
+  /** ISO timestamp set by citinet web's "Announce restart" button (see
+   * registryService.ts's isHubRestarting) — a hub's admin flips this on right
+   * before a planned restart so the Directory can show "Restarting" instead
+   * of just going offline. Cleared by the hub's own next registration call
+   * (heartbeat/re-sync) once it's back, and auto-expires after 15 minutes on
+   * the reading side as a fallback if that clear never arrives. Only ever
+   * present on registry-sourced entries, same as member_count. */
+  restarting_since?: string | null;
 };
 
 export type LoginResponse = {
@@ -87,6 +95,10 @@ export type HubPost = {
   // /api/events/upcoming all include these, same shape as like_count/my_liked.
   rsvp_count: number;
   my_rsvp: boolean;
+  // Public impression tally — bumped via POST /api/posts/:id/view, same
+  // number for every viewer (unlike like_count/rsvp_count there's no
+  // per-user "my_viewed" companion field, viewing isn't a toggle).
+  view_count: number;
   // Present only when category === 'POLL'.
   poll?: HubPostPoll;
 };
@@ -295,6 +307,13 @@ export type Space = {
   // space the viewer hasn't joined yet, since GET .../posts itself 403s for
   // non-members.
   post_count: number;
+  // Plain nullable TEXT column — a free-form Discover filter aid (see
+  // spaceCategoryMeta), not a real taxonomy the server enforces. null/''/an
+  // unrecognized value all mean "uncategorized".
+  category: string | null;
+  // ::int-cast like post_count — active members with a presence heartbeat
+  // (hub_users.last_seen_at) inside the last 5 minutes.
+  online_count: number;
   my_role: SpaceMemberRole | null;
   my_status: SpaceMemberStatus | null;
 };

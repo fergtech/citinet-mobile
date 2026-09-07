@@ -16,5 +16,9 @@ module.exports = ({ config }) => {
       ...config.ios,
       bundleIdentifier: `${config.ios.bundleIdentifier}.dev`,
     },
+    android: {
+      ...config.android,
+      package: `${config.android.package}.dev`,
+    },
   };
 };

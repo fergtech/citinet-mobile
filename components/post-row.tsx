@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import { memo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EventAtlasLink } from '@/components/event-atlas-link';
@@ -8,10 +9,12 @@ import { HubMedia } from '@/components/hub-media';
 import { PollCard } from '@/components/poll-card';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ImpressionsIcon } from '@/components/ui/impressions-icon';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { HubPost } from '@/lib/api/types';
 import { useSession } from '@/lib/session/session-context';
+import { formatCompactCount } from '@/lib/ui/format-count';
 import { formatEventWhen } from '@/lib/ui/format-event';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
 import { timeAgo } from '@/lib/ui/time-ago';
@@ -30,9 +33,20 @@ type Props = {
   onToggleLike: (post: HubPost) => void;
   onVotePoll: (post: HubPost, optionIndex: number) => void;
   onToggleRsvp: (post: HubPost) => void;
+  // Fires right before the push to post/[id] — optional, so the other
+  // PostRow call sites (Home's single-post preview, spaces, events) are
+  // unaffected. app/feed.tsx uses it to count a tap-through as an
+  // immediate "consumed" interaction (see lib/ui/post-dwell-tracking.ts).
+  onOpen?: (post: HubPost) => void;
 };
 
-export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp }: Props) {
+// Wrapped in React.memo — meaningful only because every FlatList call site
+// (feed.tsx, events.tsx) now passes stable (useCallback'd) handler props;
+// see feed.tsx's own note on why memoizing this component alone, without
+// also stabilizing what's passed into it, would just be a no-op (React.memo
+// only skips a re-render when every prop is reference-equal to last time,
+// and a plain inline function/arrow prop is a new reference every render).
+function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp, onOpen }: Props) {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
 
@@ -41,8 +55,13 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
     if (session) goToProfile(post.author_id, session.userId);
   }
 
+  function handleOpen() {
+    onOpen?.(post);
+    router.push({ pathname: '/post/[id]', params: { id: post.id } });
+  }
+
   return (
-    <Pressable style={styles.row} onPress={() => router.push({ pathname: '/post/[id]', params: { id: post.id } })}>
+    <Pressable style={styles.row} onPress={handleOpen}>
       {post.category === 'EVENT' && post.event_date && (
         <View style={styles.eventLine}>
           <IconSymbol name="calendar" size={13} color={Brand} />
@@ -63,7 +82,7 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
       )}
       {post.media_file_name && (
         <View style={styles.mediaWrap}>
-          <HubMedia fileName={post.media_file_name} tunnelUrl={tunnelUrl} token={token} previewSeconds={4} />
+          <HubMedia fileName={post.media_file_name} tunnelUrl={tunnelUrl} token={token} previewSeconds={4} isPublic />
         </View>
       )}
       {post.category === 'POLL' && post.poll && <PollCard post={post} onVote={onVotePoll} />}
@@ -94,11 +113,20 @@ export function PostRow({ post, tunnelUrl, token, onToggleLike, onVotePoll, onTo
             <ThemedText style={styles.meta}>{post.like_count}</ThemedText>
           </Pressable>
           <ThemedText style={styles.meta}>💬 {post.reply_count}</ThemedText>
+          {/* Display-only — views aren't a toggle like a like/RSVP, nothing
+              to tap. Recorded separately via lib/ui/post-consumption.tsx
+              when the post is actually seen, not by rendering this number. */}
+          <View style={styles.viewsBadge}>
+            <ImpressionsIcon size={14} color={Colors[colorScheme].icon} />
+            <ThemedText style={styles.meta}>{formatCompactCount(post.view_count)}</ThemedText>
+          </View>
         </View>
       </View>
     </Pressable>
   );
 }
+
+export const PostRow = memo(PostRowComponent);
 
 const styles = StyleSheet.create({
   row: {
@@ -154,5 +182,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  viewsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    opacity: 0.75,
   },
 });

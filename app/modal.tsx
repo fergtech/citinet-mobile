@@ -40,7 +40,12 @@ const SECTIONS: ActionSection[] = [
   {
     label: 'Share',
     items: [
-      { key: 'post', icon: 'pencil', title: 'Write a post', onPress: () => router.push('/compose-post') },
+      {
+        key: 'post',
+        icon: 'pencil',
+        title: 'Write a post',
+        onPress: () => router.push({ pathname: '/compose-post', params: { from: 'compose' } }),
+      },
       {
         key: 'file',
         icon: 'externaldrive.fill',
@@ -58,6 +63,7 @@ const SECTIONS: ActionSection[] = [
         title: 'Create an event',
         onPress: () => router.push({ pathname: '/event-editor', params: { from: 'compose' } }),
       },
+      { key: 'poll', icon: 'list.bullet', title: 'Create a poll', onPress: () => router.push({ pathname: '/poll-editor', params: { from: 'compose' } }) },
       { key: 'initiative', icon: 'target', title: 'Start an initiative', onPress: () => router.push('/initiatives/create') },
       { key: 'space', icon: 'building.2.fill', title: 'Create a space', onPress: () => router.push('/spaces/create') },
     ],

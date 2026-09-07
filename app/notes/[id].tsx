@@ -185,7 +185,13 @@ export default function NoteEditorScreen() {
   const vis = VISIBILITY_META[visibility];
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    // Explicit backgroundColor here, not left to ThemedView below — see
+    // app/post/[id].tsx's identical comment for why: this is the view that
+    // actually pads for the keyboard on iOS, so its bottom edge (not
+    // ThemedView's) sits behind the keyboard's rounded top corners.
+    <KeyboardAvoidingView
+      style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={styles.flex}>
         <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Cancel" accessibilityRole="button">

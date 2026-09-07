@@ -5,12 +5,15 @@ import { router } from 'expo-router';
 import { HubAvatar } from '@/components/hub-avatar';
 import { HubMedia } from '@/components/hub-media';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ImpressionsIcon } from '@/components/ui/impressions-icon';
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { HubPost } from '@/lib/api/types';
 import { useSession } from '@/lib/session/session-context';
+import { formatCompactCount } from '@/lib/ui/format-count';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
+import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 // Title takes priority over body, never both — one short line of context per
@@ -47,11 +50,13 @@ type Props = {
 export function PostGridCard({ post, tunnelUrl, token, onToggleLike, style }: Props) {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
+  const { markEngaged } = usePostConsumption();
   const hasMedia = !!post.media_file_name;
   const text = pickText(post);
 
   function handleLike(e: { stopPropagation: () => void }) {
     e.stopPropagation();
+    markEngaged(post.id);
     onToggleLike(post);
   }
 
@@ -70,6 +75,7 @@ export function PostGridCard({ post, tunnelUrl, token, onToggleLike, style }: Pr
             token={token}
             style={styles.fullBleedMedia}
             previewSeconds={4}
+            isPublic
           />
           <Pressable onPress={handleAuthorPress} style={styles.avatarBadge} hitSlop={6}>
             <HubAvatar userId={post.author_id} displayName={post.author_username ?? '?'} tunnelUrl={tunnelUrl} size={22} />
@@ -97,6 +103,10 @@ export function PostGridCard({ post, tunnelUrl, token, onToggleLike, style }: Pr
                   <ThemedText style={styles.overlayMeta}>{post.like_count}</ThemedText>
                 </Pressable>
                 <ThemedText style={styles.overlayMeta}>💬 {post.reply_count}</ThemedText>
+                <View style={styles.viewsBadge}>
+                  <ImpressionsIcon size={11} color="#fff" />
+                  <ThemedText style={styles.overlayMeta}>{formatCompactCount(post.view_count)}</ThemedText>
+                </View>
               </View>
             </View>
           </LinearGradient>
@@ -128,6 +138,10 @@ export function PostGridCard({ post, tunnelUrl, token, onToggleLike, style }: Pr
                 <ThemedText style={styles.meta}>{post.like_count}</ThemedText>
               </Pressable>
               <ThemedText style={styles.meta}>💬 {post.reply_count}</ThemedText>
+              <View style={styles.viewsBadge}>
+                <ImpressionsIcon size={11} color={Colors[colorScheme].icon} />
+                <ThemedText style={styles.meta}>{formatCompactCount(post.view_count)}</ThemedText>
+              </View>
             </View>
           </View>
         </View>
@@ -233,11 +247,16 @@ const styles = StyleSheet.create({
   engagement: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 10,
   },
   likeButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+  },
+  viewsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
   },
 });

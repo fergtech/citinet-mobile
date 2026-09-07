@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -10,8 +10,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { createPost } from '@/lib/api/hubService';
 import { useSession } from '@/lib/session/session-context';
+import { createPostOrQueue } from '@/lib/api/write-queue';
 
 // Tomorrow, 6pm local — a plausible default rather than "right now," since
 // most events aren't happening this instant.
@@ -98,7 +98,7 @@ export default function EventEditorScreen() {
       // part (unlike Atlas/Marketplace, which upload via POST /api/files
       // first and reference the resulting file_name) — so the picked asset
       // is attached straight to createPost() below, not pre-uploaded.
-      const created = await createPost(session.hub.tunnelUrl, session.token, {
+      const result = await createPostOrQueue(session.hub.tunnelUrl, session.token, {
         category: 'EVENT',
         title: title.trim(),
         body: description.trim(),
@@ -108,11 +108,19 @@ export default function EventEditorScreen() {
           ? { uri: imageAsset.uri, name: imageAsset.fileName ?? `event-photo-${Date.now()}.jpg`, type: imageAsset.mimeType ?? 'image/jpeg' }
           : null,
       });
+      if (result.queued) {
+        // Couldn't reach the hub — same "will send once it's back" treatment
+        // as compose-post.tsx's own createPostOrQueue handling.
+        Alert.alert('Saved to send later', "You're offline or the hub is unreachable — this will post automatically once it's back.", [
+          { text: 'OK', onPress: () => (fromComposeLauncher ? router.dismiss(2) : router.back()) },
+        ]);
+        return;
+      }
       if (fromComposeLauncher) {
         // Pop both this editor and app/modal.tsx's launcher in one go, then
         // land on the event just created — same convention as Atlas/Marketplace.
         router.dismiss(2);
-        router.push({ pathname: '/post/[id]', params: { id: created.id } });
+        router.push({ pathname: '/post/[id]', params: { id: result.post.id } });
         return;
       }
       router.back();

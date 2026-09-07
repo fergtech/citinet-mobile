@@ -59,13 +59,25 @@ import Svg, { Path } from 'react-native-svg';
 // pass as every other icon here — this pathData needed zero adjustment,
 // it was already an exact match.
 //
-// "feedGlyph" (replaces the app drawer's Feed row's "commentDots", from when
-// that row was still labeled "Discussions") is lifted verbatim from
-// citinet-web's own FeedGlyph (src/app/components/icons.tsx) — the icon its
-// sidebar/bottom-dock nav already uses for the same destination, so the two
-// clients now share one glyph for it. Already a 0-24 viewBox, no rescale
-// needed. Three subpaths: a wide top block, a wide bottom block, and a
-// narrow full-height left column — reads as a stacked news/article layout.
+// "filesGlyph" (replaces the app drawer's Files row's IconSymbol
+// "folder.fill") is lifted verbatim from citinet-web's own FilesGlyph
+// (src/app/components/icons.tsx) — the icon its sidebar/bottom-dock nav
+// already uses for the same destination (see appTiles.ts's FilesGlyph
+// import), so the two clients now share one glyph for it. Already a 0-24
+// viewBox, no rescale needed. A rounded document/folder silhouette with a
+// downward arrow-into-tray cut out of it, reading as "files live here"
+// rather than a plain folder shape.
+//
+// The app drawer's Feed row went the other way instead of gaining a matching
+// custom glyph here: web's own Feed nav icon is lucide-react's stock
+// "Newspaper" (see appTiles.ts), a stroke-outline icon that doesn't fit this
+// component's solid-fill convention (every other glyph here, and every
+// IconSymbol elsewhere in the app, is filled). IconSymbol's existing
+// "newspaper.fill" (MaterialIcons "article") is the closer match stylistically
+// even though it isn't a literal port — same "actual newspaper" concept web
+// settled on, just solid instead of outlined. The previous "feedGlyph" here
+// (a stacked-blocks glyph invented before web's own Feed icon existed) is
+// gone now that both clients agree on "newspaper" as the concept.
 //
 // "citinetLogo" (replaces the app drawer's About row IconSymbol
 // "info.circle") is hand-authored, not lifted — H:\Apps\custom-icons\
@@ -98,7 +110,8 @@ export const ICON_PATHS = {
     'M24,12c0,6.62-5.38,12-12,12S0,18.62,0,12,5.38,0,12,0c.19,0,.38,0,.57,.01,.83,.04,1.47,.74,1.43,1.57-.04,.83-.72,1.45-1.57,1.43-.14,0-.29-.01-.43-.01C7.04,3,3,7.04,3,12s4.04,9,9,9,9-4.04,9-9c0-.14,0-.29-.01-.43-.04-.83,.6-1.53,1.43-1.57,.85-.03,1.53,.6,1.57,1.43,0,.19,.01,.38,.01,.57Zm-13.09-3.85c.8-.23,1.26-1.05,1.04-1.85s-1.06-1.26-1.85-1.04c-3,.85-5.09,3.62-5.09,6.74,0,3.86,3.14,7,7,7,3.12,0,5.89-2.09,6.74-5.09,.23-.8-.24-1.63-1.04-1.85-.8-.23-1.63,.24-1.85,1.04-.48,1.71-2.07,2.91-3.85,2.91-2.21,0-4-1.79-4-4,0-1.78,1.2-3.37,2.91-3.85Zm.03,2.79c-.59,.59-.59,1.54,0,2.12,.29,.29,.68,.44,1.06,.44s.77-.15,1.06-.44l5.06-5.06h2.38c.4,0,.78-.16,1.06-.44l2-2c.43-.43,.56-1.07,.33-1.63-.23-.56-.78-.93-1.39-.93h-1.5V1.5c0-.61-.37-1.15-.93-1.39-.56-.23-1.21-.1-1.63,.33l-2,2c-.28,.28-.44,.66-.44,1.06v2.38l-5.06,5.06Z',
   commentDots:
     'm12,0C5.383,0,0,5.383,0,12s5.383,12,12,12h12v-12C24,5.383,18.617,0,12,0Zm11,23h-11c-6.065,0-11-4.935-11-11S5.935,1,12,1s11,4.935,11,11v11Zm-10-11c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Zm5,0c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Zm-10,0c0,.552-.448,1-1,1s-1-.448-1-1,.448-1,1-1,1,.448,1,1Z',
-  feedGlyph: 'M7,2h14c1.654,0,3,1.346,3,3v6H7V2Zm0,11v9H24V13H7ZM5,2H3C1.346,2,0,3.346,0,5V22H5V2Z',
+  filesGlyph:
+    'M17.974,7.146c-.331-.066-.602-.273-.742-.569-1.55-3.271-5.143-5.1-8.734-4.438-3.272,.6-5.837,3.212-6.384,6.501-.162,.971-.15,1.943,.033,2.89,.06,.309-.073,.653-.346,.901-1.145,1.041-1.801,2.524-1.801,4.07,0,3.032,2.467,5.5,5.5,5.5h11c4.136,0,7.5-3.364,7.5-7.5,0-3.565-2.534-6.658-6.026-7.354Zm-2.853,6.562c-.195,.195-.451,.293-.707,.293s-.512-.098-.707-.293l-1.707-1.707v5c0,.553-.448,1-1,1s-1-.447-1-1v-5l-1.707,1.707c-.391,.391-1.023,.391-1.414,0s-.391-1.023,0-1.414l2.707-2.707c.386-.386,.893-.58,1.4-.583l.014-.003,.014,.003c.508,.003,1.014,.197,1.4,.583l2.707,2.707c.391,.391,.391,1.023,0,1.414Z',
   citinetLogo:
     'M21,6 A10,10 0 1 0 21,18 A1.54,1.54 0 0 0 18.5,16.2 A7,7 0 1 1 18.5,7.8 A1.54,1.54 0 0 0 21,6 Z M8.6,13.8 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0 M11.9,12 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0 M15.2,10.2 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0',
 } as const;

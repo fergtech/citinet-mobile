@@ -11,9 +11,11 @@ import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand } from '@/constants/theme';
-import { getUpcomingEvents, listEventPosts, toggleLike, toggleRsvp, votePoll } from '@/lib/api/hubService';
+import { getUpcomingEvents, listEventPosts, toggleLike, toggleRsvp } from '@/lib/api/hubService';
 import { HubPost } from '@/lib/api/types';
+import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { applyVote } from '@/lib/ui/poll';
+import { usePostDwellTracking } from '@/lib/ui/post-dwell-tracking';
 import { useSession } from '@/lib/session/session-context';
 
 type Tab = 'upcoming' | 'past';
@@ -45,6 +47,10 @@ export default function EventsScreen() {
     if (!session) return;
     setLoading(true);
     setError(null);
+    // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
+    // fire-and-forget, not sequenced ahead of the fetch below. A no-op, no
+    // network call, when the queue's empty.
+    flushWriteQueue().catch(() => {});
     Promise.all([
       getUpcomingEvents(session.hub.tunnelUrl, session.token),
       listEventPosts(session.hub.tunnelUrl, session.token),
@@ -72,6 +78,11 @@ export default function EventsScreen() {
   // Focus-based, not mount-only — see Home/Messages for why.
   useFocusEffect(load);
 
+  // Both panes are real FlatLists, so both get full dwell tracking (not
+  // just engagement) — see lib/ui/post-dwell-tracking.ts. One hook call
+  // covers both; viewabilityConfig/onViewableItemsChanged aren't pane-specific.
+  const { viewabilityConfig, onViewableItemsChanged, markEngaged } = usePostDwellTracking();
+
   const past = useMemo(() => {
     const upcomingIds = new Set(upcoming.map((e) => e.id));
     return [...allEvents]
@@ -79,48 +90,85 @@ export default function EventsScreen() {
       .sort((a, b) => new Date(b.event_date!).getTime() - new Date(a.event_date!).getTime());
   }, [upcoming, allEvents]);
 
-  function handleToggleLike(event: HubPost) {
-    if (!session) return;
-    const wasLiked = event.my_liked;
-    const apply = (list: HubPost[]) =>
-      list.map((e) => (e.id === event.id ? { ...e, my_liked: !wasLiked, like_count: e.like_count + (wasLiked ? -1 : 1) } : e));
-    setUpcoming(apply);
-    setAllEvents(apply);
-    toggleLike(session.hub.tunnelUrl, session.token, event.id).catch(() => {
-      const rollback = (list: HubPost[]) =>
-        list.map((e) => (e.id === event.id ? { ...e, my_liked: wasLiked, like_count: event.like_count } : e));
-      setUpcoming(rollback);
-      setAllEvents(rollback);
-    });
-  }
+  // useCallback, not plain function declarations — PostRow is React.memo'd,
+  // which only skips a re-render when every prop (these handlers included)
+  // keeps the same identity across renders. See feed.tsx's own note on this.
+  const handleToggleLike = useCallback(
+    (event: HubPost) => {
+      if (!session) return;
+      markEngaged(event.id);
+      const wasLiked = event.my_liked;
+      const apply = (list: HubPost[]) =>
+        list.map((e) => (e.id === event.id ? { ...e, my_liked: !wasLiked, like_count: e.like_count + (wasLiked ? -1 : 1) } : e));
+      setUpcoming(apply);
+      setAllEvents(apply);
+      toggleLike(session.hub.tunnelUrl, session.token, event.id).catch(() => {
+        const rollback = (list: HubPost[]) =>
+          list.map((e) => (e.id === event.id ? { ...e, my_liked: wasLiked, like_count: event.like_count } : e));
+        setUpcoming(rollback);
+        setAllEvents(rollback);
+      });
+    },
+    [session, markEngaged]
+  );
 
-  function handleVotePoll(post: HubPost, optionIndex: number) {
-    if (!session) return;
-    const prevPoll = post.poll;
-    const apply = (list: HubPost[]) => list.map((e) => (e.id === post.id ? applyVote(e, optionIndex) : e));
-    setUpcoming(apply);
-    setAllEvents(apply);
-    votePoll(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
-      const rollback = (list: HubPost[]) => list.map((e) => (e.id === post.id ? { ...e, poll: prevPoll } : e));
-      setUpcoming(rollback);
-      setAllEvents(rollback);
-    });
-  }
+  const handleVotePoll = useCallback(
+    (post: HubPost, optionIndex: number) => {
+      if (!session) return;
+      markEngaged(post.id);
+      const prevPoll = post.poll;
+      const apply = (list: HubPost[]) => list.map((e) => (e.id === post.id ? applyVote(e, optionIndex) : e));
+      setUpcoming(apply);
+      setAllEvents(apply);
+      voteOrQueue(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
+        const rollback = (list: HubPost[]) => list.map((e) => (e.id === post.id ? { ...e, poll: prevPoll } : e));
+        setUpcoming(rollback);
+        setAllEvents(rollback);
+      });
+    },
+    [session, markEngaged]
+  );
 
-  function handleToggleRsvp(event: HubPost) {
-    if (!session) return;
-    const wasGoing = event.my_rsvp;
-    const apply = (list: HubPost[]) =>
-      list.map((e) => (e.id === event.id ? { ...e, my_rsvp: !wasGoing, rsvp_count: e.rsvp_count + (wasGoing ? -1 : 1) } : e));
-    setUpcoming(apply);
-    setAllEvents(apply);
-    toggleRsvp(session.hub.tunnelUrl, session.token, event.id).catch(() => {
-      const rollback = (list: HubPost[]) =>
-        list.map((e) => (e.id === event.id ? { ...e, my_rsvp: wasGoing, rsvp_count: event.rsvp_count } : e));
-      setUpcoming(rollback);
-      setAllEvents(rollback);
-    });
-  }
+  const handleToggleRsvp = useCallback(
+    (event: HubPost) => {
+      if (!session) return;
+      markEngaged(event.id);
+      const wasGoing = event.my_rsvp;
+      const apply = (list: HubPost[]) =>
+        list.map((e) => (e.id === event.id ? { ...e, my_rsvp: !wasGoing, rsvp_count: e.rsvp_count + (wasGoing ? -1 : 1) } : e));
+      setUpcoming(apply);
+      setAllEvents(apply);
+      toggleRsvp(session.hub.tunnelUrl, session.token, event.id).catch(() => {
+        const rollback = (list: HubPost[]) =>
+          list.map((e) => (e.id === event.id ? { ...e, my_rsvp: wasGoing, rsvp_count: event.rsvp_count } : e));
+        setUpcoming(rollback);
+        setAllEvents(rollback);
+      });
+    },
+    [session, markEngaged]
+  );
+
+  const keyExtractor = useCallback((event: HubPost) => event.id, []);
+
+  // Shared by both panes (upcoming/past) — identical rendering either way,
+  // so one stable callback rather than one defined fresh inside renderPane
+  // per call.
+  const renderItem = useCallback(
+    ({ item }: { item: HubPost }) => {
+      if (!session) return null;
+      return (
+        <PostRow
+          post={item}
+          tunnelUrl={session.hub.tunnelUrl}
+          token={session.token}
+          onToggleLike={handleToggleLike}
+          onVotePoll={handleVotePoll}
+          onToggleRsvp={handleToggleRsvp}
+        />
+      );
+    },
+    [session, handleToggleLike, handleVotePoll, handleToggleRsvp]
+  );
 
   // translateX drives the two-pane row below (Upcoming pane + Past pane,
   // each exactly `paneWidth` wide) — 0 shows Upcoming, -paneWidth shows Past.
@@ -193,30 +241,26 @@ export default function EventsScreen() {
   }));
 
   if (!session) return null;
-  // Nested closures below don't inherit the narrowing from the guard above
-  // (TS doesn't narrow across function boundaries) — this const does, since
-  // its type is fixed to the narrowed type at the point of initialization.
-  const activeSession = session;
 
   function renderPane(events: HubPost[], emptyLabel: string, showCreateCta: boolean) {
     return (
       <View style={{ width: paneWidth }}>
         <FlatList
           data={events}
-          keyExtractor={(event) => event.id}
+          keyExtractor={keyExtractor}
           contentContainerStyle={styles.list}
           onRefresh={load}
           refreshing={loading}
-          renderItem={({ item }) => (
-            <PostRow
-              post={item}
-              tunnelUrl={activeSession.hub.tunnelUrl}
-              token={activeSession.token}
-              onToggleLike={handleToggleLike}
-              onVotePoll={handleVotePoll}
-              onToggleRsvp={handleToggleRsvp}
-            />
-          )}
+          viewabilityConfig={viewabilityConfig}
+          onViewableItemsChanged={onViewableItemsChanged}
+          renderItem={renderItem}
+          // See feed.tsx's own note on both of these — Android-only clipping,
+          // and no getItemLayout since event rows vary in height (RSVP row,
+          // location link, poll, media all optional).
+          removeClippedSubviews={Platform.OS === 'android'}
+          maxToRenderPerBatch={5}
+          windowSize={7}
+          initialNumToRender={6}
           ListEmptyComponent={
             !loading ? (
               <View style={styles.emptyState}>

@@ -203,6 +203,17 @@ export type CreatePostInput = {
   event_location?: string;
   visibility?: 'inherit' | 'hub' | 'private';
   media?: { uri: string; name: string; type: string } | null;
+  // POLL-only fields — see the real POST /api/posts handler (api/server.js):
+  // `options` must be 2-5 non-empty strings (title carries the question,
+  // same as the server requiring title but not body for this category);
+  // closes_at/quorum_pct/pass_pct are all optional (server defaults closes_at
+  // to never, quorum_pct to 0, pass_pct to 50). request_id (mod-only,
+  // auto-approves a linked governance request on close) is deliberately not
+  // modeled here — this app has no Requests feature to link one from.
+  options?: string[];
+  closes_at?: string;
+  quorum_pct?: number;
+  pass_pct?: number;
 };
 
 // POST /api/posts — the app's first real post-creation call (everything
@@ -213,7 +224,10 @@ export type CreatePostInput = {
 // FormData or the server sees an empty req.body and 400s on "add a title or
 // some text." Response shape is hand-assembled server-side and is missing
 // like_count/my_liked (a freshly created post can't have either yet), so
-// those are defaulted here to keep the return value a real HubPost.
+// those are defaulted here to keep the return value a real HubPost. (A POLL
+// response also embeds a real `poll` object already shaped like
+// HubPostPoll — that comes through untouched via the `...post` spread
+// below, nothing extra to default for it.)
 export async function createPost(tunnelUrl: string, token: string, input: CreatePostInput): Promise<HubPost> {
   const form = new FormData();
   form.append('category', input.category);
@@ -222,6 +236,10 @@ export async function createPost(tunnelUrl: string, token: string, input: Create
   if (input.event_date) form.append('event_date', input.event_date);
   if (input.event_location) form.append('event_location', input.event_location);
   if (input.visibility) form.append('visibility', input.visibility);
+  if (input.options) form.append('options', JSON.stringify(input.options));
+  if (input.closes_at) form.append('closes_at', input.closes_at);
+  if (typeof input.quorum_pct === 'number') form.append('quorum_pct', String(input.quorum_pct));
+  if (typeof input.pass_pct === 'number') form.append('pass_pct', String(input.pass_pct));
   if (input.media) {
     form.append('media', { uri: input.media.uri, name: input.media.name, type: input.media.type } as unknown as Blob);
   }
@@ -313,6 +331,25 @@ export async function toggleLike(
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't update like."));
+  }
+  return res.json();
+}
+
+// Records this user as having viewed the post — deduped server-side per
+// user (hub_post_views has a UNIQUE(post_id, user_id) constraint, same as
+// hub_post_likes), so calling this again for a post the user already
+// viewed, even after an app relaunch or from a different device, is a
+// harmless no-op rather than double-counting. Fire-and-forget from the
+// caller's side (lib/ui/post-consumption.tsx) — a missed view tally isn't
+// worth surfacing an error over, so this deliberately has no rollback/retry
+// the way toggleLike's optimistic-update callers do.
+export async function recordPostView(tunnelUrl: string, token: string, postId: string): Promise<{ count: number }> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/view`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't record view."));
   }
   return res.json();
 }
@@ -1019,6 +1056,21 @@ export function uploadFileWithProgress(
 // Public endpoint, no auth header needed — safe to use directly as an <Image> uri.
 export function getAvatarUrl(tunnelUrl: string, userId: string): string {
   return `${tunnelUrl}/api/auth/avatar/${encodeURIComponent(userId)}`;
+}
+
+// GET /api/public/files/:filename — same "public, no-auth, safe to use
+// directly as an <Image>/<Video> uri" shape as getAvatarUrl above, for any
+// file the server has is_public=true (post/reply attachments always are —
+// see the create/update-post handlers in api/server.js). Unlike
+// getMediaUrl() below, this needs no token round-trip and — critically —
+// the server sends real caching headers on this route (`public,
+// max-age=86400, immutable`) instead of the token/download route's
+// `private, no-store` (that route is for explicit "save this file to my
+// device" downloads, not inline display, hence no-store). Only use this for
+// media you know is unconditionally public; anything that could be a
+// private Files-section upload must keep going through getMediaUrl().
+export function getPublicFileUrl(tunnelUrl: string, fileName: string): string {
+  return `${tunnelUrl}/api/public/files/${encodeURIComponent(fileName)}`;
 }
 
 // fileName -> in-flight/resolved download URL, so simultaneous requests for the
@@ -1898,6 +1950,22 @@ export async function getSpace(tunnelUrl: string, token: string, slug: string): 
     throw new Error(await readErrorMessage(res, "Couldn't load this space."));
   }
   return readJson<Space>(res, "Couldn't load this space.");
+}
+
+// GET /api/spaces — every space on the hub (plus any federated "Society
+// Plus" ones the hub's spaces provider proxies in), each row carrying the
+// caller's own my_role/my_status if they've joined/requested/been invited —
+// used by the Browse Spaces screen's Discover list. Ordered newest-created
+// first by the server; unlike listMySpaces this includes spaces the caller
+// has never interacted with at all (my_role/my_status both null).
+export async function listAllSpaces(tunnelUrl: string, token: string): Promise<Space[]> {
+  const res = await fetch(`${tunnelUrl}/api/spaces`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load spaces for this hub."));
+  }
+  return readJson<Space[]>(res, "Couldn't load spaces for this hub.");
 }
 
 // GET /api/spaces/mine — active memberships only (the server's own JOIN

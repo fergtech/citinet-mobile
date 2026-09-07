@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
 import { ReportSheet } from '@/components/report-sheet';
@@ -88,6 +89,7 @@ function MinimizedCallBar({ onPress }: { onPress: () => void }) {
 export default function ConversationScreen() {
   const { id, title, peerId: peerIdParam } = useLocalSearchParams<{ id: string; title: string; peerId?: string }>();
   const colorScheme = useColorScheme() ?? 'light';
+  const insets = useSafeAreaInsets();
   const { session } = useSession();
   const { ensure, attention, decryptForConversation, encryptForConversation } = useE2EKeys();
   const { call, restore } = useCall();
@@ -290,7 +292,13 @@ export default function ConversationScreen() {
   if (!session) return null;
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    // Explicit backgroundColor here, not left to ThemedView below — see
+    // app/post/[id].tsx's identical comment for why: this is the view that
+    // actually pads for the keyboard on iOS, so its bottom edge (not
+    // ThemedView's) sits behind the keyboard's rounded top corners.
+    <KeyboardAvoidingView
+      style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={styles.flex}>
         <ScreenHeader
           title={title ?? 'Conversation'}
@@ -395,7 +403,7 @@ export default function ConversationScreen() {
           }
         />
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 8 : 16) }]}>
           <View style={styles.composerRow}>
             <TextInput
               value={draft}
@@ -590,7 +598,11 @@ const styles = StyleSheet.create({
     borderTopColor: '#8884',
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 8 : 16,
+    // paddingBottom is applied inline (see the composer View itself) —
+    // Math.max(insets.bottom, ...) so the home-indicator safe area on
+    // iPhones with rounded bottom corners actually clears the placeholder
+    // text instead of a fixed 8px letting the corner curve clip into it.
+    // Same fix as app/post/[id].tsx's comment composer.
   },
   composerRow: {
     flexDirection: 'row',

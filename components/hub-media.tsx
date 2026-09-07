@@ -1,9 +1,11 @@
+import { useIsFocused } from '@react-navigation/native';
 import { Image, ImageContentPosition, ImageStyle } from 'expo-image';
 import { useEffect, useState } from 'react';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { ActivityIndicator, StyleProp, StyleSheet, View } from 'react-native';
+import { StyleProp, StyleSheet } from 'react-native';
 
-import { getMediaUrl } from '@/lib/api/hubService';
+import { MediaSkeleton } from '@/components/ui/media-skeleton';
+import { getMediaUrl, getPublicFileUrl } from '@/lib/api/hubService';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm'];
 
@@ -29,20 +31,31 @@ type Props = {
   // Vertical crop anchor for the admin-configurable marketplace banner
   // (e.g. { top: '30%' }) — unused by every other caller, ignored for video.
   contentPosition?: ImageContentPosition;
+  // Set by callers that know this file is unconditionally public — post/reply
+  // attachments (post-row.tsx, post-grid-card.tsx, post detail), which the
+  // server always stores with is_public=true. Skips the token round-trip
+  // entirely in favor of getPublicFileUrl's direct, properly-cached public
+  // URL — see that function's own comment for why the token/download route
+  // this otherwise falls back to (getMediaUrl) is actively bad for inline
+  // feed images (private, no-store; built for explicit downloads, not
+  // display). Leave unset for anything that could be a private Files-section
+  // upload — that still needs the authenticated fallback below.
+  isPublic?: boolean;
 };
 
-export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition }: Props) {
-  const [url, setUrl] = useState<string | null>(null);
+export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic }: Props) {
+  const [tokenUrl, setTokenUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const video = isVideo(fileName);
 
   useEffect(() => {
+    if (isPublic) return;
     let cancelled = false;
-    setUrl(null);
+    setTokenUrl(null);
     setFailed(false);
     getMediaUrl(tunnelUrl, token, fileName)
       .then((resolved) => {
-        if (!cancelled) setUrl(resolved);
+        if (!cancelled) setTokenUrl(resolved);
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -50,7 +63,11 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
     return () => {
       cancelled = true;
     };
-  }, [tunnelUrl, token, fileName]);
+  }, [isPublic, tunnelUrl, token, fileName]);
+
+  // Synchronous for the public path — no loading gap, no placeholder flash,
+  // unlike the token round-trip the fallback still needs.
+  const url = isPublic ? getPublicFileUrl(tunnelUrl, fileName) : tokenUrl;
 
   // Must call this hook unconditionally; pass null until the URL resolves.
   // Autoplay muted: browsers block unmuted autoplay outright, and it's the
@@ -62,6 +79,24 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
     if (previewSeconds) p.timeUpdateEventInterval = 0.25;
     p.play();
   });
+
+  // Explicit play/pause tied to the *screen's* focus (not just this
+  // component's mount state) — expo-router leaves other tabs/pushed-under
+  // screens mounted rather than unmounting them, so without this a preview
+  // that's already playing keeps decoding frames off-screen (wasted native
+  // decoder resources, worse on Android where those are limited), and
+  // worse: navigating away and back left it stuck on a static poster frame
+  // instead of resuming, because nothing ever called play() again — the
+  // original p.play() above only fires once, at creation. Re-deriving
+  // "should this be playing" from isFocused on every focus change fixes
+  // both: paused while off-screen, and explicitly restarted on return
+  // instead of assuming the player quietly kept itself going.
+  const isFocused = useIsFocused();
+  useEffect(() => {
+    if (!video) return;
+    if (isFocused) player.play();
+    else player.pause();
+  }, [video, isFocused, player]);
 
   // Loops just the first `previewSeconds` rather than the whole video —
   // `p.loop` above only covers reaching the actual end, so a long video
@@ -79,11 +114,7 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
   if (failed) return null;
 
   if (!url) {
-    return (
-      <View style={[styles.placeholder, style]}>
-        <ActivityIndicator />
-      </View>
-    );
+    return <MediaSkeleton style={[styles.placeholder, style]} />;
   }
 
   if (video) {
@@ -107,6 +138,8 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
       style={[styles.media, style]}
       contentFit="cover"
       contentPosition={contentPosition}
+      cachePolicy="memory-disk"
+      transition={200}
       onError={() => setFailed(true)}
     />
   );

@@ -52,7 +52,16 @@ export default function E2EUnlockScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    // Explicit backgroundColor here, not left to ThemedView below — see
+    // app/post/[id].tsx's identical comment for why: this is the view that
+    // actually pads for the keyboard on iOS, so its bottom edge (not
+    // ThemedView's) sits behind the keyboard's rounded top corners. Doubly
+    // relevant here since this screen presents as a native modal sheet
+    // (see app/_layout.tsx) — its own root container's color is what shows
+    // through, not just this screen's.
+    <KeyboardAvoidingView
+      style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ThemedView style={styles.container}>
         <View style={styles.header}>
         <ThemedText type="title" style={styles.headerTitle}>

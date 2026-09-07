@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppDrawer } from '@/components/app-drawer';
 import { CreateTabButton } from '@/components/create-tab-button';
+import { DiscoverDrawer } from '@/components/discover-drawer';
 import { HapticTab } from '@/components/haptic-tab';
 import { HubAvatar } from '@/components/hub-avatar';
 import { CustomIcon } from '@/components/ui/custom-icon';
@@ -13,6 +14,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { listUnreadNotifications } from '@/lib/api/hubService';
 import { useSession } from '@/lib/session/session-context';
+import { DrawerCoordinatorProvider } from '@/lib/ui/drawer-coordinator';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -39,6 +41,8 @@ export default function TabLayout() {
   );
 
   return (
+    <DrawerCoordinatorProvider>
+    <DiscoverDrawer>
     <AppDrawer>
     <Tabs
       screenOptions={{
@@ -193,6 +197,8 @@ export default function TabLayout() {
       />
     </Tabs>
     </AppDrawer>
+    </DiscoverDrawer>
+    </DrawerCoordinatorProvider>
   );
 }
 
