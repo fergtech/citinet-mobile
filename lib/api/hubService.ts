@@ -1,4 +1,4 @@
-import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, InitiativeUpdateComment, InitiativeUpdateEntry, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, SpaceVisibility, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -214,6 +214,16 @@ export type CreatePostInput = {
   closes_at?: string;
   quorum_pct?: number;
   pass_pct?: number;
+  // Scopes the post to a space (any category — plain/EVENT/POLL all support
+  // this) — same endpoint, just an added optional field server-side rather
+  // than the separate, plainer POST /api/spaces/:slug/posts route (which
+  // doesn't parse event/poll fields at all). 404s if the space doesn't
+  // exist, 403s if the caller isn't an active member of it. Never send this
+  // for a Society+-proxied space (a space whose slug looks like a Society
+  // Plus id) — the server 400s that case deliberately, on the assumption a
+  // client would only ever have such a slug from spaces this app doesn't
+  // support composing into via this endpoint in the first place.
+  space_slug?: string;
 };
 
 // POST /api/posts — the app's first real post-creation call (everything
@@ -240,6 +250,7 @@ export async function createPost(tunnelUrl: string, token: string, input: Create
   if (input.closes_at) form.append('closes_at', input.closes_at);
   if (typeof input.quorum_pct === 'number') form.append('quorum_pct', String(input.quorum_pct));
   if (typeof input.pass_pct === 'number') form.append('pass_pct', String(input.pass_pct));
+  if (input.space_slug) form.append('space_slug', input.space_slug);
   if (input.media) {
     form.append('media', { uri: input.media.uri, name: input.media.name, type: input.media.type } as unknown as Blob);
   }
@@ -1472,6 +1483,20 @@ export async function joinInitiative(tunnelUrl: string, token: string, initiativ
   return res.json();
 }
 
+// No response body worth trusting (just { ok: true }) — the external
+// service has no leave route at all, so this works by suppressing
+// viewerIsMember server-side (hub_initiative_leaves), same note as
+// api/server.js's own POST /:id/leave.
+export async function leaveInitiative(tunnelUrl: string, token: string, initiativeId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/leave`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't leave this initiative."));
+  }
+}
+
 export async function getInitiativeTeam(
   tunnelUrl: string,
   token: string,
@@ -1868,6 +1893,40 @@ export async function stepDownFromRole(tunnelUrl: string, token: string, roleId:
   return res.json();
 }
 
+// Creator-only server-side (assertInitiativeCreator on POST /:id/roles, same
+// gate as addTask above) — callers should check initiative.viewerIsCreator
+// before showing whatever triggers this, same convention as tasks.tsx's own
+// "+".
+export async function addRole(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  data: { role: string; skill?: string }
+): Promise<InitiativeRole> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/roles`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't add that role."));
+  }
+  return res.json();
+}
+
+// Server 403s unless the caller is the one who opened this role
+// (InitiativeRole.created_by) — same self-service-only shape as
+// unprovideResource below.
+export async function deleteRole(tunnelUrl: string, token: string, roleId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/roles/${encodeURIComponent(roleId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that role."));
+  }
+}
+
 // Resources
 
 export async function listInitiativeResources(
@@ -1911,6 +1970,126 @@ export async function unprovideResource(tunnelUrl: string, token: string, resour
     throw new Error(await readErrorMessage(res, "Couldn't undo that."));
   }
   return res.json();
+}
+
+// A plain material request ("bring 2 folding tables") — no creator gate on
+// POST /:id/resources itself (any authenticated member can ask for
+// something), unlike addTask/addRole above.
+export async function addResource(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  data: { item: string; qty?: string }
+): Promise<InitiativeResource> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/resources`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...data, kind: 'material' }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't add that resource."));
+  }
+  return res.json();
+}
+
+// Same route as addResource, kind: 'link' branch — the server falls back to
+// the raw url as `item` when none is given (see api/server.js's own note),
+// so `item` is genuinely optional here too.
+export async function addResourceLink(
+  tunnelUrl: string,
+  token: string,
+  initiativeId: string,
+  data: { url: string; item?: string }
+): Promise<InitiativeResource> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/resources`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...data, kind: 'link' }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't add that link."));
+  }
+  return res.json();
+}
+
+// Server 403s unless the caller is the one who added this resource
+// (InitiativeResource.created_by) — and, for a 'file' resource this device
+// itself uploaded (owns_file), also deletes the underlying hub_files row and
+// its storage object server-side. Never touches a merely-attached file
+// someone else owns.
+export async function deleteResource(tunnelUrl: string, token: string, resourceId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/resources/${encodeURIComponent(resourceId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that resource."));
+  }
+}
+
+// Updates — a real, live "post an update" wall + threaded comments (see
+// InitiativeUpdateEntry's own note on why this is a separate endpoint from
+// the always-empty Initiative.updates field embedded on GET /:id).
+
+export async function getInitiativeUpdates(tunnelUrl: string, token: string, initiativeId: string): Promise<InitiativeUpdateEntry[]> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/updates`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load updates."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.updates) ? data.updates : [];
+}
+
+// No creator gate server-side — any authenticated user can post, same as
+// task/note composers elsewhere in this app; callers gate this on
+// initiative.viewerIsMember instead, a product choice matching citinet-web's
+// own UpdatesPane (canPost={!!current.viewerIsMember}).
+export async function postInitiativeUpdate(tunnelUrl: string, token: string, initiativeId: string, content: string): Promise<InitiativeUpdateEntry> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/${encodeURIComponent(initiativeId)}/updates`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post that update."));
+  }
+  return res.json();
+}
+
+// Server 403s unless the caller is the update's own author.
+export async function deleteInitiativeUpdate(tunnelUrl: string, token: string, updateId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/updates/${encodeURIComponent(updateId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that update."));
+  }
+}
+
+export async function postUpdateComment(tunnelUrl: string, token: string, updateId: string, content: string): Promise<InitiativeUpdateComment> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/updates/${encodeURIComponent(updateId)}/comments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post that reply."));
+  }
+  return res.json();
+}
+
+// Server 403s unless the caller is the comment's own author.
+export async function deleteUpdateComment(tunnelUrl: string, token: string, commentId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/initiatives/comments/${encodeURIComponent(commentId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(await readErrorMessage(res, "Couldn't remove that reply."));
+  }
 }
 
 // ── Spaces ───────────────────────────────────────────────────────────
@@ -2018,6 +2197,53 @@ export async function leaveSpace(tunnelUrl: string, token: string, slug: string)
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't leave this space."));
+  }
+}
+
+// One PATCH for every settings field, same as citinet-web's own
+// spacesService.update — name/description/visibility/category/web_public
+// (the Settings tab) and banner_mode/banner_color/banner_gradient_from/
+// banner_gradient_to (the banner style swatches) all go through this same
+// route, just with different partial payloads. Server-gated to the space's
+// own admins/owner (canManageSpace); category '' explicitly clears it
+// (COALESCE only skips a real SQL NULL, not an empty string — see
+// api/server.js's own note on this route).
+export async function updateSpace(
+  tunnelUrl: string,
+  token: string,
+  slug: string,
+  data: Partial<{
+    name: string;
+    description: string;
+    visibility: SpaceVisibility;
+    category: string;
+    web_public: boolean;
+    banner_mode: 'solid' | 'gradient';
+    banner_color: string;
+    banner_gradient_from: string;
+    banner_gradient_to: string;
+  }>
+): Promise<Space> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't save those settings."));
+  }
+  return readJson<Space>(res, "Couldn't save those settings.");
+}
+
+// Owner-only server-side (or a hub-level admin) — posts are kept, just
+// detached (space_id set to NULL), not deleted themselves.
+export async function deleteSpace(tunnelUrl: string, token: string, slug: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't delete this space."));
   }
 }
 
@@ -2165,8 +2391,14 @@ export async function listCallEvents(tunnelUrl: string, token: string, conversat
   return Array.isArray(data.call_events) ? data.call_events : [];
 }
 
-export async function listLiveComms(tunnelUrl: string, token: string): Promise<LiveCommsItem[]> {
-  const res = await fetch(`${tunnelUrl}/api/comms/live`, {
+// Pass spaceSlug to get that space's own live list instead of the hub-wide
+// one (real GET /api/comms/live?space_slug=X, membership-checked server-side
+// — see api/comms.js's own note) — a space-scoped broadcast never shows up
+// in the plain hub-wide call, and vice versa, same "doesn't leak into the
+// main feed unless explicitly shared" precedent as space posts.
+export async function listLiveComms(tunnelUrl: string, token: string, spaceSlug?: string): Promise<LiveCommsItem[]> {
+  const query = spaceSlug ? `?space_slug=${encodeURIComponent(spaceSlug)}` : '';
+  const res = await fetch(`${tunnelUrl}/api/comms/live${query}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return [];
@@ -2180,18 +2412,23 @@ export async function listLiveComms(tunnelUrl: string, token: string): Promise<L
 // silent camera-preview connection — requires an existing roomName, never
 // creates a room, and the server marks it hidden so it doesn't count as a
 // real viewer (see api/comms.js's /token route in the citinet-web repo).
+// spaceSlug (host/create only, i.e. only meaningful when roomName is
+// omitted) scopes the new room to that space — the server re-validates
+// active membership on every subsequent join itself from the room's own
+// metadata, so a joiner never needs to (and doesn't) resend it.
 export async function getCommsToken(
   tunnelUrl: string,
   token: string,
   kind: 'broadcast' | 'room',
   roomName?: string,
   title?: string,
-  preview?: boolean
+  preview?: boolean,
+  spaceSlug?: string
 ): Promise<{ room_name: string; token: string; livekit_url: string }> {
   const res = await fetch(`${tunnelUrl}/api/comms/token`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind, room_name: roomName, title, preview }),
+    body: JSON.stringify({ kind, room_name: roomName, title, preview, space_slug: spaceSlug }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't connect."));

@@ -32,6 +32,11 @@ export type BroadcastState = {
   livekitUrl: string | null;
   title: string;
   audience: BroadcastAudience;
+  // Set only for a space-scoped broadcast (audience === 'space') — threaded
+  // to getCommsToken so the server stamps/enforces it on the room itself
+  // (see api/comms.js's own note on POST /api/comms/token). Null for a
+  // plain hub-wide broadcast/room.
+  spaceSlug: string | null;
   hostId: string | null;
   hostName: string | null;
   // Wall-clock timestamp, not a tick counter — same reasoning as
@@ -66,6 +71,7 @@ const idleState: BroadcastState = {
   livekitUrl: null,
   title: '',
   audience: 'hub',
+  spaceSlug: null,
   hostId: null,
   hostName: null,
   startedAt: null,
@@ -81,7 +87,7 @@ const idleState: BroadcastState = {
 
 type BroadcastContextValue = {
   broadcast: BroadcastState;
-  startBroadcast: (args: { title: string; audience: BroadcastAudience }) => void;
+  startBroadcast: (args: { title: string; audience: BroadcastAudience; spaceSlug?: string | null }) => void;
   joinAsViewer: (item: LiveCommsItem) => void;
   end: () => void;
   reset: () => void;
@@ -111,7 +117,7 @@ export function BroadcastProvider({ children }: { children: ReactNode }) {
   broadcastRef.current = broadcast;
 
   const startBroadcast = useCallback<BroadcastContextValue['startBroadcast']>(
-    ({ title, audience }) => {
+    ({ title, audience, spaceSlug }) => {
       if (!session) return;
       // Carry forward mic/cam from whatever the setup screen's toggles left
       // them at — spreading idleState wholesale here (its micOn/camOn are
@@ -122,13 +128,14 @@ export function BroadcastProvider({ children }: { children: ReactNode }) {
         phase: 'starting',
         title,
         audience,
+        spaceSlug: spaceSlug ?? null,
         role: 'host',
         hostId: session.userId,
         hostName: session.displayName,
         micOn: prev.micOn,
         camOn: prev.camOn,
       }));
-      getCommsToken(session.hub.tunnelUrl, session.token, 'broadcast', undefined, title)
+      getCommsToken(session.hub.tunnelUrl, session.token, 'broadcast', undefined, title, undefined, spaceSlug ?? undefined)
         .then((res) => {
           setBroadcast((prev) =>
             prev.phase === 'starting'
@@ -151,6 +158,7 @@ export function BroadcastProvider({ children }: { children: ReactNode }) {
         phase: 'starting',
         role: 'viewer',
         title: item.title,
+        spaceSlug: item.space_slug ?? null,
         hostId: item.host_id,
         hostName: item.host_username,
       });

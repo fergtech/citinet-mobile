@@ -69,7 +69,6 @@ function RootNavigator() {
         <Stack.Screen name="switch-hub-signup" options={{ presentation: 'modal', headerShown: false }} />
         <Stack.Screen name="compose-post" options={{ headerShown: false }} />
         <Stack.Screen name="event-editor" options={{ headerShown: false }} />
-        <Stack.Screen name="poll-editor" options={{ headerShown: false }} />
         <Stack.Screen name="post/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="profile/[userId]" options={{ headerShown: false }} />
         <Stack.Screen name="account/privacy" options={{ headerShown: false }} />
@@ -106,7 +105,6 @@ function RootNavigator() {
         <Stack.Screen name="files/upload" options={{ headerShown: false }} />
         <Stack.Screen name="files/share" options={{ headerShown: false }} />
         <Stack.Screen name="files/storage" options={{ headerShown: false }} />
-        <Stack.Screen name="feed" options={{ headerShown: false }} />
         <Stack.Screen name="notifications" options={{ headerShown: false }} />
         <Stack.Screen name="events" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/index" options={{ headerShown: false }} />
@@ -117,6 +115,7 @@ function RootNavigator() {
         <Stack.Screen name="initiatives/[id]/tasks/[taskId]" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/roles" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/resources" options={{ headerShown: false }} />
+        <Stack.Screen name="initiatives/[id]/updates" options={{ headerShown: false }} />
         <Stack.Screen name="spaces/index" options={{ headerShown: false }} />
         <Stack.Screen name="spaces/[slug]" options={{ headerShown: false }} />
         <Stack.Screen name="spaces/create" options={{ headerShown: false }} />

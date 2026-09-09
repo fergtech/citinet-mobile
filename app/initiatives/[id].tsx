@@ -17,6 +17,7 @@ import {
   getInitiativeActivity,
   initiativeBannerUrl,
   joinInitiative,
+  leaveInitiative,
   removeInitiativeBanner,
   uploadInitiativeBanner,
 } from '@/lib/api/hubService';
@@ -25,10 +26,8 @@ import {
   initiativeCategoryMeta,
   initiativeCategoryPresetImage,
   initiativeColor,
-  initiativeLatestUpdate,
   initiativeMemberCount,
   initiativeOpenRoleCount,
-  initiativeOrganizerName,
   initiativeProgress,
   initiativeStatusMeta,
   initiativeTaskCounts,
@@ -88,6 +87,10 @@ export default function InitiativeDetailScreen() {
 
   useFocusEffect(load);
 
+  // Tapping "Joined ✓" now actually leaves (POST /:id/leave) instead of
+  // silently re-calling join — that's the real "Leave" action citinet web's
+  // own equivalent toggle performs (see InitiativesScreen.tsx's handleLeave,
+  // wired to this exact same Joined-labeled button, not a separate control).
   function handleJoin() {
     if (!session || !initiative || joining) return;
     const wasMember = initiative.viewerIsMember;
@@ -106,7 +109,10 @@ export default function InitiativeDetailScreen() {
       : [...priorMembers, { id: session.userId, name: session.username, role: null, joinedAt: new Date().toISOString() }];
     setInitiative({ ...initiative, viewerIsMember: !wasMember, members: optimisticMembers });
     setJoining(true);
-    joinInitiative(session.hub.tunnelUrl, session.token, initiative.id)
+    const request = wasMember
+      ? leaveInitiative(session.hub.tunnelUrl, session.token, initiative.id)
+      : joinInitiative(session.hub.tunnelUrl, session.token, initiative.id);
+    request
       .then(() => getInitiative(session.hub.tunnelUrl, session.token, initiative.id))
       .then(setInitiative)
       .catch(() => setInitiative(prior))
@@ -167,7 +173,6 @@ export default function InitiativeDetailScreen() {
   const progress = initiative ? initiativeProgress(initiative) : 0;
   const memberCount = initiative ? initiativeMemberCount(initiative) : 0;
   const openRoleCount = initiative ? initiativeOpenRoleCount(initiative) : 0;
-  const latestUpdate = initiative ? initiativeLatestUpdate(initiative) : null;
   // Every direct `initiative.<array>` access below goes through this rather
   // than the raw field — the crash-causing bug that prompted this: a
   // response missing `members` entirely threw on `.slice`/`.length` instead
@@ -336,20 +341,18 @@ export default function InitiativeDetailScreen() {
                 View resources
               </ThemedText>
             </Pressable>
-          </View>
-
-          {latestUpdate && (
-            <View style={styles.updateCard}>
-              <ThemedText style={styles.sectionLabel}>Latest update</ThemedText>
-              <View style={styles.updateHeader}>
-                <ThemedText type="defaultSemiBold" numberOfLines={1}>
-                  {latestUpdate.author ?? initiativeOrganizerName(initiative)}
-                </ThemedText>
-                {!!latestUpdate.when && <ThemedText style={styles.rowMeta}>{timeAgo(latestUpdate.when)}</ThemedText>}
+            <Pressable style={styles.tapCard} onPress={() => router.push(nestedRoute(initiative.id, 'updates'))}>
+              <View style={styles.tapCardTile}>
+                <IconSymbol name="message.fill" size={16} color={Colors[colorScheme].text} />
               </View>
-              <ThemedText style={styles.updateBody}>{latestUpdate.body}</ThemedText>
-            </View>
-          )}
+              <ThemedText type="defaultSemiBold" style={styles.tapCardLabel}>
+                Updates
+              </ThemedText>
+              <ThemedText style={styles.tapCardMeta} numberOfLines={1}>
+                Post &amp; discuss progress
+              </ThemedText>
+            </Pressable>
+          </View>
 
           {activity.length > 0 && (
             <View style={styles.activitySection}>
@@ -553,6 +556,7 @@ const styles = StyleSheet.create({
   },
   tapCards: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginTop: 18,
     paddingTop: 18,
@@ -560,7 +564,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#8884',
   },
   tapCard: {
-    flex: 1,
+    width: '48%',
     minHeight: 96,
     borderRadius: 14,
     backgroundColor: '#8881',
@@ -583,19 +587,6 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     opacity: 0.55,
     lineHeight: 15,
-  },
-  updateCard: {
-    marginTop: 24,
-  },
-  updateHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  updateBody: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 8,
   },
   activitySection: {
     marginTop: 24,

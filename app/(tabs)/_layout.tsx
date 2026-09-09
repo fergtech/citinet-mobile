@@ -3,6 +3,7 @@ import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AnimatedTabBar } from '@/components/animated-tab-bar';
 import { AppDrawer } from '@/components/app-drawer';
 import { CreateTabButton } from '@/components/create-tab-button';
 import { DiscoverDrawer } from '@/components/discover-drawer';
@@ -15,6 +16,8 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { listUnreadNotifications } from '@/lib/api/hubService';
 import { useSession } from '@/lib/session/session-context';
 import { DrawerCoordinatorProvider } from '@/lib/ui/drawer-coordinator';
+import { getTabBarStyle } from '@/lib/ui/tab-bar-style';
+import { TabBarVisibilityProvider } from '@/lib/ui/tab-bar-visibility';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -22,7 +25,6 @@ export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const tint = Colors[colorScheme ?? 'light'].tint;
   const isDark = colorScheme === 'dark';
-  const borderColor = isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.08)';
 
   // Lives at the tab-layout level (not inside app/notifications.tsx itself)
   // so the dot shows regardless of which tab is active. This component IS
@@ -44,7 +46,9 @@ export default function TabLayout() {
     <DrawerCoordinatorProvider>
     <DiscoverDrawer>
     <AppDrawer>
+    <TabBarVisibilityProvider>
     <Tabs
+      tabBar={(props) => <AnimatedTabBar {...props} />}
       screenOptions={{
         tabBarActiveTintColor: tint,
         // Explicit, not left to react-navigation's own default (which
@@ -73,42 +77,10 @@ export default function TabLayout() {
         // Floating pill on every platform (content scrolls visibly behind
         // it, via each tab screen's extra bottom padding — see
         // useBottomTabBarHeight() in index/discover/messages/profile).
-        tabBarStyle: {
-          backgroundColor: 'transparent',
-          position: 'absolute',
-          // marginHorizontal, not left/right: the library's own base style
-          // for this bar (BottomTabBar.js styles.bottom) already pins it
-          // with start: 0, end: 0 — the RTL-logical siblings of left/right,
-          // a DIFFERENT style key. Array-style merging doesn't let our
-          // left/right override those (both end up in the flattened style,
-          // and the library's start/end win), so left/right here is
-          // silently ignored no matter the value. margin composes on top
-          // of position instead of competing with it, so it isn't affected.
-          marginHorizontal: 40,
-          // insets.bottom already clears the home indicator/nav bar; the
-          // max() just guarantees a visible gap on devices with no inset at
-          // all (a physical home button, or Android's gesture-free nav).
-          bottom: Math.max(insets.bottom, 16),
-          height: 60,
-          // The library always adds paddingBottom: insets.bottom inside the
-          // bar to clear the home indicator when it's flush with the screen
-          // edge — redundant now that `bottom` above already moves the
-          // whole pill above it, and left alone it would eat most of this
-          // 60pt height, cramming the icons toward the top.
-          paddingBottom: 0,
-          paddingTop: 0,
-          borderRadius: 28,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor,
-          // Clips TabBarBackground's blur/tint fill to the pill's rounded
-          // corners — without this it paints as a plain rectangle
-          // regardless of borderRadius, since rounding a container doesn't
-          // rasterize its children unless overflow is clipped.
-          overflow: 'hidden',
-          // Android has no native elevation from being in-flow anymore now
-          // that it floats too — replaces that with its own drop shadow.
-          elevation: 8,
-        },
+        // Home's own scroll-driven hide (lib/ui/tab-bar-visibility.ts) is a
+        // separate transform on the wrapper AnimatedTabBar renders this
+        // into (see tabBar prop above), not a change to this style itself.
+        tabBarStyle: getTabBarStyle(insets, isDark),
       }}>
       <Tabs.Screen
         name="index"
@@ -127,6 +99,19 @@ export default function TabLayout() {
           // icon instead now (see app/(tabs)/index.tsx). href: null keeps
           // this a real, navigable route (expo-router still registers it),
           // it just no longer gets a tab bar button of its own.
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="feed"
+        options={{
+          title: 'Feed',
+          // Same href: null pattern as "discover" above — Feed is reached
+          // via the app drawer (components/app-drawer.tsx), not a tab bar
+          // button of its own, but moved in here (was a plain root
+          // app/feed.tsx Stack.Screen) specifically so it renders WITH the
+          // shared floating tab bar/scroll-hide behavior instead of needing
+          // its own separate copy of either.
           href: null,
         }}
       />
@@ -196,6 +181,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </TabBarVisibilityProvider>
     </AppDrawer>
     </DiscoverDrawer>
     </DrawerCoordinatorProvider>

@@ -1,5 +1,14 @@
-import { useCallback, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
@@ -13,6 +22,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { listMySpaces } from '@/lib/api/hubService';
 import { Space } from '@/lib/api/types';
 import { confirmDestructive } from '@/lib/ui/confirm';
+import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { useThemePreference } from '@/lib/ui/theme-preference';
 import { isMod } from '@/lib/session/is-mod';
 import { useSession } from '@/lib/session/session-context';
@@ -41,6 +51,41 @@ export default function ProfileScreen() {
     }, [session])
   );
 
+  // Same scroll-driven tab bar hide/show as Home (see app/(tabs)/index.tsx's
+  // own, more detailed note on why this accumulates distance in the current
+  // direction rather than comparing only the last frame's delta — a slow
+  // drag never produces a single-frame delta past the threshold no matter
+  // how far it's actually travelled).
+  const { setHidden: setTabBarHidden } = useTabBarVisibility();
+  const lastScrollY = useRef(0);
+  const accumulatedDelta = useRef(0);
+  const handleScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = e.nativeEvent.contentOffset.y;
+      const diff = y - lastScrollY.current;
+      const SCROLL_HIDE_THRESHOLD = 12;
+      const NEAR_TOP_THRESHOLD = 40;
+
+      if ((diff > 0 && accumulatedDelta.current < 0) || (diff < 0 && accumulatedDelta.current > 0)) {
+        accumulatedDelta.current = 0;
+      }
+      accumulatedDelta.current += diff;
+      lastScrollY.current = y;
+
+      if (y <= NEAR_TOP_THRESHOLD) {
+        setTabBarHidden(false);
+        accumulatedDelta.current = 0;
+      } else if (accumulatedDelta.current > SCROLL_HIDE_THRESHOLD) {
+        setTabBarHidden(true);
+        accumulatedDelta.current = 0;
+      } else if (accumulatedDelta.current < -SCROLL_HIDE_THRESHOLD) {
+        setTabBarHidden(false);
+        accumulatedDelta.current = 0;
+      }
+    },
+    [setTabBarHidden]
+  );
+
   if (!session) return null;
 
   function toggleAppearance() {
@@ -53,7 +98,10 @@ export default function ProfileScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 + extraBottomInset }}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 40 + extraBottomInset }}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}>
         <View style={styles.header}>
           <HubAvatar userId={session.userId} displayName={session.displayName} tunnelUrl={session.hub.tunnelUrl} size={76} />
           <View style={styles.nameRow}>

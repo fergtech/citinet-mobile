@@ -3,7 +3,17 @@ import { useScrollToTop } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 
 import { useAppDrawer } from '@/components/app-drawer';
 import { LeafletMap } from '@/components/atlas/leaflet-map';
@@ -57,6 +67,7 @@ import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { isLocalConnection } from '@/lib/ui/is-local-connection';
 import { applyVote } from '@/lib/ui/poll';
 import { usePostConsumption } from '@/lib/ui/post-consumption';
+import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 // InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
@@ -498,6 +509,59 @@ export default function HomeScreen() {
   const scrollRef = useRef<ScrollView>(null);
   useScrollToTop(scrollRef);
 
+  // Hides the floating tab bar (app/(tabs)/_layout.tsx, rendered via
+  // components/animated-tab-bar.tsx) on scroll-down, brings it back on
+  // scroll-up — same idea as Twitter/Instagram's own bottom bars. A real
+  // Reanimated transform (lib/ui/tab-bar-visibility.ts), shared across the
+  // whole tab navigator but only ever driven from here — Discover/Alerts/
+  // Messages/Profile never call setHidden, so they're unaffected and the
+  // bar always shows there.
+  const { setHidden: setTabBarHidden } = useTabBarVisibility();
+  const lastScrollY = useRef(0);
+  // Net movement in the CURRENT direction since the last time it crossed a
+  // threshold (or reversed) — not last frame's delta. Comparing only to the
+  // immediately previous scroll event effectively measured speed, not
+  // distance: a slow drag never produces a single-frame delta past the
+  // threshold no matter how far it's actually travelled, so the bar never
+  // reacted at all below a certain scroll speed. Accumulating here instead
+  // means N slow small steps in the same direction add up exactly like one
+  // fast big one.
+  const accumulatedDelta = useRef(0);
+
+  // A small dead zone (SCROLL_HIDE_THRESHOLD) so a slight rubber-band wobble
+  // at rest doesn't flicker the bar, and it's never hidden near the very top
+  // (NEAR_TOP_THRESHOLD) — landing back at the top of the feed always shows
+  // it again regardless of which way the last scroll went.
+  const handleScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = e.nativeEvent.contentOffset.y;
+      const diff = y - lastScrollY.current;
+      const SCROLL_HIDE_THRESHOLD = 12;
+      const NEAR_TOP_THRESHOLD = 40;
+
+      // Direction reversed (or this is the first move) — start a fresh run
+      // from here rather than carrying over an opposite-sign accumulation,
+      // which would otherwise blunt/delay the very next real direction.
+      if ((diff > 0 && accumulatedDelta.current < 0) || (diff < 0 && accumulatedDelta.current > 0)) {
+        accumulatedDelta.current = 0;
+      }
+      accumulatedDelta.current += diff;
+      lastScrollY.current = y;
+
+      if (y <= NEAR_TOP_THRESHOLD) {
+        setTabBarHidden(false);
+        accumulatedDelta.current = 0;
+      } else if (accumulatedDelta.current > SCROLL_HIDE_THRESHOLD) {
+        setTabBarHidden(true);
+        accumulatedDelta.current = 0;
+      } else if (accumulatedDelta.current < -SCROLL_HIDE_THRESHOLD) {
+        setTabBarHidden(false);
+        accumulatedDelta.current = 0;
+      }
+    },
+    [setTabBarHidden]
+  );
+
   // Liking/voting/RSVPing the single Discussions preview counts as an
   // immediate "consumed" signal (see lib/ui/post-consumption.tsx) — opening
   // it into post/[id] is covered separately, by that screen's own markOpened.
@@ -830,7 +894,9 @@ export default function HomeScreen() {
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={{ paddingBottom: 24 + extraBottomInset }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}>
         <FeaturedCarousel
           items={visibleFeatured}
           tunnelUrl={session.hub.tunnelUrl}

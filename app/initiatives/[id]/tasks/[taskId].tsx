@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -13,6 +13,7 @@ import {
   assignTask,
   deleteChecklistItem,
   deleteNoteReply,
+  deleteTask,
   deleteTaskNote,
   getChecklist,
   getInitiative,
@@ -28,6 +29,7 @@ import {
 import { ChecklistItem, Initiative, InitiativeTaskSummary, TaskMeta, TaskNote } from '@/lib/api/types';
 import { effectiveTaskStatus, nextTaskStatus, TASK_DISPLAY_STATUS_META } from '@/lib/initiatives/meta';
 import { useSession } from '@/lib/session/session-context';
+import { confirmDestructive } from '@/lib/ui/confirm';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 // Status/checklist/notes for a single task. Redesigned (2026-08-26) around
@@ -72,6 +74,7 @@ export default function TaskDetailScreen() {
   const [claiming, setClaiming] = useState(false);
   const [releasing, setReleasing] = useState(false);
   const [changingStatus, setChangingStatus] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
@@ -166,6 +169,23 @@ export default function TaskDetailScreen() {
     } finally {
       setReleasing(false);
     }
+  }
+
+  // Server-side gated to the task's own creator (assertTaskOwner-adjacent
+  // check on DELETE /goals/:goalId, distinct from the checklist/assign
+  // owner check which also allows the assignee) — matches the ScreenHeader
+  // button below only rendering for task.created_by === session.userId.
+  function removeTask() {
+    if (!session || !taskId) return;
+    confirmDestructive('Delete this task? This can\'t be undone.', 'Delete', () => {
+      setDeleting(true);
+      deleteTask(session.hub.tunnelUrl, session.token, taskId)
+        .then(() => router.back())
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Couldn't delete that task.");
+          setDeleting(false);
+        });
+    });
   }
 
   async function addItem() {
@@ -269,7 +289,12 @@ export default function TaskDetailScreen() {
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title="Task" />
+      <ScreenHeader
+        title="Task"
+        rightIcon={task?.created_by === session.userId && !deleting ? 'trash.fill' : undefined}
+        onRightPress={removeTask}
+        rightAccessibilityLabel="Delete this task"
+      />
 
       {loading && !task && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}

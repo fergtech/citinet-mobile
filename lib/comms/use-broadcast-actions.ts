@@ -59,7 +59,13 @@ export function useBroadcastActions() {
     // joined the live" comment host's own client won't otherwise see, same
     // optimistic reasoning as sendComment/sendHeart above.
     setPendingRequest(null);
-    if (accepted) {
+    // Guards against the request having sat pending long enough that the
+    // requester already left the room — accepting it then would still fire
+    // this comment even though nobody actually joined (broadcast-data-
+    // bridge.tsx's own ParticipantDisconnected handler clears the pending
+    // card the moment they leave, but a tap that was already mid-flight can
+    // still race past that).
+    if (accepted && room.remoteParticipants.has(request.requesterId)) {
       addComment({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, senderId: 'system', senderName: '', text: `${request.requesterName} joined the live`, system: true });
     }
   }

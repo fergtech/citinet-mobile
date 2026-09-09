@@ -63,7 +63,15 @@ const SECTIONS: ActionSection[] = [
         title: 'Create an event',
         onPress: () => router.push({ pathname: '/event-editor', params: { from: 'compose' } }),
       },
-      { key: 'poll', icon: 'list.bullet', title: 'Create a poll', onPress: () => router.push({ pathname: '/poll-editor', params: { from: 'compose' } }) },
+      {
+        key: 'poll',
+        icon: 'list.bullet',
+        title: 'Create a poll',
+        // Same screen "Write a post" opens, just pre-set to poll mode —
+        // see compose-post.tsx's own note on why this isn't a separate
+        // editor screen anymore.
+        onPress: () => router.push({ pathname: '/compose-post', params: { from: 'compose', mode: 'poll' } }),
+      },
       { key: 'initiative', icon: 'target', title: 'Start an initiative', onPress: () => router.push('/initiatives/create') },
       { key: 'space', icon: 'building.2.fill', title: 'Create a space', onPress: () => router.push('/spaces/create') },
     ],

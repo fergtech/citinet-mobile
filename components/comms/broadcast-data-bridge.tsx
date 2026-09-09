@@ -79,6 +79,13 @@ export function BroadcastDataBridge() {
 
     function handleParticipantLeft(participant: RemoteParticipant) {
       if (participant.permissions?.hidden) return;
+      // Dismiss a join request left pending by someone who's now gone —
+      // without this the card (and an Accept tap on it) would outlive the
+      // person it's for, which is what let a stale accept post "<name>
+      // joined the live" for someone no longer in the room at all.
+      if (broadcast.role === 'host' && broadcast.pendingRequest?.requesterId === participant.identity) {
+        setPendingRequest(null);
+      }
       addComment({
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         senderId: 'system',
@@ -109,7 +116,7 @@ export function BroadcastDataBridge() {
       room.off(RoomEvent.ParticipantDisconnected, handleParticipantLeft);
       room.off(RoomEvent.Disconnected, handleDisconnected);
     };
-  }, [room, broadcast.role, addComment, addHeart, setPendingRequest, approvePublish, setJoinRequestPending, end]);
+  }, [room, broadcast.role, broadcast.pendingRequest, addComment, addHeart, setPendingRequest, approvePublish, setJoinRequestPending, end]);
 
   return null;
 }

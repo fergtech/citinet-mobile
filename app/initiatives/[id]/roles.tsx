@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
@@ -8,8 +8,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { listInitiativeRoles, stepDownFromRole, volunteerForRole } from '@/lib/api/hubService';
-import { InitiativeRole } from '@/lib/api/types';
+import { addRole, deleteRole, getInitiative, listInitiativeRoles, stepDownFromRole, volunteerForRole } from '@/lib/api/hubService';
+import { Initiative, InitiativeRole } from '@/lib/api/types';
+import { confirmDestructive } from '@/lib/ui/confirm';
 import { useSession } from '@/lib/session/session-context';
 
 // Unlike Team/Tasks, there's no roles data embedded in GET /api/initiatives/:id
@@ -25,17 +26,29 @@ export default function InitiativeRolesScreen() {
   const { session } = useSession();
   const { id } = useLocalSearchParams<{ id: string }>();
 
+  const [initiative, setInitiative] = useState<Initiative | null>(null);
   const [roles, setRoles] = useState<InitiativeRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actingOn, setActingOn] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showAddRole, setShowAddRole] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [newRoleSkill, setNewRoleSkill] = useState('');
+  const [addingRole, setAddingRole] = useState(false);
 
   const load = useCallback(() => {
     if (!session || !id) return;
     setLoading(true);
     setError(null);
-    listInitiativeRoles(session.hub.tunnelUrl, session.token, id)
-      .then(setRoles)
+    Promise.all([
+      listInitiativeRoles(session.hub.tunnelUrl, session.token, id),
+      getInitiative(session.hub.tunnelUrl, session.token, id),
+    ])
+      .then(([nextRoles, nextInitiative]) => {
+        setRoles(nextRoles);
+        setInitiative(nextInitiative);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load open roles."))
       .finally(() => setLoading(false));
   }, [session, id]);
@@ -60,11 +73,45 @@ export default function InitiativeRolesScreen() {
       .finally(() => setActingOn(null));
   }
 
+  // Creator-only server-side (assertInitiativeCreator on POST /:id/roles) —
+  // gated the same way as the "+" that opens this composer.
+  function submitAddRole() {
+    if (!session || !id || !newRoleName.trim() || addingRole) return;
+    setAddingRole(true);
+    addRole(session.hub.tunnelUrl, session.token, id, { role: newRoleName.trim(), skill: newRoleSkill.trim() || undefined })
+      .then(() => {
+        setNewRoleName('');
+        setNewRoleSkill('');
+        setShowAddRole(false);
+        load();
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't add that role."))
+      .finally(() => setAddingRole(false));
+  }
+
+  // Server 403s unless the caller is the one who opened this role
+  // (role.created_by) — same gate the trash icon below is shown on.
+  function handleRemoveRole(role: InitiativeRole) {
+    if (!session || deletingId) return;
+    confirmDestructive(`Remove the "${role.role}" role?`, 'Remove', () => {
+      setDeletingId(role.id);
+      deleteRole(session.hub.tunnelUrl, session.token, role.id)
+        .then(load)
+        .catch((err) => setError(err instanceof Error ? err.message : "Couldn't remove that role."))
+        .finally(() => setDeletingId(null));
+    });
+  }
+
   if (!session) return null;
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title="Open roles" />
+      <ScreenHeader
+        title="Open roles"
+        rightIcon={initiative?.viewerIsCreator ? 'plus' : undefined}
+        onRightPress={() => setShowAddRole((v) => !v)}
+        rightAccessibilityLabel="Add a role"
+      />
 
       {loading && roles.length === 0 && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -75,20 +122,58 @@ export default function InitiativeRolesScreen() {
         contentContainerStyle={styles.list}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListHeaderComponent={
-          <ThemedText style={styles.intro}>
-            Claim a role and the organizer sees your name on the team. You can step down any time.
-          </ThemedText>
+          <View>
+            <ThemedText style={styles.intro}>
+              Claim a role and the organizer sees your name on the team. You can step down any time.
+            </ThemedText>
+            {showAddRole && initiative?.viewerIsCreator && (
+              <View style={styles.addRoleBlock}>
+                <TextInput
+                  autoFocus
+                  value={newRoleName}
+                  onChangeText={setNewRoleName}
+                  placeholder="Role (e.g. Setup crew)"
+                  placeholderTextColor="#8888"
+                  style={[styles.addRoleInput, { color: Colors[colorScheme].text }]}
+                />
+                <TextInput
+                  value={newRoleSkill}
+                  onChangeText={setNewRoleSkill}
+                  onSubmitEditing={submitAddRole}
+                  placeholder="Skill needed (optional)"
+                  placeholderTextColor="#8888"
+                  style={[styles.addRoleInput, { color: Colors[colorScheme].text }]}
+                />
+                <Pressable
+                  style={[styles.addRoleButton, (addingRole || !newRoleName.trim()) && { opacity: 0.5 }]}
+                  disabled={addingRole || !newRoleName.trim()}
+                  onPress={submitAddRole}>
+                  <ThemedText style={styles.addRoleButtonLabel} lightColor="#fff" darkColor="#fff">
+                    {addingRole ? 'Adding…' : 'Add role'}
+                  </ThemedText>
+                </Pressable>
+              </View>
+            )}
+          </View>
         }
         renderItem={({ item }) => {
           const isMine = !!session && item.filled_by_user_id === session.userId;
           const busy = actingOn === item.id;
+          const canRemove = item.created_by === session.userId;
           return (
             <View style={styles.row}>
               <View style={styles.rowHeader}>
-                <View style={[styles.statusDot, { backgroundColor: item.filled ? Colors[colorScheme].icon : '#059669' }]} />
-                <ThemedText style={[styles.statusLabel, { color: item.filled ? Colors[colorScheme].icon : '#059669' }]}>
-                  {item.filled ? 'FILLED' : 'OPEN'}
-                </ThemedText>
+                <View style={styles.rowHeaderStatus}>
+                  <View style={[styles.statusDot, { backgroundColor: item.filled ? Colors[colorScheme].icon : '#059669' }]} />
+                  <ThemedText style={[styles.statusLabel, { color: item.filled ? Colors[colorScheme].icon : '#059669' }]}>
+                    {item.filled ? 'FILLED' : 'OPEN'}
+                  </ThemedText>
+                </View>
+                {canRemove && (
+                  <Pressable hitSlop={8} style={styles.removeRoleButton} disabled={deletingId === item.id} onPress={() => handleRemoveRole(item)}>
+                    <IconSymbol name="trash.fill" size={14} color={Colors[colorScheme].icon} />
+                  </Pressable>
+                )}
               </View>
               <ThemedText type="defaultSemiBold" style={styles.roleName}>
                 {item.role}
@@ -145,6 +230,30 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: 10,
   },
+  addRoleBlock: {
+    gap: 8,
+    marginBottom: 14,
+  },
+  addRoleInput: {
+    fontSize: 14,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#8882',
+  },
+  addRoleButton: {
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: Brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 16,
+  },
+  addRoleButtonLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
   separator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#8884',
@@ -156,6 +265,14 @@ const styles = StyleSheet.create({
   rowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  rowHeaderStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  removeRoleButton: {
+    padding: 2,
   },
   statusDot: {
     width: 6,

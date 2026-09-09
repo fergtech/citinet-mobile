@@ -2,7 +2,7 @@ import type { ImageSourcePropType } from 'react-native';
 
 import type { IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
-import { Initiative, InitiativeTaskStatus, InitiativeTaskSummary, InitiativeUpdate, TaskMeta } from '@/lib/api/types';
+import { Initiative, InitiativeActivityEntry, InitiativeTaskStatus, InitiativeTaskSummary, TaskMeta } from '@/lib/api/types';
 
 // Category is a lowercase free-form string with no server-side enum — the
 // real, authoritative set is citinet web's own CATEGORY_META
@@ -190,22 +190,18 @@ export function initiativeOrganizerName(initiative: Initiative): string {
   return initiative.createdBy || initiative.created_by;
 }
 
-// `updates`' real shape is unconfirmed (the one live response seen had an
-// empty array) — read every field defensively and bail to null rather than
-// render something that might be wrong. Picks the most recent by whichever
-// timestamp field is actually present.
-export function initiativeLatestUpdate(initiative: Initiative): { body: string; author: string | null; when: string | null } | null {
-  const updates = initiative.updates ?? [];
-  if (updates.length === 0) return null;
-  const withTime = updates
-    .map((u) => ({ u, time: new Date(u.created_at ?? u.createdAt ?? 0).getTime() }))
-    .sort((a, b) => b.time - a.time);
-  const latest: InitiativeUpdate = withTime[0].u;
-  const body = latest.body ?? latest.text;
-  if (!body) return null;
-  return {
-    body,
-    author: latest.author_username ?? latest.createdBy ?? null,
-    when: latest.created_at ?? latest.createdAt ?? null,
-  };
+// Mirrors citinet-web's own ACTIVITY_ICON (SpacesScreen.tsx) — same five
+// kinds, translated to this app's SF Symbol names instead of lucide-react.
+// No 'person.3.fill' entry exists in this app's IconSymbol mapping yet, so
+// 'team' reuses 'person.2.fill' (already the "culture" category icon).
+const INITIATIVE_ACTIVITY_ICON: Record<InitiativeActivityEntry['kind'], IconSymbolName> = {
+  task: 'checkmark.circle.fill',
+  resource: 'shippingbox.fill',
+  team: 'person.2.fill',
+  update: 'message.fill',
+  member: 'person.badge.plus',
+};
+
+export function initiativeActivityIcon(kind: InitiativeActivityEntry['kind']): IconSymbolName {
+  return INITIATIVE_ACTIVITY_ICON[kind] ?? 'checkmark.circle.fill';
 }

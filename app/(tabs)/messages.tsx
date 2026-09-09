@@ -5,16 +5,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BrandGradient } from '@/components/brand-gradient';
+import { LiveCard } from '@/components/comms/live-card';
+import { MinimizedBroadcastBar } from '@/components/comms/minimized-broadcast-bar';
 import { HubAvatar } from '@/components/hub-avatar';
-import { LiveThumbnail } from '@/components/comms/live-thumbnail';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Brand } from '@/constants/theme';
 import { listConversations, listLiveComms } from '@/lib/api/hubService';
 import { HubConversation, LiveCommsItem } from '@/lib/api/types';
 import { useBroadcast } from '@/lib/comms/broadcast-context';
-import { formatCallDuration, useElapsedSeconds } from '@/lib/comms/use-elapsed';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
@@ -54,77 +53,6 @@ function isUnread(convo: HubConversation, selfId: string): boolean {
   return new Date(msg.created_at) > new Date(self.last_read_at);
 }
 
-// No preview thumbnail exists for a room's stream (would mean subscribing
-// to every live card's video just to render a list, expensive for what's
-// meant to be a lightweight strip) — a brand/red gradient placeholder fills
-// the same visual role honestly, same simplification this app already uses
-// for avatars with no uploaded photo. Only broadcast cards are tappable —
-// joins as a viewer (see BroadcastProvider's joinAsViewer). Rooms (kind
-// 'room', the OPEN badge) don't have a destination screen yet.
-function LiveCard({ item, onPress, showPreview }: { item: LiveCommsItem; onPress?: () => void; showPreview?: boolean }) {
-  const isLive = item.kind === 'broadcast';
-  return (
-    <Pressable onPress={onPress} disabled={!onPress} style={styles.liveCard}>
-      <BrandGradient style={StyleSheet.absoluteFillObject} />
-      {/* Lets a viewer see what they're about to walk into. Skipped for
-          "isMine" cards (see visibleLive.map below) — connecting a second,
-          hidden identity to a room you're already really in as yourself
-          would collide with your real session's LiveKit identity. */}
-      {showPreview && <LiveThumbnail roomName={item.room_name} hostId={item.host_id} />}
-      <View style={[styles.liveBadge, { backgroundColor: isLive ? '#DC2B2B' : Brand }]}>
-        <ThemedText style={styles.liveBadgeLabel} lightColor="#fff" darkColor="#fff">
-          {isLive ? 'LIVE' : 'OPEN'}
-        </ThemedText>
-      </View>
-      <View style={styles.liveCountPill}>
-        <ThemedText style={styles.liveCountText} lightColor="#fff" darkColor="#fff">
-          {item.participant_count} {isLive ? 'watching' : 'here'}
-        </ThemedText>
-      </View>
-      <View style={styles.liveCardFooter}>
-        <View style={styles.liveHostRow}>
-          <View style={styles.liveHostMonogram}>
-            <ThemedText style={styles.liveHostInitial} lightColor="#fff" darkColor="#fff">
-              {(item.host_username || '?').charAt(0).toUpperCase()}
-            </ThemedText>
-          </View>
-          <ThemedText style={styles.liveHostName} lightColor="#fff" darkColor="#fff" numberOfLines={1}>
-            {item.host_username} · {isLive ? 'Broadcast' : 'Room'}
-          </ThemedText>
-        </View>
-        <ThemedText style={styles.liveTitle} lightColor="#fff" darkColor="#fff" numberOfLines={2}>
-          {item.title || (isLive ? 'Live broadcast' : 'Open room')}
-        </ThemedText>
-      </View>
-    </Pressable>
-  );
-}
-
-// Own component, same reasoning as MinimizedCallBar in app/conversation/
-// [id].tsx: the elapsed-seconds tick only re-renders this small bar, not
-// the whole Messages screen.
-function MinimizedBroadcastBar({ onPress }: { onPress: () => void }) {
-  const { broadcast } = useBroadcast();
-  const elapsed = useElapsedSeconds(broadcast.startedAt);
-  // The join-request card only exists inside the live screen itself
-  // (components/comms/broadcast-overlay.tsx) — a minimized host would
-  // otherwise never know one arrived at all. This is the only surface that
-  // exists while minimized, so it has to carry that signal.
-  const hasPendingRequest = broadcast.role === 'host' && !!broadcast.pendingRequest;
-  return (
-    <Pressable onPress={onPress} style={[styles.minimizeBar, hasPendingRequest && styles.minimizeBarAlert]}>
-      <View style={[styles.minimizeDot, hasPendingRequest && styles.minimizeDotAlert]} />
-      <ThemedText style={styles.minimizeLabel} lightColor="#fff" darkColor="#fff" numberOfLines={1}>
-        {hasPendingRequest ? `${broadcast.pendingRequest!.requesterName} wants to join in` : broadcast.role === 'host' ? 'Broadcasting live' : 'Watching live'}
-      </ThemedText>
-      <ThemedText style={styles.minimizeTimer} lightColor="#fff" darkColor="#fff">
-        {formatCallDuration(elapsed)}
-      </ThemedText>
-      <IconSymbol name="chevron.up" size={14} color="#fff" />
-    </Pressable>
-  );
-}
-
 export default function MessagesScreen() {
   const { session } = useSession();
   const { ensure, attention, decryptForConversation } = useE2EKeys();
@@ -150,19 +78,38 @@ export default function MessagesScreen() {
   // masks a real still-live room for longer than the race actually lasts.
   const [justEndedRoomName, setJustEndedRoomName] = useState<string | null>(null);
 
+  // Synthesized straight from broadcast state, not waited on `live` (the
+  // fetched list) — going live only shows up there once refreshLive's own
+  // round trip over the hub's tunnel resolves, which lands noticeably later
+  // than on the web portal (same-origin, no tunnel hop). This is what lets
+  // this device's own just-started broadcast render immediately, the same
+  // instant the phase flips to 'live', instead of waiting on that fetch —
+  // `live` still becomes the source of truth once it lands (see the merge
+  // below), this is only ever a stand-in until then.
+  const myLiveItem = useMemo<LiveCommsItem | null>(() => {
+    if (broadcast.phase !== 'live' || broadcast.role !== 'host' || !broadcast.roomName || !session) return null;
+    return {
+      kind: 'broadcast',
+      room_name: broadcast.roomName,
+      title: broadcast.title,
+      host_id: session.userId,
+      host_username: session.displayName,
+      participant_count: 1,
+    };
+  }, [broadcast.phase, broadcast.role, broadcast.roomName, broadcast.title, session]);
+
   // Computed once, used for both the "Live now" header's visibility and the
   // strip itself — the header used to check raw `live.length` while the
   // strip filtered separately, so ending your only broadcast could leave
   // the "Live now" eyebrow showing over an empty strip.
-  const visibleLive = useMemo(
-    () =>
-      live.filter(
-        (item) =>
-          item.room_name !== justEndedRoomName &&
-          (item.host_id !== session?.userId || (broadcast.phase === 'live' && broadcast.roomName === item.room_name))
-      ),
-    [live, session, broadcast.phase, broadcast.roomName, justEndedRoomName]
-  );
+  const visibleLive = useMemo(() => {
+    const source = myLiveItem && !live.some((item) => item.room_name === myLiveItem.room_name) ? [myLiveItem, ...live] : live;
+    return source.filter(
+      (item) =>
+        item.room_name !== justEndedRoomName &&
+        (item.host_id !== session?.userId || (broadcast.phase === 'live' && broadcast.roomName === item.room_name))
+    );
+  }, [live, myLiveItem, session, broadcast.phase, broadcast.roomName, justEndedRoomName]);
 
   // Re-tapping the Chat tab while already on it scrolls back to the top —
   // same as Home (see (tabs)/index.tsx's own useScrollToTop).
@@ -465,39 +412,6 @@ const styles = StyleSheet.create({
     fontSize: 13.5,
     fontWeight: '700',
   },
-  minimizeBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#4A1616',
-    marginHorizontal: 20,
-    marginBottom: 8,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  minimizeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#DC2B2B',
-  },
-  minimizeBarAlert: {
-    backgroundColor: '#331CA7',
-  },
-  minimizeDotAlert: {
-    backgroundColor: '#fff',
-  },
-  minimizeLabel: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  minimizeTimer: {
-    fontSize: 12.5,
-    fontVariant: ['tabular-nums'],
-    opacity: 0.85,
-  },
   liveEyebrowRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -520,70 +434,5 @@ const styles = StyleSheet.create({
   liveStrip: {
     gap: 10,
     paddingBottom: 20,
-  },
-  liveCard: {
-    width: 148,
-    height: 196,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  liveBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  liveBadgeLabel: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  liveCountPill: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    borderRadius: 999,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-  },
-  liveCountText: {
-    fontSize: 10,
-    fontVariant: ['tabular-nums'],
-  },
-  liveCardFooter: {
-    position: 'absolute',
-    left: 10,
-    right: 10,
-    bottom: 10,
-    gap: 4,
-  },
-  liveHostRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  liveHostMonogram: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  liveHostInitial: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  liveHostName: {
-    fontSize: 11,
-    flex: 1,
-    opacity: 0.9,
-  },
-  liveTitle: {
-    fontSize: 13,
-    fontWeight: '600',
   },
 });

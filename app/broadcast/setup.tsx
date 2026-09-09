@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
@@ -18,14 +18,22 @@ const AUDIENCE_OPTIONS: { value: BroadcastAudience; label: string }[] = [
 // setup.tsx's answer flow. Viewers reach the live screen directly by
 // tapping a LiveCard on the Messages screen (see BroadcastProvider's
 // joinAsViewer), never through here.
+//
+// `spaceSlug`/`spaceName` params arrive only when opened from a space's own
+// Broadcast button (app/spaces/[slug].tsx) — same screen, same flow, just
+// with the audience already decided instead of picked from the generic
+// hub-wide row below: there's nothing to "choose" (you're already in that
+// space), and until this param existed AUDIENCE_OPTIONS' own 'space' entry
+// was just a label with no actual space behind it.
 export default function BroadcastSetupScreen() {
   const { session } = useSession();
   const { broadcast, startBroadcast, toggleMic, toggleCam } = useBroadcast();
-  const [title, setTitle] = useState('');
-  const [audience, setAudience] = useState<BroadcastAudience>('hub');
+  const { spaceSlug, spaceName } = useLocalSearchParams<{ spaceSlug?: string; spaceName?: string }>();
+  const [title, setTitle] = useState(spaceSlug && spaceName ? `Live from ${spaceName}` : '');
+  const [audience, setAudience] = useState<BroadcastAudience>(spaceSlug ? 'space' : 'hub');
 
   function handleGoLive() {
-    startBroadcast({ title: title.trim() || 'Live broadcast', audience });
+    startBroadcast({ title: title.trim() || 'Live broadcast', audience, spaceSlug });
     router.back();
   }
 
@@ -67,18 +75,29 @@ export default function BroadcastSetupScreen() {
         <ThemedText style={styles.sectionLabel} lightColor="rgba(255,255,255,0.6)" darkColor="rgba(255,255,255,0.6)">
           Who can watch
         </ThemedText>
-        <View style={styles.audienceRow}>
-          {AUDIENCE_OPTIONS.map((option) => {
-            const active = audience === option.value;
-            return (
-              <Pressable key={option.value} onPress={() => setAudience(option.value)} style={[styles.audiencePill, active && styles.audiencePillActive]}>
-                <ThemedText style={[styles.audiencePillLabel, active && styles.audiencePillLabelActive]} lightColor="#fff" darkColor="#fff">
-                  {option.label}
-                </ThemedText>
-              </Pressable>
-            );
-          })}
-        </View>
+        {spaceSlug ? (
+          // Fixed, not a picker — there's nothing to choose here, this
+          // screen was opened from that space's own Broadcast button.
+          <View style={[styles.audiencePill, styles.audiencePillActive, styles.audiencePillFixed]}>
+            <IconSymbol name="building.2.fill" size={13} color="#fff" />
+            <ThemedText style={[styles.audiencePillLabel, styles.audiencePillLabelActive]} lightColor="#fff" darkColor="#fff">
+              {spaceName || 'This space'}
+            </ThemedText>
+          </View>
+        ) : (
+          <View style={styles.audienceRow}>
+            {AUDIENCE_OPTIONS.map((option) => {
+              const active = audience === option.value;
+              return (
+                <Pressable key={option.value} onPress={() => setAudience(option.value)} style={[styles.audiencePill, active && styles.audiencePillActive]}>
+                  <ThemedText style={[styles.audiencePillLabel, active && styles.audiencePillLabelActive]} lightColor="#fff" darkColor="#fff">
+                    {option.label}
+                  </ThemedText>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
 
         <View style={styles.togglesRow}>
           <ToggleButton icon={broadcast.micOn ? 'mic.fill' : 'mic.slash.fill'} active={!broadcast.micOn} label={broadcast.micOn ? 'Mic on' : 'Muted'} onPress={toggleMic} />
@@ -177,6 +196,14 @@ const styles = StyleSheet.create({
   },
   audiencePillActive: {
     backgroundColor: '#DC2B2B',
+  },
+  // Only used for the fixed space-scoped indicator above — the icon needs
+  // row layout the plain text-only pills below don't.
+  audiencePillFixed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
   },
   audiencePillLabel: {
     fontSize: 13.5,

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
@@ -8,7 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { assignTask, getInitiative, getInitiativeTaskMeta, unassignTask, updateTaskStatus } from '@/lib/api/hubService';
+import { addTask, assignTask, getInitiative, getInitiativeTaskMeta, unassignTask, updateTaskStatus } from '@/lib/api/hubService';
 import { Initiative, InitiativeTaskSummary, TaskMeta } from '@/lib/api/types';
 import { canCycleTaskStatus, effectiveTaskStatus, nextTaskStatus, TASK_DISPLAY_STATUS_META, TASK_STATUS_ORDER, taskStatusMeta } from '@/lib/initiatives/meta';
 import { useSession } from '@/lib/session/session-context';
@@ -40,6 +40,9 @@ export default function InitiativeTasksScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [cyclingId, setCyclingId] = useState<string | null>(null);
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [addingTask, setAddingTask] = useState(false);
 
   const load = useCallback(() => {
     if (!session || !id) return;
@@ -88,6 +91,22 @@ export default function InitiativeTasksScreen() {
       .finally(() => setClaimingId(null));
   }
 
+  // Creator-only server-side (assertInitiativeCreator on POST /:id/goals) —
+  // gated the same way here as the "+" that opens this composer, so a tap
+  // never reaches a 403 a non-creator couldn't have triggered anyway.
+  function submitAddTask() {
+    if (!session || !id || !newTaskTitle.trim() || addingTask) return;
+    setAddingTask(true);
+    addTask(session.hub.tunnelUrl, session.token, id, { title: newTaskTitle.trim() })
+      .then(() => {
+        setNewTaskTitle('');
+        setShowAddTask(false);
+        load();
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't add that task."))
+      .finally(() => setAddingTask(false));
+  }
+
   function releaseTask(task: InitiativeTaskSummary) {
     if (!session || !id || claimingId) return;
     setClaimingId(task.id);
@@ -101,7 +120,12 @@ export default function InitiativeTasksScreen() {
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title="Tasks" />
+      <ScreenHeader
+        title="Tasks"
+        rightIcon={initiative?.viewerIsCreator ? 'plus' : undefined}
+        onRightPress={() => setShowAddTask((v) => !v)}
+        rightAccessibilityLabel="Add a task"
+      />
 
       {loading && !initiative && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -113,26 +137,49 @@ export default function InitiativeTasksScreen() {
           contentContainerStyle={styles.list}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           ListHeaderComponent={
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-              <Pressable
-                onPress={() => setStatusFilter('All')}
-                style={[styles.chip, statusFilter === 'All' && { backgroundColor: Brand }]}>
-                <ThemedText style={styles.chipLabel} lightColor={statusFilter === 'All' ? '#fff' : undefined} darkColor={statusFilter === 'All' ? '#fff' : undefined}>
-                  All
-                </ThemedText>
-              </Pressable>
-              {TASK_STATUS_ORDER.map((s) => {
-                const meta = taskStatusMeta(s);
-                const active = statusFilter === s;
-                return (
-                  <Pressable key={s} onPress={() => setStatusFilter(s)} style={[styles.chip, active && { backgroundColor: meta.color }]}>
-                    <ThemedText style={styles.chipLabel} lightColor={active ? '#fff' : undefined} darkColor={active ? '#fff' : undefined}>
-                      {meta.label}
+            <View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+                <Pressable
+                  onPress={() => setStatusFilter('All')}
+                  style={[styles.chip, statusFilter === 'All' && { backgroundColor: Brand }]}>
+                  <ThemedText style={styles.chipLabel} lightColor={statusFilter === 'All' ? '#fff' : undefined} darkColor={statusFilter === 'All' ? '#fff' : undefined}>
+                    All
+                  </ThemedText>
+                </Pressable>
+                {TASK_STATUS_ORDER.map((s) => {
+                  const meta = taskStatusMeta(s);
+                  const active = statusFilter === s;
+                  return (
+                    <Pressable key={s} onPress={() => setStatusFilter(s)} style={[styles.chip, active && { backgroundColor: meta.color }]}>
+                      <ThemedText style={styles.chipLabel} lightColor={active ? '#fff' : undefined} darkColor={active ? '#fff' : undefined}>
+                        {meta.label}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              {showAddTask && initiative.viewerIsCreator && (
+                <View style={styles.addTaskRow}>
+                  <TextInput
+                    autoFocus
+                    value={newTaskTitle}
+                    onChangeText={setNewTaskTitle}
+                    onSubmitEditing={submitAddTask}
+                    placeholder="What needs doing?"
+                    placeholderTextColor="#8888"
+                    style={[styles.addTaskInput, { color: Colors[colorScheme].text }]}
+                  />
+                  <Pressable
+                    style={[styles.addTaskButton, (addingTask || !newTaskTitle.trim()) && { opacity: 0.5 }]}
+                    disabled={addingTask || !newTaskTitle.trim()}
+                    onPress={submitAddTask}>
+                    <ThemedText style={styles.addTaskButtonLabel} lightColor="#fff" darkColor="#fff">
+                      {addingTask ? 'Adding…' : 'Add'}
                     </ThemedText>
                   </Pressable>
-                );
-              })}
-            </ScrollView>
+                </View>
+              )}
+            </View>
           }
           renderItem={({ item }: { item: InitiativeTaskSummary }) => {
             const meta = taskMeta[item.id];
@@ -221,6 +268,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     paddingBottom: 12,
+  },
+  addTaskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingBottom: 14,
+  },
+  addTaskInput: {
+    flex: 1,
+    fontSize: 14,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#8882',
+  },
+  addTaskButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: Brand,
+  },
+  addTaskButtonLabel: {
+    fontSize: 12.5,
+    fontWeight: '600',
   },
   chip: {
     height: 30,

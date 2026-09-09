@@ -41,7 +41,7 @@ type Props = {
 };
 
 // A compact, equally-proportioned tile for Home's Discussions grid (the full
-// listing at app/feed.tsx stays the vertical PostRow). When a post has media,
+// listing at app/(tabs)/feed.tsx stays the vertical PostRow). When a post has media,
 // the media fills the whole square tile and text overlays it, scrim-backed,
 // at the bottom — media is the visual, text is a minimal caption on top of
 // it, not a separate block competing with it. No inline poll voting here (see

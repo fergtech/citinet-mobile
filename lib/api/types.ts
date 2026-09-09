@@ -214,6 +214,10 @@ export type LiveCommsItem = {
   host_id: string;
   host_username: string;
   participant_count: number;
+  // Only ever present on a space-scoped broadcast/room (see POST /api/comms/
+  // token's own space_slug param) — absent (not null) on a plain hub-wide one.
+  space_id?: string;
+  space_slug?: string;
 };
 
 export type HubMember = {
@@ -588,10 +592,12 @@ export type InitiativeMemberSummary = {
   joinedAt: string;
 };
 
-// Shape unconfirmed — the sample response's `updates` array was empty, so
-// nothing here is verified. Kept loose/optional on purpose; read
-// defensively (see lib/initiatives/meta.ts) rather than trusting any of
-// these fields to be present.
+// Confirmed dead: api/server.js hardcodes this embedded field to `[]` on
+// every GET /api/initiatives/:id response (see the route's own `updates: []`
+// line) — it never actually carries real updates, regardless of what's been
+// posted. Kept loose/optional since nothing here was ever verified against a
+// real payload; use InitiativeUpdateEntry below instead, which is the real,
+// live shape GET /api/initiatives/:id/updates actually returns.
 export type InitiativeUpdate = {
   id: string;
   body?: string;
@@ -602,6 +608,32 @@ export type InitiativeUpdate = {
   created_at?: string;
   createdAt?: string;
   reply_count?: number;
+};
+
+// Confirmed against hub_initiative_update_comments' real columns (INSERT ...
+// RETURNING * in api/server.js's POST /updates/:updateId/comments).
+export type InitiativeUpdateComment = {
+  id: string;
+  update_id: string;
+  author_id: string;
+  author_name: string;
+  content: string;
+  created_at: string;
+};
+
+// The real, live "post an update" wall — confirmed against hub_initiative_
+// updates' real columns and GET /api/initiatives/:id/updates' own SELECT
+// (which json_aggs each update's comments straight onto the row). Distinct
+// from the dead `Initiative.updates` field above — this is its own endpoint,
+// not embedded on the main initiative response.
+export type InitiativeUpdateEntry = {
+  id: string;
+  initiative_id: string;
+  author_id: string;
+  author_name: string;
+  content: string;
+  created_at: string;
+  comments: InitiativeUpdateComment[];
 };
 
 export type InitiativeBannerMode = 'image' | 'solid' | 'gradient' | null;
