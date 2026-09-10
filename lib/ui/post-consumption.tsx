@@ -1,7 +1,20 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { recordPostView } from '@/lib/api/hubService';
 import { useSession } from '@/lib/session/session-context';
+
+// Not hub-scoped, same as reasonsRef itself below — post ids are UUIDs, so
+// mixing ids across hubs in one set/one storage slot carries no real
+// collision risk, just avoids the ceremony of a per-hub key for what's
+// already a single global in-memory set.
+const SEEN_IDS_STORAGE_KEY = 'post-consumption.seen-post-ids';
+// Caps local growth — oldest entries fall off first (Map preserves insertion
+// order, so a plain slice(-N) on its keys is a real LRU-by-insertion, not an
+// arbitrary truncation). A post old enough to fall off here is already far
+// down a reverse-chronological feed regardless of seen state, so it
+// reappearing as "unseen" after eviction is a harmless edge case, not a bug.
+const MAX_PERSISTED_SEEN = 300;
 
 // Cross-screen "has the user actually seen/engaged with this post" state —
 // deliberately a single Provider mounted once at the root (see app/_layout.tsx)
@@ -47,6 +60,26 @@ export function PostConsumptionProvider({ children }: { children: ReactNode }) {
     sessionRef.current = session;
   }, [session]);
 
+  // Seeds reasonsRef from last session's persisted ids, once, at Provider
+  // mount — so Feed's unseen-first sort (see app/(tabs)/feed.tsx) still
+  // knows what was already seen after an app relaunch, not just within the
+  // current runtime. Server-side hub_post_views is the actual source of
+  // truth for view_count, but nothing reads a per-user "have I seen this"
+  // flag back from it — this local cache is just enough to sort a feed on
+  // this device, not a second source of truth to keep server-consistent.
+  useEffect(() => {
+    AsyncStorage.getItem(SEEN_IDS_STORAGE_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const ids = JSON.parse(raw) as string[];
+        for (const id of ids) {
+          if (!reasonsRef.current.has(id)) reasonsRef.current.set(id, 'dwell');
+        }
+        if (ids.length > 0) setConsumedIds(new Set(reasonsRef.current.keys()));
+      })
+      .catch(() => {});
+  }, []);
+
   // POST /api/posts/:id/view — a real, server-side, per-viewer tally (see
   // api/server.js in the citinet-web repo: hub_post_views, one row per
   // post+user, so the server itself dedupes a given user to a single count
@@ -59,13 +92,47 @@ export function PostConsumptionProvider({ children }: { children: ReactNode }) {
   // itself stays on an empty deps array — this needs to keep working
   // correctly even though the session can log out/switch hubs after this
   // closure was created.
-  const markConsumed = useCallback((postId: string, reason: PostConsumedReason) => {
-    if (reasonsRef.current.has(postId)) return;
-    reasonsRef.current.set(postId, reason);
-    setConsumedIds(new Set(reasonsRef.current.keys()));
-    const s = sessionRef.current;
-    if (s) recordPostView(s.hub.tunnelUrl, s.token, postId).catch(() => {});
+  //
+  // A batch of posts can legitimately cross the dwell threshold within the
+  // same instant (a fast fling past several rows, or many rows already on
+  // screen when Feed first mounts) — queued and drained one at a time with a
+  // short stagger, rather than firing recordPostView for all of them in one
+  // burst, so that alone can't trip the hub's general API rate limit (see
+  // server.js's apiLimiter — 300 req/min shared with every other request
+  // this device makes).
+  const viewQueueRef = useRef<string[]>([]);
+  const drainingViewQueueRef = useRef(false);
+  const VIEW_QUEUE_STAGGER_MS = 150;
+
+  const drainViewQueue = useCallback(async () => {
+    if (drainingViewQueueRef.current) return;
+    drainingViewQueueRef.current = true;
+    try {
+      while (viewQueueRef.current.length > 0) {
+        const postId = viewQueueRef.current.shift();
+        const s = sessionRef.current;
+        if (postId && s) await recordPostView(s.hub.tunnelUrl, s.token, postId).catch(() => {});
+        if (viewQueueRef.current.length > 0) {
+          await new Promise((resolve) => setTimeout(resolve, VIEW_QUEUE_STAGGER_MS));
+        }
+      }
+    } finally {
+      drainingViewQueueRef.current = false;
+    }
   }, []);
+
+  const markConsumed = useCallback(
+    (postId: string, reason: PostConsumedReason) => {
+      if (reasonsRef.current.has(postId)) return;
+      reasonsRef.current.set(postId, reason);
+      setConsumedIds(new Set(reasonsRef.current.keys()));
+      const persisted = [...reasonsRef.current.keys()].slice(-MAX_PERSISTED_SEEN);
+      AsyncStorage.setItem(SEEN_IDS_STORAGE_KEY, JSON.stringify(persisted)).catch(() => {});
+      viewQueueRef.current.push(postId);
+      drainViewQueue();
+    },
+    [drainViewQueue]
+  );
 
   const isConsumed = useCallback((postId: string) => reasonsRef.current.has(postId), []);
   // Each a thin, permanently-stable wrapper around markConsumed (own empty

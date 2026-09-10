@@ -19,6 +19,7 @@ import { EventRsvpButton } from '@/components/event-rsvp-button';
 import { HubAvatar } from '@/components/hub-avatar';
 import { HubMedia } from '@/components/hub-media';
 import { PollCard } from '@/components/poll-card';
+import { PostShareSheet } from '@/components/post-share-sheet';
 import { ReportSheet } from '@/components/report-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -180,6 +181,10 @@ export default function PostDetailScreen() {
   const [showAttendees, setShowAttendees] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [reportTarget, setReportTarget] = useState<{ type: ReportTargetType; id: string } | null>(null);
+  const [showShare, setShowShare] = useState(false);
+  // Optimistic-only, same reasoning as components/post-row.tsx's own copy —
+  // hides "Share to Hub" right after use instead of waiting on a refetch.
+  const [sharedToFeed, setSharedToFeed] = useState(false);
 
   const load = useCallback(() => {
     if (!session) return;
@@ -427,6 +432,9 @@ export default function PostDetailScreen() {
                     <ThemedText style={styles.rowMeta}>{post.like_count}</ThemedText>
                   </Pressable>
                   <ThemedText style={styles.rowMeta}>{post.reply_count} comments</ThemedText>
+                  <Pressable onPress={() => setShowShare(true)} hitSlop={8}>
+                    <IconSymbol name="square.and.arrow.up" size={19} color={Colors[colorScheme].icon} />
+                  </Pressable>
                   <View style={styles.viewsBadge}>
                     <ImpressionsIcon size={15} color={Colors[colorScheme].icon} />
                     <ThemedText style={styles.rowMeta}>{formatCompactCount(post.view_count)} views</ThemedText>
@@ -492,6 +500,16 @@ export default function PostDetailScreen() {
             token={session.token}
             targetType={reportTarget.type}
             targetId={reportTarget.id}
+          />
+        )}
+
+        {post && (
+          <PostShareSheet
+            visible={showShare}
+            onClose={() => setShowShare(false)}
+            post={sharedToFeed ? { ...post, shared_to_feed: true } : post}
+            session={session}
+            onSharedToFeed={() => setSharedToFeed(true)}
           />
         )}
       </ThemedView>

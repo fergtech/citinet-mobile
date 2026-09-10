@@ -19,14 +19,50 @@ import { getPosts, toggleLike, toggleRsvp } from '@/lib/api/hubService';
 import { HubPost } from '@/lib/api/types';
 import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { applyVote } from '@/lib/ui/poll';
+import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { usePostDwellTracking } from '@/lib/ui/post-dwell-tracking';
 import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { useSession } from '@/lib/session/session-context';
 
 const FEED_CACHE_KEY = 'feed-posts';
 
+// Unseen posts first, then already-seen ones — each group still newest-first.
+// GET /api/posts already returns posts ordered by created_at DESC, and
+// Array.prototype.sort is a stable sort, so partitioning by isConsumed here
+// (without touching created_at at all) preserves that within each group
+// rather than needing a full two-key comparator. isConsumed reads from
+// lib/ui/post-consumption.tsx's own ref (dwell/open/like/RSVP tracking,
+// persisted locally across app restarts) — called once per fetch, not
+// subscribed to reactively, so a post read mid-scroll doesn't jump down
+// under the reader's finger; it only sorts to the bottom on the next
+// load/refresh.
+function sortUnseenFirst(list: HubPost[], isConsumed: (postId: string) => boolean): HubPost[] {
+  return [...list].sort((a, b) => Number(isConsumed(a.id)) - Number(isConsumed(b.id)));
+}
+
+// Refreshes each post's own data (likes, replies, etc.) from `next` without
+// touching the order already on screen — used for the silent refocus reload
+// below (coming back to Feed from a post you just opened, switching tabs and
+// back, ...). Only a genuine fresh load re-sorts via sortUnseenFirst; doing
+// that on every silent tick instead reshuffled the whole list under the
+// reader on every single refocus, which (a) looked like the list glitching
+// mid-interaction and (b) reset FlatList's viewability tracking each time,
+// so a batch of already-on-screen posts would register as newly visible
+// together and fire a burst of recordPostView calls at once — enough to
+// trip the hub's general API rate limit ("Too many requests"). Brand-new
+// posts (not in the previous list at all) are genuinely unseen, so they're
+// prepended at the top same as a fresh sort would place them.
+function mergePreservingOrder(current: HubPost[], next: HubPost[]): HubPost[] {
+  const nextById = new Map(next.map((p) => [p.id, p]));
+  const currentIds = new Set(current.map((p) => p.id));
+  const stillPresent = current.map((p) => nextById.get(p.id)).filter((p): p is HubPost => !!p);
+  const newlyArrived = next.filter((p) => !currentIds.has(p.id));
+  return [...newlyArrived, ...stillPresent];
+}
+
 export default function FeedScreen() {
   const { session } = useSession();
+  const { isConsumed } = usePostConsumption();
   const [posts, setPosts] = useState<HubPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,16 +80,34 @@ export default function FeedScreen() {
     hasContentRef.current = false;
     readCache<HubPost[]>(session.hub.slug, FEED_CACHE_KEY).then((cached) => {
       if (cached && cached.length > 0) {
-        setPosts(cached);
+        setPosts(sortUnseenFirst(cached, isConsumed));
         hasContentRef.current = true;
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.hub.slug]);
 
+  // Guards against two overlapping fetches to the same hub — e.g. the
+  // silent refocus reload below (coming back from a post you just opened)
+  // landing at the same moment as a manual pull-to-refresh. Each hub is a
+  // single self-hosted machine reached over its own tunnel, not a scaled
+  // cloud backend, and firing two concurrent GET /api/posts against it was
+  // producing outright connection failures ("Network request failed"), not
+  // just wasted duplicate work. A request that arrives mid-fetch is
+  // remembered (not dropped) and replayed once the in-flight one settles, so
+  // a pull-to-refresh during a silent reload still ends up doing one real,
+  // non-silent fetch — just sequenced after, not layered on top.
+  const loadInFlightRef = useRef(false);
+  const pendingLoadRef = useRef<{ silent?: boolean } | null>(null);
+
   const load = useCallback(
-    (opts?: { silent?: boolean }) => {
+    (opts?: { silent?: boolean; isRetry?: boolean }) => {
       if (!session) return;
+      if (loadInFlightRef.current) {
+        pendingLoadRef.current = opts ?? {};
+        return;
+      }
+      loadInFlightRef.current = true;
       if (!opts?.silent) setLoading(true);
       setError(null);
       // Opportunistic retry of anything queued — sequenced ahead of the
@@ -64,17 +118,45 @@ export default function FeedScreen() {
         .catch(() => {})
         .then(() => getPosts(session.hub.tunnelUrl, session.token))
         .then((next) => {
-          setPosts(next);
+          setPosts((prev) =>
+            opts?.silent && prev.length > 0 ? mergePreservingOrder(prev, next) : sortUnseenFirst(next, isConsumed)
+          );
           hasContentRef.current = true;
+          // Cached as the server returned it (created_at DESC, no
+          // unseen-first reorder) — the cache-seed effect above runs it
+          // through sortUnseenFirst on read anyway, so this just keeps the
+          // cached shape identical to a fresh server response.
           writeCache(session.hub.slug, FEED_CACHE_KEY, next);
         })
         // Deliberately leaves `posts` alone on failure (e.g. the hub is
         // mid-restart) rather than clearing it — the cache-seeded/last-good
-        // list stays on screen with the error shown alongside it.
-        .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
-        .finally(() => setLoading(false));
+        // list stays on screen with the error shown alongside it. A SILENT
+        // failure never surfaces the banner at all — there's already good
+        // content on screen (that's the whole premise of "silent"), and a
+        // background refocus refresh hiccuping for a moment right after
+        // navigating back from a post isn't something worth alarming the
+        // user over. It gets one quiet retry a beat later instead (real
+        // observed behavior: the identical request succeeds as soon as the
+        // user manually pulls to refresh a moment after this one fails —
+        // this just does that automatically rather than waiting on them to
+        // notice and do it themselves). A retry that also fails just stays
+        // quiet and leaves the existing list as-is.
+        .catch((err) => {
+          if (!opts?.silent) {
+            setError(err instanceof Error ? err.message : 'Failed to load.');
+          } else if (!opts.isRetry) {
+            setTimeout(() => load({ silent: true, isRetry: true }), 1200);
+          }
+        })
+        .finally(() => {
+          setLoading(false);
+          loadInFlightRef.current = false;
+          const pending = pendingLoadRef.current;
+          pendingLoadRef.current = null;
+          if (pending) load(pending);
+        });
     },
-    [session]
+    [session, isConsumed]
   );
 
   // Focus-based, not mount-only — see Home/Messages for why (liking or voting

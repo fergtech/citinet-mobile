@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { EventAtlasLink } from '@/components/event-atlas-link';
@@ -7,6 +7,7 @@ import { EventRsvpButton } from '@/components/event-rsvp-button';
 import { HubAvatar } from '@/components/hub-avatar';
 import { HubMedia } from '@/components/hub-media';
 import { PollCard } from '@/components/poll-card';
+import { PostShareSheet } from '@/components/post-share-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ImpressionsIcon } from '@/components/ui/impressions-icon';
@@ -49,6 +50,12 @@ type Props = {
 function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp, onOpen }: Props) {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
+  const [showShare, setShowShare] = useState(false);
+  // Optimistic-only — the post prop itself is owned by whichever screen
+  // fetched it (Home/Feed/Events all keep their own copy), so this just
+  // hides the "Share to Hub" option again immediately after use rather than
+  // waiting on that screen's next refetch.
+  const [sharedToFeed, setSharedToFeed] = useState(false);
 
   function handleAuthorPress(e: { stopPropagation: () => void }) {
     e.stopPropagation();
@@ -113,6 +120,14 @@ function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, on
             <ThemedText style={styles.meta}>{post.like_count}</ThemedText>
           </Pressable>
           <ThemedText style={styles.meta}>💬 {post.reply_count}</ThemedText>
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              setShowShare(true);
+            }}
+            hitSlop={8}>
+            <IconSymbol name="square.and.arrow.up" size={17} color={Colors[colorScheme].icon} />
+          </Pressable>
           {/* Display-only — views aren't a toggle like a like/RSVP, nothing
               to tap. Recorded separately via lib/ui/post-consumption.tsx
               when the post is actually seen, not by rendering this number. */}
@@ -122,6 +137,15 @@ function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, on
           </View>
         </View>
       </View>
+      {session && (
+        <PostShareSheet
+          visible={showShare}
+          onClose={() => setShowShare(false)}
+          post={sharedToFeed ? { ...post, shared_to_feed: true } : post}
+          session={session}
+          onSharedToFeed={() => setSharedToFeed(true)}
+        />
+      )}
     </Pressable>
   );
 }

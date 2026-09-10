@@ -291,20 +291,27 @@ function LatestAtlasRow({
   );
 }
 
-// A compact preview, not the full PostRow — no icon (title carries enough
-// weight on its own, matching Discussions' equally icon-less compactAuthor
-// look), no media/RSVP-button/like-comment footer, since those (plus the old
-// 6-line body cap PostRow itself uses) were what made this section so much
-// taller than every other Home preview. Body still gets a preview, just
-// capped shorter (4 lines) now that this isn't PostRow's shared cap. The one
-// exception to "no icon" is EventAtlasLink, kept as-is (icon included) since
-// it's a real, separately-actionable link to a place, not decoration.
+// A compact teaser, not the full PostRow — title/date/location only, no
+// body text/media/RSVP-button/like-comment footer, since the full event
+// content already renders below in Feed (as a normal PostRow, once it's the
+// most recent post). Showing the body here too just duplicated that.
+//
+// Flat row (atlasLatestRow), not a boxed/tinted card — this app's Home rows
+// (Atlas/Files/Discussions) are deliberately chrome-free, full-bleed rows
+// separated by a hairline divider, not card containers; a background-fill
+// box here would break that convention (product ask, re-confirmed after an
+// earlier pass tried exactly that).
+//
+// Taps here go to the Events tab (all upcoming/past events), not this one
+// post's detail screen — Feed's own PostRow below already links straight to
+// that same post, so pointing both rows at the identical destination was
+// redundant. This row's job is "browse what's coming up"; Feed's job is
+// "read this specific post."
 function LatestEventRow({ event }: { event: HubPost }) {
   return (
-    <Pressable
-      style={[styles.atlasLatestRow, styles.eventRowCompact]}
-      onPress={() => router.push({ pathname: '/post/[id]', params: { id: event.id } })}>
-      <View style={[styles.atlasLatestContent, styles.eventContentCompact]}>
+    <Pressable style={styles.atlasLatestRow} onPress={() => router.push('/events' as Href)}>
+      <View style={styles.atlasLatestContent}>
+        <ThemedText style={styles.eventTeaserLabel}>Upcoming</ThemedText>
         <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, styles.eventTitleLarger]} numberOfLines={2}>
           {event.title ?? 'Event'}
         </ThemedText>
@@ -312,11 +319,6 @@ function LatestEventRow({ event }: { event: HubPost }) {
           {event.event_date ? formatEventWhen(event.event_date, true) : 'Date TBA'}
           {event.rsvp_count > 0 ? ` · ${event.rsvp_count} going` : ''}
         </ThemedText>
-        {!!event.body?.trim() && (
-          <ThemedText style={styles.atlasLatestDescription} numberOfLines={2}>
-            {event.body}
-          </ThemedText>
-        )}
         {!!event.event_location && (
           <EventAtlasLink location={event.event_location} eventTitle={event.title} eventId={event.id} />
         )}
@@ -1066,20 +1068,20 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
-  // Scoped to LatestEventRow only -- every other row sharing atlasLatestRow/
-  // atlasLatestContent (Atlas, Files, Marketplace, Initiatives) keeps the
-  // normal spacing; this section specifically asked for a tighter card.
-  eventRowCompact: {
-    paddingVertical: 10,
-  },
-  eventContentCompact: {
-    gap: 2,
-  },
   // atlasLatestTitle is 16/21 (fontSize/lineHeight) -- same +2 bump asked
-  // for here, scoped to just this row like eventRowCompact above.
+  // for here, scoped to just this row.
   eventTitleLarger: {
     fontSize: 18,
     lineHeight: 23,
+  },
+  // Plain text label, not a boxed/pill badge — no background fill on Home
+  // rows, per project convention (see LatestEventRow's own comment).
+  eventTeaserLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Brand,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   atlasLatestTitle: {
     fontSize: 16,

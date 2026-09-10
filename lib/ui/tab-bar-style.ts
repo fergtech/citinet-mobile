@@ -7,7 +7,7 @@ import type { EdgeInsets } from 'react-native-safe-area-context';
 export const TAB_BAR_HEIGHT = 60;
 // Keep a compact margin from the phone edges without the previous wide gap
 // that made the floating bar feel detached from the screen.
-export const TAB_BAR_MARGIN_HORIZONTAL = 6;
+export const TAB_BAR_MARGIN_HORIZONTAL = 24;
 export const TAB_BAR_RADIUS = 28;
 
 // The tab bar's own base look (floating pill, background/border/shadow) —
@@ -22,7 +22,7 @@ export function getTabBarStyle(insets: EdgeInsets, isDark: boolean): ViewStyle {
     backgroundColor: 'transparent',
     position: 'absolute',
     marginHorizontal: TAB_BAR_MARGIN_HORIZONTAL,
-    bottom: Math.max(insets.bottom, 16),
+    bottom: Math.max(insets.bottom - 12, 6),
     height: TAB_BAR_HEIGHT,
     paddingBottom: 0,
     paddingTop: 0,

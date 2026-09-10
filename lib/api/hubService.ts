@@ -399,6 +399,22 @@ export async function toggleRsvp(
   return res.json();
 }
 
+// Promotes a space-scoped post into the hub's main feed (sets
+// hub_posts.shared_to_feed). Server-enforced: only the post's author or a
+// mod can call this, and only for a post that actually has a space_id — see
+// PATCH /api/posts/:postId/share-to-feed in citinet-web/api/server.js. The
+// "Share to Hub" option in components/post-share-sheet.tsx mirrors that same
+// eligibility client-side so the option doesn't even appear otherwise.
+export async function shareToFeed(tunnelUrl: string, token: string, postId: string): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/share-to-feed`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't share this to the hub feed."));
+  }
+}
+
 export async function listAttendees(tunnelUrl: string, token: string, postId: string): Promise<EventAttendee[]> {
   const res = await fetch(`${tunnelUrl}/api/posts/${encodeURIComponent(postId)}/rsvp`, {
     headers: { Authorization: `Bearer ${token}` },

@@ -101,6 +101,14 @@ export type HubPost = {
   view_count: number;
   // Present only when category === 'POLL'.
   poll?: HubPostPoll;
+  // Only selected by a handful of routes (GET /api/posts, /api/posts/:id,
+  // /api/spaces/:slug/posts, /api/search) — absent (undefined) elsewhere
+  // (getUpcomingEvents, getFeatured, etc.), so treat a missing value the same
+  // as "not a space post"/"not yet shared," not as a hard guarantee either
+  // way. Drives the "Share to Hub" option's eligibility — see
+  // components/post-share-sheet.tsx.
+  space_id?: string | null;
+  shared_to_feed?: boolean;
 };
 
 export type FeaturedItem = {
