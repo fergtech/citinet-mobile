@@ -4,65 +4,67 @@ import {
   ActivityIndicator,
   FlatList,
   Platform,
+  Pressable,
   StyleSheet,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import { PostRow } from '@/components/post-row';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { PostListSkeleton } from '@/components/ui/list-skeleton';
+import { Brand } from '@/constants/theme';
 import { readCache, writeCache } from '@/lib/api/dataCache';
 import { getPosts, toggleLike, toggleRsvp } from '@/lib/api/hubService';
 import { HubPost } from '@/lib/api/types';
 import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { applyVote } from '@/lib/ui/poll';
-import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { usePostDwellTracking } from '@/lib/ui/post-dwell-tracking';
 import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { useSession } from '@/lib/session/session-context';
 
 const FEED_CACHE_KEY = 'feed-posts';
+// A page size for infinite scroll, not "fetch everything" — matches GET
+// /api/posts's own default (see lib/api/hubService.ts), passed explicitly
+// here so the two stay in sync even if the server's default ever changes.
+const PAGE_SIZE = 20;
+// Higher than Files' own scroll-to-top threshold (280) — Feed's rows are
+// much taller (title/body/media/footer vs. a compact file row), so this
+// still lands around "a couple of posts deep," not "barely past the first."
+const SCROLL_TOP_THRESHOLD = 600;
 
-// Unseen posts first, then already-seen ones — each group still newest-first.
-// GET /api/posts already returns posts ordered by created_at DESC, and
-// Array.prototype.sort is a stable sort, so partitioning by isConsumed here
-// (without touching created_at at all) preserves that within each group
-// rather than needing a full two-key comparator. isConsumed reads from
-// lib/ui/post-consumption.tsx's own ref (dwell/open/like/RSVP tracking,
-// persisted locally across app restarts) — called once per fetch, not
-// subscribed to reactively, so a post read mid-scroll doesn't jump down
-// under the reader's finger; it only sorts to the bottom on the next
-// load/refresh.
-function sortUnseenFirst(list: HubPost[], isConsumed: (postId: string) => boolean): HubPost[] {
-  return [...list].sort((a, b) => Number(isConsumed(a.id)) - Number(isConsumed(b.id)));
+// The pagination cursor for "whatever comes after this page" — GET
+// /api/posts sorts unseen-first, newest-first within each group (see
+// server.js), so the cursor needs all three keys: my_viewed, created_at, id.
+// Always derived from a page's own raw server order, which is now the only
+// order Feed ever displays — the server is the single source of truth for
+// both "is this post seen" (hub_post_views) and where it sorts, so there's
+// no client-side re-sort to reconcile against it.
+function cursorOf(page: HubPost[]): { viewed: boolean; createdAt: string; id: string } | null {
+  const last = page[page.length - 1];
+  return last ? { viewed: !!last.my_viewed, createdAt: last.created_at, id: last.id } : null;
 }
 
-// Refreshes each post's own data (likes, replies, etc.) from `next` without
-// touching the order already on screen — used for the silent refocus reload
-// below (coming back to Feed from a post you just opened, switching tabs and
-// back, ...). Only a genuine fresh load re-sorts via sortUnseenFirst; doing
-// that on every silent tick instead reshuffled the whole list under the
-// reader on every single refocus, which (a) looked like the list glitching
-// mid-interaction and (b) reset FlatList's viewability tracking each time,
-// so a batch of already-on-screen posts would register as newly visible
-// together and fire a burst of recordPostView calls at once — enough to
-// trip the hub's general API rate limit ("Too many requests"). Brand-new
-// posts (not in the previous list at all) are genuinely unseen, so they're
-// prepended at the top same as a fresh sort would place them.
-function mergePreservingOrder(current: HubPost[], next: HubPost[]): HubPost[] {
-  const nextById = new Map(next.map((p) => [p.id, p]));
-  const currentIds = new Set(current.map((p) => p.id));
-  const stillPresent = current.map((p) => nextById.get(p.id)).filter((p): p is HubPost => !!p);
-  const newlyArrived = next.filter((p) => !currentIds.has(p.id));
-  return [...newlyArrived, ...stillPresent];
+// Used for the silent refocus reload below (coming back to Feed from a post
+// you just opened, switching tabs and back, ...): `next` is a fresh page 1,
+// already unseen-first/newest-first sorted server-side, so it's taken as-is
+// rather than merged into whatever order `current`'s page-1 window had —
+// that's the whole point of re-fetching it. Anything in `current` beyond
+// that window (loaded by scrolling further, via loadMore below) wasn't
+// re-fetched or re-sorted, so it's kept exactly as-is, appended after.
+function mergeWithFreshFirstPage(current: HubPost[], next: HubPost[]): HubPost[] {
+  const nextIds = new Set(next.map((p) => p.id));
+  const beyondFirstPage = current.filter((p) => !nextIds.has(p.id));
+  return [...next, ...beyondFirstPage];
 }
 
 export default function FeedScreen() {
   const { session } = useSession();
-  const { isConsumed } = usePostConsumption();
   const [posts, setPosts] = useState<HubPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,16 +73,26 @@ export default function FeedScreen() {
   // spinner over content that's already on screen.
   const hasContentRef = useRef(false);
 
+  // Pagination — cursorRef always tracks the end of the last page actually
+  // fetched. Only a genuine fresh load (not a silent refocus reload) touches
+  // it; see the "if (!opts?.silent)" branch below.
+  const cursorRef = useRef<{ viewed: boolean; createdAt: string; id: string } | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
+  const loadingMoreRef = useRef(false);
+
   // Seed instantly from the last successful response, cached per hub, so
   // reopening Feed (cold start, or right after a hub restart) shows the
   // last-seen posts instead of a blank screen while the real fetch is still
-  // in flight.
+  // in flight. Cached exactly as the server returned it (already unseen-
+  // first/newest-first sorted), so no re-sort needed on read.
   useEffect(() => {
     if (!session) return;
     hasContentRef.current = false;
     readCache<HubPost[]>(session.hub.slug, FEED_CACHE_KEY).then((cached) => {
       if (cached && cached.length > 0) {
-        setPosts(sortUnseenFirst(cached, isConsumed));
+        setPosts(cached);
         hasContentRef.current = true;
       }
     });
@@ -116,17 +128,33 @@ export default function FeedScreen() {
       // call, when the queue's empty. See lib/api/write-queue.ts.
       flushWriteQueue()
         .catch(() => {})
-        .then(() => getPosts(session.hub.tunnelUrl, session.token))
-        .then((next) => {
-          setPosts((prev) =>
-            opts?.silent && prev.length > 0 ? mergePreservingOrder(prev, next) : sortUnseenFirst(next, isConsumed)
-          );
+        .then(() => getPosts(session.hub.tunnelUrl, session.token, { limit: PAGE_SIZE }))
+        .then((page) => {
+          // The server sorts unseen-first/newest-first (see server.js) and
+          // re-evaluates that on every fetch — a post read earlier this
+          // session keeps sinking toward the bottom as more posts get marked
+          // seen there, not frozen in place after the first load. A silent
+          // reload takes the fresh page 1 as-is (already correctly sorted)
+          // and keeps whatever's loaded beyond it untouched; see
+          // mergeWithFreshFirstPage's own note.
+          setPosts((prev) => (opts?.silent && prev.length > 0 ? mergeWithFreshFirstPage(prev, page.posts) : page.posts));
           hasContentRef.current = true;
-          // Cached as the server returned it (created_at DESC, no
-          // unseen-first reorder) — the cache-seed effect above runs it
-          // through sortUnseenFirst on read anyway, so this just keeps the
-          // cached shape identical to a fresh server response.
-          writeCache(session.hub.slug, FEED_CACHE_KEY, next);
+          // A silent refocus reload only re-fetches page 1 to refresh the
+          // freshest posts' data — it must never touch pagination state, or
+          // refocusing after the user had already scrolled several pages
+          // down would rewind the cursor/hasMore back to "just page 1,"
+          // making the very next loadMore re-fetch (and duplicate) posts
+          // already on screen.
+          if (!opts?.silent) {
+            cursorRef.current = cursorOf(page.posts);
+            setHasMore(page.hasMore);
+            setLoadMoreError(false);
+          }
+          // Cached exactly as the server returned it — the cache-seed effect
+          // above trusts that order directly on read, no re-sort needed.
+          // Only page 1 is cached — a cold start re-paginates from scratch
+          // via scroll, same as any other infinite-scroll feed.
+          writeCache(session.hub.slug, FEED_CACHE_KEY, page.posts);
         })
         // Deliberately leaves `posts` alone on failure (e.g. the hub is
         // mid-restart) rather than clearing it — the cache-seeded/last-good
@@ -156,8 +184,36 @@ export default function FeedScreen() {
           if (pending) load(pending);
         });
     },
-    [session, isConsumed]
+    [session]
   );
+
+  // Infinite scroll — fetches the next page using cursorRef (the end of the
+  // last page actually loaded) and appends it in the server's own order
+  // (unseen-first/newest-first is a whole-hub sort now, not something this
+  // screen re-derives — see server.js). Shares load()'s in-flight flag
+  // (loadInFlightRef) so a load-more can't fire concurrently with a refresh
+  // against the same hub — the exact overlap that was producing "Network
+  // request failed" before load() got its own guard. A failure here doesn't
+  // touch `error` (that's reserved for the initial/refresh load blocking the
+  // whole screen) — it shows a small inline retry in the footer instead, and
+  // leaves hasMore untouched so scrolling further tries again naturally.
+  const loadMore = useCallback(() => {
+    if (!session || !hasMore || loadingMoreRef.current || loadInFlightRef.current || !cursorRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    getPosts(session.hub.tunnelUrl, session.token, { limit: PAGE_SIZE, before: cursorRef.current })
+      .then((page) => {
+        setPosts((prev) => [...prev, ...page.posts]);
+        cursorRef.current = cursorOf(page.posts) ?? cursorRef.current;
+        setHasMore(page.hasMore);
+        setLoadMoreError(false);
+      })
+      .catch(() => setLoadMoreError(true))
+      .finally(() => {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      });
+  }, [session, hasMore]);
 
   // Focus-based, not mount-only — see Home/Messages for why (liking or voting
   // from a post's own detail screen and coming back here should show it).
@@ -192,12 +248,21 @@ export default function FeedScreen() {
   const { setHidden: setTabBarHidden } = useTabBarVisibility();
   const lastScrollY = useRef(0);
   const accumulatedDelta = useRef(0);
+  // Feed has no tab bar button of its own to re-tap (see the comment above
+  // extraBottomInset — it's href: null), so useScrollToTop's usual "tap the
+  // active tab" gesture isn't available here the way it is on Home/Messages.
+  // A FAB is the fallback, same pattern as app/files/index.tsx's own
+  // scroll-to-top button.
+  const listRef = useRef<FlatList>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const handleScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const y = e.nativeEvent.contentOffset.y;
       const diff = y - lastScrollY.current;
       const SCROLL_HIDE_THRESHOLD = 12;
       const NEAR_TOP_THRESHOLD = 40;
+
+      setShowScrollTop(y > SCROLL_TOP_THRESHOLD);
 
       if ((diff > 0 && accumulatedDelta.current < 0) || (diff < 0 && accumulatedDelta.current > 0)) {
         accumulatedDelta.current = 0;
@@ -218,6 +283,10 @@ export default function FeedScreen() {
     },
     [setTabBarHidden]
   );
+
+  const scrollToTop = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
 
   // Stable across renders (useCallback, not a plain function declaration) —
   // PostRow is wrapped in React.memo below, and that memo only actually
@@ -290,6 +359,12 @@ export default function FeedScreen() {
           onVotePoll={handleVotePoll}
           onToggleRsvp={handleToggleRsvp}
           onOpen={handleOpen}
+          // A preview, not the full post — Feed already marks a post
+          // "consumed" just from dwell time (see usePostDwellTracking
+          // below), which is a much more honest signal against a short
+          // snippet than against a wall of full body text + media scrolling
+          // past. The full post lives one tap away at post/[id].
+          bodyNumberOfLines={3}
         />
       );
     },
@@ -301,9 +376,14 @@ export default function FeedScreen() {
   return (
     <ThemedView style={styles.flex}>
       <ScreenHeader title="Feed" />
-      {loading && posts.length === 0 && <ActivityIndicator style={styles.spinner} />}
+      {/* Shaped placeholder, not a spinner, for the very first load (before
+          the cache-seed effect above has anything to show) — matches the
+          real PostRow shape so the screen reads as "content is arriving,"
+          not just "something is happening." */}
+      {loading && posts.length === 0 && <PostListSkeleton style={styles.skeleton} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
       <FlatList
+        ref={listRef}
         data={posts}
         keyExtractor={keyExtractor}
         contentContainerStyle={[styles.list, { paddingBottom: 24 + extraBottomInset }]}
@@ -325,8 +405,42 @@ export default function FeedScreen() {
         maxToRenderPerBatch={5}
         windowSize={7}
         initialNumToRender={6}
+        onEndReached={loadMore}
+        // 0.5 = starts fetching the next page while the reader's still half
+        // a screen's height above the bottom, so the next page is usually
+        // already in by the time they'd actually hit the end.
+        onEndReachedThreshold={0.5}
         ListEmptyComponent={!loading ? <ThemedText style={styles.empty}>No posts yet.</ThemedText> : null}
+        ListFooterComponent={
+          loadingMore ? (
+            <ActivityIndicator style={styles.footerSpinner} />
+          ) : loadMoreError ? (
+            <Pressable onPress={loadMore} style={styles.footerRetry}>
+              <ThemedText style={styles.footerRetryText}>Couldn't load more — tap to retry</ThemedText>
+            </Pressable>
+          ) : !hasMore && posts.length > 0 ? (
+            <ThemedText style={styles.footerEnd}>You're all caught up</ThemedText>
+          ) : null
+        }
       />
+
+      {/* Back-to-top FAB — appears once scrolled past SCROLL_TOP_THRESHOLD,
+          same pattern as app/files/index.tsx's own. Anchored above
+          extraBottomInset (the floating tab bar's own height on iOS, 0 on
+          Android where the bar doesn't overlap content) rather than just the
+          safe-area inset, so it's never covered by the glass tab bar even
+          when scrolling back up re-reveals it mid-way through this gesture. */}
+      {showScrollTop && (
+        <Animated.View
+          entering={FadeIn.duration(150)}
+          exiting={FadeOut.duration(150)}
+          style={[styles.scrollTopFab, { bottom: 24 + extraBottomInset }]}
+          pointerEvents="box-none">
+          <Pressable onPress={scrollToTop} style={styles.scrollTopButton} accessibilityLabel="Scroll to top" accessibilityRole="button">
+            <IconSymbol name="chevron.up" size={22} color="#fff" />
+          </Pressable>
+        </Animated.View>
+      )}
     </ThemedView>
   );
 }
@@ -335,13 +449,13 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  spinner: {
-    marginTop: 24,
-  },
   error: {
     color: '#b0392f',
     paddingHorizontal: 10,
     marginBottom: 12,
+  },
+  skeleton: {
+    paddingHorizontal: 10,
   },
   list: {
     paddingHorizontal: 10,
@@ -350,5 +464,39 @@ const styles = StyleSheet.create({
   empty: {
     opacity: 0.6,
     fontSize: 13,
+  },
+  footerSpinner: {
+    marginVertical: 20,
+  },
+  footerRetry: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  footerRetryText: {
+    opacity: 0.7,
+    fontSize: 13,
+  },
+  footerEnd: {
+    textAlign: 'center',
+    opacity: 0.5,
+    fontSize: 13,
+    paddingVertical: 20,
+  },
+  scrollTopFab: {
+    position: 'absolute',
+    right: 20,
+  },
+  scrollTopButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: Brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
   },
 });

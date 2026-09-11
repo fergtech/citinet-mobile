@@ -12,6 +12,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getPosts, getUpcomingEvents, listAtlasPins, listMarketplaceListings, listMembers } from '@/lib/api/hubService';
+import { cachePost } from '@/lib/api/post-cache';
 import { AtlasPin, HubMember, HubPost, MarketplaceListing } from '@/lib/api/types';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
 import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
@@ -162,14 +163,16 @@ export function DiscoverDrawer({ children }: { children: ReactNode }) {
     if (!open || loaded || !session) return;
     setLoading(true);
     Promise.all([
-      getPosts(session.hub.tunnelUrl, session.token),
+      // Explicit limit: 50 — see app/(tabs)/discover.tsx's identical comment;
+      // GET /api/posts's own default page size dropped to 20 for Feed.
+      getPosts(session.hub.tunnelUrl, session.token, { limit: 50 }),
       getUpcomingEvents(session.hub.tunnelUrl, session.token),
       listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
       listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
       listMembers(session.hub.tunnelUrl, session.token).catch(() => []),
     ])
-      .then(([nextPosts, nextEvents, nextPins, nextListings, nextMembers]) => {
-        setPosts([...nextPosts].sort(byEngagement));
+      .then(([postsPage, nextEvents, nextPins, nextListings, nextMembers]) => {
+        setPosts([...postsPage.posts].sort(byEngagement));
         setEvents(nextEvents);
         setAtlasPins(nextPins);
         setListings(nextListings);
@@ -359,7 +362,14 @@ export function DiscoverDrawer({ children }: { children: ReactNode }) {
               <View style={styles.section}>
                 <ThemedText style={styles.sectionLabel}>Trending posts</ThemedText>
                 {cap(filteredPosts).map((p) => (
-                  <DrawerPostRow key={p.id} post={p} onPress={() => goTo({ pathname: '/post/[id]', params: { id: p.id } })} />
+                  <DrawerPostRow
+                    key={p.id}
+                    post={p}
+                    onPress={() => {
+                      cachePost(p);
+                      goTo({ pathname: '/post/[id]', params: { id: p.id } });
+                    }}
+                  />
                 ))}
                 {!loading && !isSearching && filteredPosts.length === 0 && (
                   <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>
@@ -371,7 +381,14 @@ export function DiscoverDrawer({ children }: { children: ReactNode }) {
               <View style={styles.section}>
                 <ThemedText style={styles.sectionLabel}>Events</ThemedText>
                 {cap(filteredEvents).map((e) => (
-                  <DrawerEventRow key={e.id} event={e} onPress={() => goTo({ pathname: '/post/[id]', params: { id: e.id } })} />
+                  <DrawerEventRow
+                    key={e.id}
+                    event={e}
+                    onPress={() => {
+                      cachePost(e);
+                      goTo({ pathname: '/post/[id]', params: { id: e.id } });
+                    }}
+                  />
                 ))}
                 {!loading && !isSearching && filteredEvents.length === 0 && (
                   <ThemedText style={styles.rowMeta}>No upcoming events.</ThemedText>

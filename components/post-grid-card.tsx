@@ -9,6 +9,7 @@ import { ImpressionsIcon } from '@/components/ui/impressions-icon';
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { cachePost } from '@/lib/api/post-cache';
 import { HubPost } from '@/lib/api/types';
 import { useSession } from '@/lib/session/session-context';
 import { formatCompactCount } from '@/lib/ui/format-count';
@@ -66,7 +67,12 @@ export function PostGridCard({ post, tunnelUrl, token, onToggleLike, style }: Pr
   }
 
   return (
-    <Pressable style={[styles.card, style]} onPress={() => router.push({ pathname: '/post/[id]', params: { id: post.id } })}>
+    <Pressable
+      style={[styles.card, style]}
+      onPress={() => {
+        cachePost(post);
+        router.push({ pathname: '/post/[id]', params: { id: post.id } });
+      }}>
       {hasMedia ? (
         <>
           <HubMedia

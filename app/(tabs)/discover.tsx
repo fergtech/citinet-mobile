@@ -9,12 +9,15 @@ import { FileRow } from '@/components/files/file-row';
 import { HubAvatar } from '@/components/hub-avatar';
 import { ListingCard } from '@/components/marketplace/listing-card';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { DashboardSkeleton } from '@/components/ui/list-skeleton';
 import { PostGridCard } from '@/components/post-grid-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { readCache, writeCache } from '@/lib/api/dataCache';
 import { getPosts, getUpcomingEvents, initiativeBannerUrl, listAtlasPins, listFiles, listInitiatives, listMarketplaceListings, listMembers, search, toggleLike } from '@/lib/api/hubService';
+import { cachePost } from '@/lib/api/post-cache';
 import { getHubs } from '@/lib/api/registryService';
 import { AtlasPin, HubFile, HubMember, HubPost, Initiative, MarketplaceListing, RegistryHub, SearchResults } from '@/lib/api/types';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
@@ -57,6 +60,25 @@ function byEngagement(a: HubPost, b: HubPost) {
 // "All" is an overview, not a duplicate of the dedicated tabs — bounded
 // previews of each, same pattern as Home's Discussions/Events sections.
 const PREVIEW_COUNT = 4;
+
+const DISCOVER_CACHE_KEY = 'discover-dashboard';
+
+// Everything load() below fetches, cached as one blob — same pattern as
+// Feed/Home's own dataCache use, so reopening Discover shows the last known
+// content instantly instead of a blank spinner. Stored already in the shape
+// load() renders it in (posts pre-sorted by engagement, members/hubs
+// pre-filtered to exclude the caller/own hub) rather than the raw fetch
+// results, so re-seeding from cache needs no extra processing.
+type DiscoverCacheData = {
+  posts: HubPost[];
+  members: HubMember[];
+  events: HubPost[];
+  hubs: RegistryHub[];
+  atlasPins: AtlasPin[];
+  listings: MarketplaceListing[];
+  files: HubFile[];
+  initiatives: Initiative[];
+};
 
 function MemberRow({ member, tunnelUrl }: { member: { user_id: string; display_name?: string | null; username: string; bio?: string | null }; tunnelUrl: string }) {
   const { session } = useSession();
@@ -143,7 +165,10 @@ function EventRow({ event }: { event: HubPost }) {
   return (
     <Pressable
       style={styles.eventRow}
-      onPress={() => router.push({ pathname: '/post/[id]', params: { id: event.id } })}>
+      onPress={() => {
+        cachePost(event);
+        router.push({ pathname: '/post/[id]', params: { id: event.id } });
+      }}>
       <View style={styles.eventRowTop}>
         <ThemedText type="defaultSemiBold" style={styles.eventRowTitle} numberOfLines={2}>
           {event.title ?? 'Event'}
@@ -167,7 +192,12 @@ function EventRow({ event }: { event: HubPost }) {
 function TrendingPostRow({ post }: { post: HubPost }) {
   const hasDistinctTitle = !!post.title?.trim() && post.title.trim() !== post.body.trim();
   return (
-    <Pressable style={styles.postRow} onPress={() => router.push({ pathname: '/post/[id]', params: { id: post.id } })}>
+    <Pressable
+      style={styles.postRow}
+      onPress={() => {
+        cachePost(post);
+        router.push({ pathname: '/post/[id]', params: { id: post.id } });
+      }}>
       {hasDistinctTitle && (
         <ThemedText type="defaultSemiBold" numberOfLines={1}>
           {post.title}
@@ -276,6 +306,13 @@ export default function DiscoverScreen() {
   const [initiatives, setInitiatives] = useState<Initiative[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Same trio as Home/Feed's own load() guards: hasContentRef gates silent
+  // (no spinner, no error banner) refocus reloads and the quiet-retry below;
+  // loadInFlightRef/pendingLoadRef stop a refocus reload from overlapping a
+  // manual one against the same self-hosted hub.
+  const hasContentRef = useRef(false);
+  const loadInFlightRef = useRef(false);
+  const pendingLoadRef = useRef<{ silent?: boolean } | null>(null);
 
   useEffect(() => {
     return navigation.addListener('tabPress', (event) => {
@@ -290,36 +327,105 @@ export default function DiscoverScreen() {
     });
   }, [navigation]);
 
-  const load = useCallback(() => {
+  // Seed instantly from the last successful response, cached per hub — same
+  // pattern as Feed/Home's own cache-seed effect.
+  useEffect(() => {
     if (!session) return;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      getPosts(session.hub.tunnelUrl, session.token),
-      listMembers(session.hub.tunnelUrl, session.token),
-      getUpcomingEvents(session.hub.tunnelUrl, session.token),
-      getHubs(),
-      listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
-      listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
-      listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
-      listInitiatives(session.hub.tunnelUrl, session.token).catch(() => []),
-    ])
-      .then(([nextPosts, nextMembers, nextEvents, nextHubs, nextPins, nextListings, nextFiles, nextInitiatives]) => {
-        setPosts([...nextPosts].sort(byEngagement));
-        setMembers(nextMembers.filter((m) => m.user_id !== session.userId));
-        setEvents(nextEvents);
-        setHubs(nextHubs.filter((h) => h.slug !== session.hub.slug));
-        setAtlasPins(nextPins);
-        setListings(nextListings);
-        setFiles(nextFiles);
-        setInitiatives(nextInitiatives);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
-      .finally(() => setLoading(false));
-  }, [session]);
+    hasContentRef.current = false;
+    readCache<DiscoverCacheData>(session.hub.slug, DISCOVER_CACHE_KEY).then((cached) => {
+      if (!cached) return;
+      setPosts(cached.posts);
+      setMembers(cached.members);
+      setEvents(cached.events);
+      setHubs(cached.hubs);
+      setAtlasPins(cached.atlasPins);
+      setListings(cached.listings);
+      setFiles(cached.files);
+      setInitiatives(cached.initiatives);
+      hasContentRef.current = true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.hub.slug]);
+
+  const load = useCallback(
+    (opts?: { silent?: boolean; isRetry?: boolean }) => {
+      if (!session) return;
+      if (loadInFlightRef.current) {
+        pendingLoadRef.current = opts ?? {};
+        return;
+      }
+      loadInFlightRef.current = true;
+      if (!opts?.silent) setLoading(true);
+      setError(null);
+      let retrying = false;
+      Promise.all([
+        // Explicit limit: 50 (GET /api/posts's own default page size dropped
+        // to 20 for Feed's infinite scroll — see lib/api/hubService.ts) so
+        // this screen's "Trending posts" ranking still has the same pool of
+        // recent posts to sort by engagement from as it always did.
+        getPosts(session.hub.tunnelUrl, session.token, { limit: 50 }),
+        listMembers(session.hub.tunnelUrl, session.token),
+        getUpcomingEvents(session.hub.tunnelUrl, session.token),
+        getHubs(),
+        listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
+        listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
+        listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
+        listInitiatives(session.hub.tunnelUrl, session.token).catch(() => []),
+      ])
+        .then(([postsPage, nextMembers, nextEvents, nextHubs, nextPins, nextListings, nextFiles, nextInitiatives]) => {
+          const rankedPosts = [...postsPage.posts].sort(byEngagement);
+          const filteredMembers = nextMembers.filter((m) => m.user_id !== session.userId);
+          const filteredHubs = nextHubs.filter((h) => h.slug !== session.hub.slug);
+          setPosts(rankedPosts);
+          setMembers(filteredMembers);
+          setEvents(nextEvents);
+          setHubs(filteredHubs);
+          setAtlasPins(nextPins);
+          setListings(nextListings);
+          setFiles(nextFiles);
+          setInitiatives(nextInitiatives);
+          hasContentRef.current = true;
+          writeCache(session.hub.slug, DISCOVER_CACHE_KEY, {
+            posts: rankedPosts,
+            members: filteredMembers,
+            events: nextEvents,
+            hubs: filteredHubs,
+            atlasPins: nextPins,
+            listings: nextListings,
+            files: nextFiles,
+            initiatives: nextInitiatives,
+          } satisfies DiscoverCacheData);
+        })
+        .catch((err) => {
+          // Same policy as Home/Feed: a silent refocus reload (or a
+          // non-silent load with nothing on screen yet — a cold app+server
+          // restart hiccup) gets one quiet retry before it's treated as a
+          // real, banner-worthy failure.
+          if (!opts?.isRetry && (opts?.silent || !hasContentRef.current)) {
+            retrying = true;
+            setTimeout(() => load({ silent: opts?.silent, isRetry: true }), 1200);
+            return;
+          }
+          if (!opts?.silent) setError(err instanceof Error ? err.message : 'Failed to load.');
+        })
+        .finally(() => {
+          loadInFlightRef.current = false;
+          if (!retrying) setLoading(false);
+          const pending = pendingLoadRef.current;
+          pendingLoadRef.current = null;
+          if (pending) load(pending);
+        });
+    },
+    [session]
+  );
 
   // Focus-based, not mount-only — see Home/Messages for the same fix and why.
-  useFocusEffect(load);
+  // Silent once there's already content on screen, same as Feed/Home.
+  useFocusEffect(
+    useCallback(() => {
+      load({ silent: hasContentRef.current });
+    }, [load])
+  );
 
   function handleToggleLike(post: HubPost) {
     if (!session) return;
@@ -521,7 +627,12 @@ export default function DiscoverScreen() {
         </View>
       )}
 
-      {loading && <ActivityIndicator style={styles.spinner} />}
+      {/* Only blocks the screen when there's truly nothing to show yet —
+          cache-seeded content (see the readCache effect above) renders
+          immediately and revalidates in the background instead. Shaped
+          section placeholders, not a spinner — see
+          components/ui/list-skeleton.tsx. */}
+      {loading && !hasContentRef.current && <DashboardSkeleton />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
       <View style={styles.listWrap}>
@@ -1083,9 +1194,6 @@ const styles = StyleSheet.create({
   tabLabel: {
     fontSize: 13.5,
     fontWeight: '600',
-  },
-  spinner: {
-    marginTop: 12,
   },
   error: {
     color: '#b0392f',

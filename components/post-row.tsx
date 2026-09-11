@@ -13,6 +13,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ImpressionsIcon } from '@/components/ui/impressions-icon';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { cachePost } from '@/lib/api/post-cache';
 import { HubPost } from '@/lib/api/types';
 import { useSession } from '@/lib/session/session-context';
 import { formatCompactCount } from '@/lib/ui/format-count';
@@ -39,6 +40,13 @@ type Props = {
   // unaffected. app/(tabs)/feed.tsx uses it to count a tap-through as an
   // immediate "consumed" interaction (see lib/ui/post-dwell-tracking.ts).
   onOpen?: (post: HubPost) => void;
+  // Defaults to 6 (the original cap). Feed passes a shorter value — a
+  // multi-post scroll should read as a stream of previews, not full
+  // articles; the full body is what post/[id] is for. No "Read more"
+  // affordance is needed on top of the truncation itself — a cut-off line
+  // followed by tapping the row to open it is a familiar enough pattern on
+  // its own.
+  bodyNumberOfLines?: number;
 };
 
 // Wrapped in React.memo — meaningful only because every FlatList call site
@@ -47,7 +55,16 @@ type Props = {
 // also stabilizing what's passed into it, would just be a no-op (React.memo
 // only skips a re-render when every prop is reference-equal to last time,
 // and a plain inline function/arrow prop is a new reference every render).
-function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, onToggleRsvp, onOpen }: Props) {
+function PostRowComponent({
+  post,
+  tunnelUrl,
+  token,
+  onToggleLike,
+  onVotePoll,
+  onToggleRsvp,
+  onOpen,
+  bodyNumberOfLines = 6,
+}: Props) {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
   const [showShare, setShowShare] = useState(false);
@@ -64,6 +81,7 @@ function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, on
 
   function handleOpen() {
     onOpen?.(post);
+    cachePost(post);
     router.push({ pathname: '/post/[id]', params: { id: post.id } });
   }
 
@@ -83,7 +101,7 @@ function PostRowComponent({ post, tunnelUrl, token, onToggleLike, onVotePoll, on
         </ThemedText>
       )}
       {!!post.body.trim() && (
-        <ThemedText style={styles.body} numberOfLines={6}>
+        <ThemedText style={styles.body} numberOfLines={bodyNumberOfLines}>
           {post.body}
         </ThemedText>
       )}

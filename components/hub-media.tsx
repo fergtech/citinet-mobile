@@ -1,11 +1,13 @@
 import { useIsFocused } from '@react-navigation/native';
 import { Image, ImageContentPosition, ImageStyle } from 'expo-image';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { StyleProp, StyleSheet } from 'react-native';
+import { StyleProp, StyleSheet, View } from 'react-native';
 
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { MediaSkeleton } from '@/components/ui/media-skeleton';
 import { getMediaUrl, getPublicFileUrl } from '@/lib/api/hubService';
+import { acquirePlaybackSlot, releasePlaybackSlot } from '@/lib/media/video-playback-slots';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm'];
 
@@ -69,34 +71,57 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
   // unlike the token round-trip the fallback still needs.
   const url = isPublic ? getPublicFileUrl(tunnelUrl, fileName) : tokenUrl;
 
-  // Must call this hook unconditionally; pass null until the URL resolves.
+  // Gates whether this instance is actually allowed to load/decode a video
+  // right now — see lib/media/video-playback-slots.ts. Only a bounded number
+  // of HubMedia instances hold a slot at once app-wide; everything else
+  // renders the static fallback below instead of competing for the same
+  // limited decoder memory. State (not just a ref) because flipping it needs
+  // to change what's passed into useVideoPlayer below and force a re-render.
+  const [hasSlot, setHasSlot] = useState(false);
+  const heldSlotRef = useRef(false);
+
+  // Tied to the *screen's* focus (not just this component's mount state) —
+  // expo-router leaves other tabs/pushed-under screens mounted rather than
+  // unmounting them, so without this a preview that's already playing keeps
+  // decoding frames off-screen (wasted native decoder resources, worse on
+  // Android where those are limited) and holds its slot hostage from
+  // whatever's actually visible now. Losing focus releases the slot (and,
+  // via hasSlot below, drops the player's source entirely — a stronger stop
+  // than just pausing); regaining focus tries to reacquire one.
+  const isFocused = useIsFocused();
+  useEffect(() => {
+    if (!video) return;
+    if (isFocused) {
+      if (!heldSlotRef.current && acquirePlaybackSlot()) {
+        heldSlotRef.current = true;
+        setHasSlot(true);
+      }
+    } else if (heldSlotRef.current) {
+      releasePlaybackSlot();
+      heldSlotRef.current = false;
+      setHasSlot(false);
+    }
+    return () => {
+      if (heldSlotRef.current) {
+        releasePlaybackSlot();
+        heldSlotRef.current = false;
+      }
+    };
+  }, [video, isFocused]);
+
+  // Must call this hook unconditionally; pass null until the URL resolves
+  // OR this instance doesn't currently hold a playback slot — no slot means
+  // no source at all, not just "loaded but paused," so it isn't also
+  // holding decoder buffers for a video nothing is actually showing.
   // Autoplay muted: browsers block unmuted autoplay outright, and it's the
   // standard feed convention anyway — native controls (post-detail only, see
   // below) let the viewer unmute there.
-  const player = useVideoPlayer(video ? url : null, (p) => {
+  const player = useVideoPlayer(video && hasSlot ? url : null, (p) => {
     p.loop = true;
     p.muted = true;
     if (previewSeconds) p.timeUpdateEventInterval = 0.25;
     p.play();
   });
-
-  // Explicit play/pause tied to the *screen's* focus (not just this
-  // component's mount state) — expo-router leaves other tabs/pushed-under
-  // screens mounted rather than unmounting them, so without this a preview
-  // that's already playing keeps decoding frames off-screen (wasted native
-  // decoder resources, worse on Android where those are limited), and
-  // worse: navigating away and back left it stuck on a static poster frame
-  // instead of resuming, because nothing ever called play() again — the
-  // original p.play() above only fires once, at creation. Re-deriving
-  // "should this be playing" from isFocused on every focus change fixes
-  // both: paused while off-screen, and explicitly restarted on return
-  // instead of assuming the player quietly kept itself going.
-  const isFocused = useIsFocused();
-  useEffect(() => {
-    if (!video) return;
-    if (isFocused) player.play();
-    else player.pause();
-  }, [video, isFocused, player]);
 
   // Loops just the first `previewSeconds` rather than the whole video —
   // `p.loop` above only covers reaching the actual end, so a long video
@@ -118,6 +143,19 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
   }
 
   if (video) {
+    // Didn't win a playback slot (see lib/media/video-playback-slots.ts) —
+    // rather than compete for the same limited decoder memory that just
+    // crashed the app with an OOM, show a plain static marker instead of
+    // loading the video at all. Scrolling this row off-screen and back (or
+    // navigating away and back) gives it another chance once something else
+    // releases a slot.
+    if (!hasSlot) {
+      return (
+        <View style={[styles.media, style, styles.videoFallback]}>
+          <IconSymbol name="play.fill" size={26} color="#fff" />
+        </View>
+      );
+    }
     // Compact autoplaying previews (previewSeconds set) skip native controls —
     // there's nothing to scrub/pause in a small muted loop, and on some
     // platforms the controls overlay can itself throw off how the video
@@ -159,5 +197,10 @@ const styles = StyleSheet.create({
     aspectRatio: 4 / 5,
     borderRadius: 10,
     backgroundColor: '#8882',
+  },
+  videoFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
   },
 });

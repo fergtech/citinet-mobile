@@ -152,15 +152,36 @@ export async function getHubStatus(tunnelUrl: string): Promise<HubStatus> {
   return res.json();
 }
 
-export async function getPosts(tunnelUrl: string, token: string): Promise<HubPost[]> {
-  const res = await fetch(`${tunnelUrl}/api/posts`, {
+export type PostsPage = { posts: HubPost[]; hasMore: boolean };
+
+// GET /api/posts is keyset-paginated server-side on (my_viewed, created_at,
+// id) — unseen-first, newest-first within each group. Pass `before` (the
+// last post already in hand, including its own my_viewed) to fetch whatever
+// comes after it in that same order; omit it for the first page. `hasMore`
+// is a cheap "did a full page come back" heuristic the server computes, not
+// an extra COUNT query — good enough to know whether it's worth asking for
+// more.
+export async function getPosts(
+  tunnelUrl: string,
+  token: string,
+  opts?: { limit?: number; before?: { viewed: boolean; createdAt: string; id: string } }
+): Promise<PostsPage> {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  if (opts?.before) {
+    params.set('before_viewed', String(opts.before.viewed));
+    params.set('before_created_at', opts.before.createdAt);
+    params.set('before_id', opts.before.id);
+  }
+  const qs = params.toString();
+  const res = await fetch(`${tunnelUrl}/api/posts${qs ? `?${qs}` : ''}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't load posts for this hub."));
   }
   const data = await res.json();
-  return Array.isArray(data.posts) ? data.posts : [];
+  return { posts: Array.isArray(data.posts) ? data.posts : [], hasMore: !!data.hasMore };
 }
 
 export async function getUpcomingEvents(tunnelUrl: string, token: string): Promise<HubPost[]> {

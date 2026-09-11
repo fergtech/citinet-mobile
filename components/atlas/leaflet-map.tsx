@@ -135,6 +135,15 @@ export function LeafletMap({
   const webviewRef = useRef<WebView>(null);
   const readyRef = useRef(false);
   const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards inject() against firing after this component has started
+  // unmounting (e.g. navigating away right as handleLayout's 120ms-debounced
+  // invalidateSize() timer is about to pop) — webviewRef.current can still be
+  // non-null for a moment while the native WKWebView is mid-teardown, and
+  // injecting into it then is what was producing the "JavaScript execution
+  // returned a result of an unsupported type" WKErrorDomain warning, not
+  // anything about the injected script itself (inject() already appends
+  // `; true;` to every call, which is a supported return type on its own).
+  const mountedRef = useRef(true);
 
   const markerData: MarkerData[] = useMemo(
     () =>
@@ -149,6 +158,7 @@ export function LeafletMap({
   );
 
   function inject(js: string) {
+    if (!mountedRef.current) return;
     webviewRef.current?.injectJavaScript(`${js}; true;`);
   }
 
@@ -164,9 +174,14 @@ export function LeafletMap({
     invalidateTimerRef.current = setTimeout(() => inject('map.invalidateSize()'), 120);
   }
 
-  useEffect(() => () => {
-    if (invalidateTimerRef.current) clearTimeout(invalidateTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      readyRef.current = false;
+      if (invalidateTimerRef.current) clearTimeout(invalidateTimerRef.current);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!readyRef.current) return;

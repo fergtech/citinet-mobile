@@ -28,6 +28,7 @@ import { ImpressionsIcon } from '@/components/ui/impressions-icon';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getPost, listAttendees, listReplies, toggleLike, toggleRsvp } from '@/lib/api/hubService';
+import { cachePost, getCachedPost } from '@/lib/api/post-cache';
 import { EventAttendee, HubPost, HubPostReply, ReportTargetType } from '@/lib/api/types';
 import { createReplyOrQueue, flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
 import { useSession } from '@/lib/session/session-context';
@@ -161,7 +162,11 @@ export default function PostDetailScreen() {
   const insets = useSafeAreaInsets();
   const inputRef = useRef<TextInput>(null);
 
-  const [post, setPost] = useState<HubPost | null>(null);
+  // Seeded synchronously from post-cache.ts when whatever screen sent us
+  // here already had this post's data (see cachePost call sites) — renders
+  // real content on the very first frame instead of a blank screen while
+  // load() below re-fetches it fresh, same as it always did.
+  const [post, setPost] = useState<HubPost | null>(() => getCachedPost(id) ?? null);
   const [replies, setReplies] = useState<HubPostReply[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -206,6 +211,7 @@ export default function PostDetailScreen() {
       .then(([nextPost, nextReplies]) => {
         setPost(nextPost);
         setReplies(nextReplies);
+        cachePost(nextPost);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
       .finally(() => setLoading(false));
@@ -330,7 +336,10 @@ export default function PostDetailScreen() {
           )}
         </View>
 
-        {loading && <ActivityIndicator style={styles.spinner} />}
+        {/* Only blocks the screen when there's truly nothing to show yet —
+            a cache-seeded post (see the useState initializer above) renders
+            immediately and revalidates quietly in the background instead. */}
+        {loading && !post && <ActivityIndicator style={styles.spinner} />}
         {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
         {post && (

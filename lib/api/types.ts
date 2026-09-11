@@ -109,6 +109,11 @@ export type HubPost = {
   // components/post-share-sheet.tsx.
   space_id?: string | null;
   shared_to_feed?: boolean;
+  // Only selected by GET /api/posts — the authoritative "has this user seen
+  // this post" signal (backed by hub_post_views, the same table view_count
+  // already counts), used server-side to sort unseen-first and as the
+  // pagination cursor's third key. See app/(tabs)/feed.tsx.
+  my_viewed?: boolean;
 };
 
 export type FeaturedItem = {

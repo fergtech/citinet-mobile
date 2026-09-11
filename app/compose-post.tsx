@@ -12,6 +12,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { cachePost } from '@/lib/api/post-cache';
 import { prepareImageForUpload } from '@/lib/media/prepare-image-upload';
 import { useSession } from '@/lib/session/session-context';
 import { createPostOrQueue } from '@/lib/api/write-queue';
@@ -247,6 +248,7 @@ export default function ComposePostScreen() {
         // then land on the post just created — same convention as Atlas/
         // Marketplace/Events.
         router.dismiss(2);
+        cachePost(result.post);
         router.push({ pathname: '/post/[id]', params: { id: result.post.id } });
         return;
       }

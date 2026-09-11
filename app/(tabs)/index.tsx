@@ -4,7 +4,6 @@ import { Image } from 'expo-image';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   RefreshControl,
@@ -29,8 +28,10 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { CustomIcon } from '@/components/ui/custom-icon';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { DashboardSkeleton } from '@/components/ui/list-skeleton';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { readCache, writeCache } from '@/lib/api/dataCache';
 import {
   getFeatured,
   getInitiative,
@@ -72,6 +73,25 @@ import { timeAgo } from '@/lib/ui/time-ago';
 
 // InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
 // the card that renders it — this just builds the array.
+
+const HOME_CACHE_KEY = 'home-dashboard';
+
+// Everything load() below fetches, cached as one blob (same one-blob-per-
+// screen shape as Feed's own dataCache use) so reopening Home shows the last
+// known dashboard instantly instead of a blank spinner. `members` is the raw
+// array from listMembers, not the Map load() builds from it — Map doesn't
+// survive JSON.stringify (comes back as "{}"), so the cache-seed effect
+// rebuilds the Map from this array the same way load() itself does.
+type HomeCacheData = {
+  posts: HubPost[];
+  events: HubPost[];
+  featured: FeaturedItem[];
+  atlasPins: AtlasPin[];
+  files: HubFile[];
+  listings: MarketplaceListing[];
+  initiativeUpdates: InitiativeUpdateRow[];
+  members: HubMember[];
+};
 
 // There's no hub-wide "recent activity across all initiatives" endpoint —
 // GET /api/initiatives/:id/activity is per-initiative (see hubService's
@@ -457,55 +477,147 @@ export default function HomeScreen() {
   const [showHubInfo, setShowHubInfo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Flips true once Home has shown *something* (cache-seeded or fetched) —
+  // same role as Feed's own hasContentRef: gates a refocus reload to run
+  // silently (no blocking spinner, no error banner on failure), and gates
+  // the quiet-retry-before-erroring behavior below to only the case where
+  // there's truly nothing on screen yet.
+  const hasContentRef = useRef(false);
+  // Same in-flight/pending-replay guard as app/(tabs)/feed.tsx's own load()
+  // — Home's useFocusEffect(load) below has always re-fetched on every
+  // refocus with nothing stopping two calls from overlapping (e.g. bouncing
+  // between tabs), which against a single self-hosted hub can itself produce
+  // real connection failures, not just wasted duplicate work.
+  const loadInFlightRef = useRef(false);
+  const pendingLoadRef = useRef<{ silent?: boolean } | null>(null);
 
-  const load = useCallback(() => {
+  // Seed instantly from the last successful response, cached per hub — same
+  // pattern as Feed's own cache-seed effect (lib/api/dataCache.ts), so
+  // reopening Home (cold start, or right after a hub restart) shows the
+  // last-seen dashboard instead of a blank screen while the real fetch is
+  // still in flight.
+  useEffect(() => {
     if (!session) return;
-    setLoading(true);
-    setError(null);
-    // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
-    // not sequenced ahead of the fetch below the way Feed/Post Detail do it,
-    // to avoid restructuring this already-large Promise.all; a write this
-    // flush just sent will show up on Home's next focus/refresh instead of
-    // this exact one. A no-op, no network call, when the queue's empty.
-    flushWriteQueue().catch(() => {});
-    Promise.all([
-      getPosts(session.hub.tunnelUrl, session.token),
-      getUpcomingEvents(session.hub.tunnelUrl, session.token),
-      getFeatured(session.hub.tunnelUrl, session.token),
-      listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
-      listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
-      // GET /api/marketplace/listings already returns newest-first (see
-      // Discover's own recentListings comment), so the first entry is the
-      // latest item added — no extra sort needed here.
-      listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
-      // Only needed to resolve the "Latest upload" row's uploader username —
-      // catches the same way listAtlasPins/listFiles do, so a hub without
-      // (or briefly unable to serve) a member list still loads everything
-      // else instead of failing Home entirely.
-      listMembers(session.hub.tunnelUrl, session.token).catch(() => []),
-      fetchInitiativeUpdates(session.hub.tunnelUrl, session.token),
-    ])
-      .then(([nextPosts, nextEvents, nextFeatured, nextPins, nextFiles, nextListings, nextMembers, nextInitiativeUpdates]) => {
-        setPosts(nextPosts);
-        setEvents(nextEvents);
-        setFeatured(nextFeatured);
-        setAtlasPins(nextPins);
-        setFiles(nextFiles);
-        setListings(nextListings);
-        setMembers(new Map(nextMembers.map((m) => [m.user_id, m])));
-        setInitiativeUpdates(nextInitiativeUpdates);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
-      .finally(() => setLoading(false));
-  }, [session]);
+    hasContentRef.current = false;
+    readCache<HomeCacheData>(session.hub.slug, HOME_CACHE_KEY).then((cached) => {
+      if (!cached) return;
+      setPosts(cached.posts);
+      setEvents(cached.events);
+      setFeatured(cached.featured);
+      setAtlasPins(cached.atlasPins);
+      setFiles(cached.files);
+      setListings(cached.listings);
+      setInitiativeUpdates(cached.initiativeUpdates);
+      setMembers(new Map(cached.members.map((m) => [m.user_id, m])));
+      hasContentRef.current = true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.hub.slug]);
+
+  const load = useCallback(
+    (opts?: { silent?: boolean; isRetry?: boolean }) => {
+      if (!session) return;
+      if (loadInFlightRef.current) {
+        pendingLoadRef.current = opts ?? {};
+        return;
+      }
+      loadInFlightRef.current = true;
+      if (!opts?.silent) setLoading(true);
+      setError(null);
+      // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
+      // not sequenced ahead of the fetch below the way Feed/Post Detail do it,
+      // to avoid restructuring this already-large Promise.all; a write this
+      // flush just sent will show up on Home's next focus/refresh instead of
+      // this exact one. A no-op, no network call, when the queue's empty.
+      flushWriteQueue().catch(() => {});
+      // Retrying below only re-quiets a failure of *this* Promise.all as a
+      // whole — a real per-section fallback (one section's failure not
+      // blocking the rest) is a bigger change than this fix covers.
+      let retrying = false;
+      Promise.all([
+        getPosts(session.hub.tunnelUrl, session.token),
+        getUpcomingEvents(session.hub.tunnelUrl, session.token),
+        getFeatured(session.hub.tunnelUrl, session.token),
+        listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
+        listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
+        // GET /api/marketplace/listings already returns newest-first (see
+        // Discover's own recentListings comment), so the first entry is the
+        // latest item added — no extra sort needed here.
+        listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
+        // Only needed to resolve the "Latest upload" row's uploader username —
+        // catches the same way listAtlasPins/listFiles do, so a hub without
+        // (or briefly unable to serve) a member list still loads everything
+        // else instead of failing Home entirely.
+        listMembers(session.hub.tunnelUrl, session.token).catch(() => []),
+        fetchInitiativeUpdates(session.hub.tunnelUrl, session.token),
+      ])
+        .then(([postsPage, nextEvents, nextFeatured, nextPins, nextFiles, nextListings, nextMembers, nextInitiativeUpdates]) => {
+          setPosts(postsPage.posts);
+          setEvents(nextEvents);
+          setFeatured(nextFeatured);
+          setAtlasPins(nextPins);
+          setFiles(nextFiles);
+          setListings(nextListings);
+          setMembers(new Map(nextMembers.map((m) => [m.user_id, m])));
+          setInitiativeUpdates(nextInitiativeUpdates);
+          hasContentRef.current = true;
+          writeCache(session.hub.slug, HOME_CACHE_KEY, {
+            posts: postsPage.posts,
+            events: nextEvents,
+            featured: nextFeatured,
+            atlasPins: nextPins,
+            files: nextFiles,
+            listings: nextListings,
+            initiativeUpdates: nextInitiativeUpdates,
+            members: nextMembers,
+          } satisfies HomeCacheData);
+        })
+        .catch((err) => {
+          // A cold app+server restart (fresh hub process, tunnel still
+          // re-establishing) can fail this very first Promise.all with a
+          // real connection error even though the exact same request
+          // succeeds a second later — observed directly: a manual
+          // pull-to-refresh moments after this error immediately works.
+          // A SILENT failure (refocus reload with content already on
+          // screen, cache-seeded or fetched) never surfaces the banner at
+          // all, same policy as Feed — it just gets one quiet retry. A
+          // non-silent load with nothing on screen yet gets the same quiet
+          // retry before it's treated as a real, banner-worthy failure; a
+          // non-silent load that DOES already have content (a manual
+          // pull-to-refresh) shows the error immediately since the user
+          // explicitly asked for this one and deserves real feedback.
+          if (!opts?.isRetry && (opts?.silent || !hasContentRef.current)) {
+            retrying = true;
+            setTimeout(() => load({ silent: opts?.silent, isRetry: true }), 1200);
+            return;
+          }
+          if (!opts?.silent) setError(err instanceof Error ? err.message : 'Failed to load.');
+        })
+        .finally(() => {
+          loadInFlightRef.current = false;
+          if (!retrying) setLoading(false);
+          const pending = pendingLoadRef.current;
+          pendingLoadRef.current = null;
+          if (pending) load(pending);
+        });
+    },
+    [session]
+  );
 
   // Focus-based, not mount-only: a like/reply/save made on Post Detail, Feed,
   // Events, or Atlas doesn't touch Home's own state (each screen fetches its
   // own copy), so without this, coming back to Home kept showing whatever was
   // true when it first mounted until a manual pull-to-refresh. Every tab
   // screen in this app follows the same rule now — see Messages/Discover for
-  // the same fix, and the project memory entry on this whole pass.
-  useFocusEffect(load);
+  // the same fix, and the project memory entry on this whole pass. Silent
+  // once there's already content on screen, same as Feed — the pull-to-
+  // refresh RefreshControl below always calls load() with no args, so it
+  // still shows its own spinner regardless.
+  useFocusEffect(
+    useCallback(() => {
+      load({ silent: hasContentRef.current });
+    }, [load])
+  );
 
   // Re-tapping the Home tab while already on it scrolls back to the top.
   const scrollRef = useRef<ScrollView>(null);
@@ -890,7 +1002,12 @@ export default function HomeScreen() {
         onSwitchHub={switchToHub}
       />
 
-      {loading && <ActivityIndicator style={styles.spinner} />}
+      {/* Only blocks the screen when there's truly nothing to show yet —
+          cache-seeded content (see the readCache effect above) renders
+          immediately and revalidates in the background instead, same as
+          Feed/Post Detail's own pattern. Shaped section placeholders, not a
+          spinner — see components/ui/list-skeleton.tsx. */}
+      {loading && !hasContentRef.current && <DashboardSkeleton />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
       <ScrollView
@@ -954,9 +1071,6 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     fontWeight: '600',
     textTransform: 'uppercase',
-  },
-  spinner: {
-    marginTop: 24,
   },
   error: {
     color: '#b0392f',

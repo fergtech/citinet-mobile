@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -10,7 +10,9 @@ import { PostRow } from '@/components/post-row';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { PostListSkeleton } from '@/components/ui/list-skeleton';
 import { Brand } from '@/constants/theme';
+import { readCache, writeCache } from '@/lib/api/dataCache';
 import { getUpcomingEvents, listEventPosts, toggleLike, toggleRsvp } from '@/lib/api/hubService';
 import { HubPost } from '@/lib/api/types';
 import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
@@ -27,6 +29,9 @@ const TABS: Tab[] = ['upcoming', 'past'];
 const COMMIT_RATIO = 0.25;
 const FLING_VELOCITY = 600;
 
+const EVENTS_CACHE_KEY = 'events-dashboard';
+type EventsCacheData = { upcoming: HubPost[]; allEvents: HubPost[] };
+
 export default function EventsScreen() {
   const { session } = useSession();
   const [tab, setTab] = useState<Tab>('upcoming');
@@ -42,41 +47,92 @@ export default function EventsScreen() {
   // a manual tap back to an empty "Upcoming" later (or a background refetch
   // on refocus) should never yank the user somewhere they didn't ask for.
   const hasAutoSelected = useRef(false);
+  // Same trio as Home/Discover/Feed's own load() guards — see their comments.
+  const hasContentRef = useRef(false);
+  const loadInFlightRef = useRef(false);
+  const pendingLoadRef = useRef<{ silent?: boolean } | null>(null);
 
-  const load = useCallback(() => {
+  // Seed instantly from the last successful response, cached per hub — same
+  // pattern as Feed/Home/Discover's own cache-seed effect.
+  useEffect(() => {
     if (!session) return;
-    setLoading(true);
-    setError(null);
-    // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
-    // fire-and-forget, not sequenced ahead of the fetch below. A no-op, no
-    // network call, when the queue's empty.
-    flushWriteQueue().catch(() => {});
-    Promise.all([
-      getUpcomingEvents(session.hub.tunnelUrl, session.token),
-      listEventPosts(session.hub.tunnelUrl, session.token),
-    ])
-      .then(([nextUpcoming, nextAll]) => {
-        setUpcoming(nextUpcoming);
-        setAllEvents(nextAll);
-        if (!hasAutoSelected.current) {
-          hasAutoSelected.current = true;
-          // Nothing upcoming but there's real history to browse — land there
-          // instead of a bare "No upcoming events." on first open. If both
-          // are empty, stay put; the empty state itself carries a "Create an
-          // event" CTA in that case (see ListEmptyComponent below). Just
-          // `setTab` here — the effect below (shared with the tap-to-select
-          // path) is what actually animates the pane into view.
-          const hasUpcoming = nextUpcoming.length > 0;
-          const hasPast = nextAll.length > nextUpcoming.length;
-          if (!hasUpcoming && hasPast) setTab('past');
-        }
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load.'))
-      .finally(() => setLoading(false));
-  }, [session]);
+    hasContentRef.current = false;
+    readCache<EventsCacheData>(session.hub.slug, EVENTS_CACHE_KEY).then((cached) => {
+      if (!cached) return;
+      setUpcoming(cached.upcoming);
+      setAllEvents(cached.allEvents);
+      hasContentRef.current = true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.hub.slug]);
 
-  // Focus-based, not mount-only — see Home/Messages for why.
-  useFocusEffect(load);
+  const load = useCallback(
+    (opts?: { silent?: boolean; isRetry?: boolean }) => {
+      if (!session) return;
+      if (loadInFlightRef.current) {
+        pendingLoadRef.current = opts ?? {};
+        return;
+      }
+      loadInFlightRef.current = true;
+      if (!opts?.silent) setLoading(true);
+      setError(null);
+      // Opportunistic retry of anything queued (see lib/api/write-queue.ts) —
+      // fire-and-forget, not sequenced ahead of the fetch below. A no-op, no
+      // network call, when the queue's empty.
+      flushWriteQueue().catch(() => {});
+      let retrying = false;
+      Promise.all([
+        getUpcomingEvents(session.hub.tunnelUrl, session.token),
+        listEventPosts(session.hub.tunnelUrl, session.token),
+      ])
+        .then(([nextUpcoming, nextAll]) => {
+          setUpcoming(nextUpcoming);
+          setAllEvents(nextAll);
+          hasContentRef.current = true;
+          writeCache(session.hub.slug, EVENTS_CACHE_KEY, { upcoming: nextUpcoming, allEvents: nextAll } satisfies EventsCacheData);
+          if (!hasAutoSelected.current) {
+            hasAutoSelected.current = true;
+            // Nothing upcoming but there's real history to browse — land there
+            // instead of a bare "No upcoming events." on first open. If both
+            // are empty, stay put; the empty state itself carries a "Create an
+            // event" CTA in that case (see ListEmptyComponent below). Just
+            // `setTab` here — the effect below (shared with the tap-to-select
+            // path) is what actually animates the pane into view.
+            const hasUpcoming = nextUpcoming.length > 0;
+            const hasPast = nextAll.length > nextUpcoming.length;
+            if (!hasUpcoming && hasPast) setTab('past');
+          }
+        })
+        .catch((err) => {
+          // Same policy as Home/Discover/Feed: a silent refocus reload (or a
+          // non-silent load with nothing on screen yet — a cold app+server
+          // restart hiccup) gets one quiet retry before it's treated as a
+          // real, banner-worthy failure.
+          if (!opts?.isRetry && (opts?.silent || !hasContentRef.current)) {
+            retrying = true;
+            setTimeout(() => load({ silent: opts?.silent, isRetry: true }), 1200);
+            return;
+          }
+          if (!opts?.silent) setError(err instanceof Error ? err.message : 'Failed to load.');
+        })
+        .finally(() => {
+          loadInFlightRef.current = false;
+          if (!retrying) setLoading(false);
+          const pending = pendingLoadRef.current;
+          pendingLoadRef.current = null;
+          if (pending) load(pending);
+        });
+    },
+    [session]
+  );
+
+  // Focus-based, not mount-only — see Home/Messages for why. Silent once
+  // there's already content on screen, same as Feed/Home/Discover.
+  useFocusEffect(
+    useCallback(() => {
+      load({ silent: hasContentRef.current });
+    }, [load])
+  );
 
   // Both panes are real FlatLists, so both get full dwell tracking (not
   // just engagement) — see lib/ui/post-dwell-tracking.ts. One hook call
@@ -304,7 +360,9 @@ export default function EventsScreen() {
         ))}
       </View>
 
-      {loading && upcoming.length === 0 && allEvents.length === 0 && <ActivityIndicator style={styles.spinner} />}
+      {/* Shaped placeholder, not a spinner, for the very first load — see
+          components/ui/list-skeleton.tsx's own note on why. */}
+      {loading && upcoming.length === 0 && allEvents.length === 0 && <PostListSkeleton style={styles.skeleton} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
       <View style={styles.paneClip} onLayout={(e) => setPaneWidth(e.nativeEvent.layout.width)}>
@@ -342,9 +400,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     opacity: 0.7,
   },
-  spinner: {
-    marginTop: 24,
-  },
   error: {
     color: '#b0392f',
     paddingHorizontal: 20,
@@ -357,6 +412,10 @@ const styles = StyleSheet.create({
   paneRow: {
     flex: 1,
     flexDirection: 'row',
+  },
+  skeleton: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
   },
   list: {
     paddingHorizontal: 20,

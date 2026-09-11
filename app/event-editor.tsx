@@ -10,6 +10,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { cachePost } from '@/lib/api/post-cache';
 import { useSession } from '@/lib/session/session-context';
 import { createPostOrQueue } from '@/lib/api/write-queue';
 
@@ -120,6 +121,7 @@ export default function EventEditorScreen() {
         // Pop both this editor and app/modal.tsx's launcher in one go, then
         // land on the event just created — same convention as Atlas/Marketplace.
         router.dismiss(2);
+        cachePost(result.post);
         router.push({ pathname: '/post/[id]', params: { id: result.post.id } });
         return;
       }
