@@ -6,7 +6,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTim
 // URL (the token round-trip in hub-media.tsx's Files-section fallback path —
 // the isPublic path resolves synchronously now and never shows this at all).
 // Reanimated, not Animated.Value, matching how the rest of this app already
-// does UI-thread animation (app-drawer.tsx, discover-drawer.tsx, etc.).
+// does UI-thread animation (app-drawer.tsx, etc.).
 export function MediaSkeleton({ style }: { style?: StyleProp<ViewStyle> }) {
   const opacity = useSharedValue(0.5);
 

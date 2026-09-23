@@ -1,4 +1,7 @@
-import { AnswerResponse, AtlasPin, AtlasPinCategory, BlockedMember, CallEvent, CallMode, ChecklistItem, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, InitiativeUpdateComment, InitiativeUpdateEntry, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, Space, SpaceFile, SpaceMember, SpaceVisibility, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
+import { createUploadTask, FileSystemUploadType } from 'expo-file-system/legacy';
+
+import { AnswerResponse, AtlasPin, AtlasPinCategory, AtlasPinReply, BlockedMember, CallEvent, CallMode, ChecklistItem, Club, ClubFile, ClubMember, ClubVisibility, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, InitiativeUpdateComment, InitiativeUpdateEntry, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -473,16 +476,22 @@ export async function getMessages(
   return Array.isArray(data.messages) ? data.messages : [];
 }
 
+// `attachmentIds` reference files already uploaded via uploadFile/
+// uploadFilesWithProgress (POST /api/files) — this route only links them to
+// the new message (INSERT INTO hub_message_attachments), it doesn't accept
+// the file bytes itself. Matches citinet-web's own two-step
+// sendMessageWithMedia strategy (see api/server.js's real handler).
 export async function sendMessage(
   tunnelUrl: string,
   token: string,
   conversationId: string,
-  body: string
+  body: string,
+  attachmentIds?: string[]
 ): Promise<HubMessage> {
   const res = await fetch(`${tunnelUrl}/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify(attachmentIds?.length ? { body, attachment_ids: attachmentIds } : { body }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't send that message."));
@@ -528,7 +537,9 @@ export async function search(tunnelUrl: string, token: string, query: string, li
   return {
     posts: Array.isArray(data.results?.posts) ? data.results.posts : [],
     members: Array.isArray(data.results?.members) ? data.results.members : [],
-    spaces: Array.isArray(data.results?.spaces) ? data.results.spaces : [],
+    // Still reading the server's own "spaces" key — see SearchResults.clubs's
+    // own comment in types.ts.
+    clubs: Array.isArray(data.results?.spaces) ? data.results.spaces : [],
   };
 }
 
@@ -973,6 +984,14 @@ export async function createAtlasPin(
     description?: string;
     category: AtlasPinCategory;
     image_file_name?: string | null;
+    // Files already uploaded via uploadFile/uploadFilesWithProgress — the
+    // server links them to this pin (up to 10) and echoes them back as
+    // AtlasPin['attachments'].
+    attachment_ids?: string[];
+    // Only meaningful when this pin is being created alongside a linked
+    // "Create an event" hub_posts EVENT row — not settable after the fact
+    // (PATCH doesn't accept it either, matching the server).
+    event_post_id?: string | null;
   }
 ): Promise<AtlasPin> {
   const res = await fetch(`${tunnelUrl}/api/atlas/pins`, {
@@ -992,7 +1011,15 @@ export async function updateAtlasPin(
   tunnelUrl: string,
   token: string,
   pinId: string,
-  data: { title: string; description?: string; category: AtlasPinCategory; image_file_name?: string | null }
+  data: {
+    title: string;
+    description?: string;
+    category: AtlasPinCategory;
+    image_file_name?: string | null;
+    // Replaces the pin's full attachment set — omit to leave attachments
+    // untouched (the server only rewrites them when this key is an array).
+    attachment_ids?: string[];
+  }
 ): Promise<AtlasPin> {
   const res = await fetch(`${tunnelUrl}/api/atlas/pins/${encodeURIComponent(pinId)}`, {
     method: 'PATCH',
@@ -1013,6 +1040,42 @@ export async function deleteAtlasPin(tunnelUrl: string, token: string, pinId: st
   if (!res.ok && res.status !== 204) {
     throw new Error(await readErrorMessage(res, "Couldn't remove that pin."));
   }
+}
+
+// Comments (with threading) on a pin — same shape/behavior as a post's
+// listReplies/createReply above, just scoped to hub_atlas_pin_replies.
+export async function listAtlasPinReplies(tunnelUrl: string, token: string, pinId: string): Promise<AtlasPinReply[]> {
+  const res = await fetch(`${tunnelUrl}/api/atlas/pins/${encodeURIComponent(pinId)}/replies`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't load comments."));
+  }
+  const data = await res.json();
+  return Array.isArray(data.replies) ? data.replies : [];
+}
+
+export async function createAtlasPinReply(
+  tunnelUrl: string,
+  token: string,
+  pinId: string,
+  body: string,
+  replyToReplyId: string | null = null,
+  replyToUserId: string | null = null
+): Promise<AtlasPinReply> {
+  const res = await fetch(`${tunnelUrl}/api/atlas/pins/${encodeURIComponent(pinId)}/replies`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      body,
+      reply_to_reply_id: replyToReplyId,
+      reply_to_user_id: replyToUserId,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't post your comment."));
+  }
+  return res.json();
 }
 
 export type UploadedFile = { file_id: string; file_name: string; size_bytes: number; mime_type: string };
@@ -1070,6 +1133,13 @@ export function uploadFileWithProgress(
     const folderQuery = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : '';
     xhr.open('POST', `${tunnelUrl}/api/files?is_public=${isPublic}${folderQuery}`);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    // Without this, a connection that opens and then silently stalls (a tunnel
+    // provider dropping a long-lived upload mid-stream without a proper FIN is
+    // the common real-world case) never fires onload OR onerror — the promise
+    // just hangs forever and every caller's "uploading…" state gets stuck with
+    // it. 2 minutes is generous for a phone photo/video over a hub tunnel.
+    xhr.timeout = 120_000;
+    xhr.ontimeout = () => reject(new Error('Upload timed out. Check your connection and try again.'));
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
     };
@@ -1099,6 +1169,152 @@ export function uploadFileWithProgress(
     form.append('file', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
     xhr.send(form);
   });
+}
+
+// Uploads one file via expo-file-system's native upload task instead of RN's
+// bare XMLHttpRequest. XHR's upload.onprogress is well known to be unreliable
+// for multipart/form-data file uploads specifically — confirmed on a real
+// device: the progress bar sat frozen at 0% for the entire upload even
+// though the transfer itself completed successfully. NSURLSession (iOS) /
+// OkHttp (Android) stream a multipart body from disk without the JS bridge
+// getting granular byte callbacks through XHR; createUploadTask uses a real
+// native upload task built specifically to report progress reliably instead.
+//
+// createUploadTask has no way to override the multipart filename — it
+// derives Content-Disposition's filename from the source uri's own last path
+// segment, which for a picker/temp uri is rarely the real display name. Copy
+// into a scratch file actually named `file.name` first so the server records
+// the real filename, matching what the old `{uri, name, type}` FormData part
+// used to guarantee explicitly.
+async function uploadOneFileWithProgress(
+  url: string,
+  token: string,
+  file: { uri: string; name: string; type: string },
+  onProgress: (loaded: number, total: number) => void
+): Promise<UploadedFile> {
+  const scratchDir = new Directory(Paths.cache, `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  scratchDir.create({ intermediates: true });
+  const named = new ExpoFile(scratchDir, file.name);
+  try {
+    // Timed separately from the upload itself: for a large video, this local
+    // copy can silently trigger an iCloud download first if "Optimize iPhone
+    // Storage" means only a lower-res proxy is cached on-device — that would
+    // show up here as a long duration with zero network bytes sent yet, and
+    // be otherwise invisible (the progress bar only starts once the actual
+    // upload task below begins).
+    const tCopy0 = Date.now();
+    new ExpoFile(file.uri).copy(named);
+    console.log(`[upload] local copy/prepare: ${Date.now() - tCopy0}ms (${file.name})`);
+
+    const task = createUploadTask(
+      url,
+      named.uri,
+      {
+        httpMethod: 'POST',
+        uploadType: FileSystemUploadType.MULTIPART,
+        fieldName: 'file',
+        mimeType: file.type,
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      (data) => onProgress(data.totalBytesSent, data.totalBytesExpectedToSend)
+    );
+    const tUpload0 = Date.now();
+    const result = await task.uploadAsync();
+    console.log(`[upload] network transfer: ${Date.now() - tUpload0}ms (${file.name})`);
+    if (!result) {
+      // uploadAsync()'s own type says it can resolve undefined/null — seen in
+      // practice on a long (5+ min, 275 MB) upload with no server-side error
+      // to report, which points at the OS's background session losing track
+      // of the task (screen lock / app backgrounded mid-upload) rather than
+      // anything the server rejected. Logged so a repeat is easier to tell
+      // apart from a genuine server failure next time.
+      console.log('[upload] task.uploadAsync() resolved with no result — likely interrupted (backgrounded/locked) rather than server-rejected');
+      throw new Error('Upload was interrupted — try again and keep the app open until it finishes.');
+    }
+    console.log(`[upload] status ${result.status}, body: ${result.body?.slice(0, 300)}`);
+    if (result.status < 200 || result.status >= 300) {
+      let message = `Upload failed (${result.status}).`;
+      try {
+        const body = JSON.parse(result.body);
+        if (typeof body?.error === 'string') message = body.error;
+      } catch {
+        // response wasn't JSON — keep the status-code message above
+      }
+      throw new Error(message);
+    }
+    try {
+      const uploaded = JSON.parse(result.body);
+      // size_bytes comes back as a string (Postgres BIGINT) — see
+      // listFiles()'s comment for why this needs normalizing.
+      return { ...uploaded, size_bytes: Number(uploaded.size_bytes) || 0 };
+    } catch {
+      throw new Error(`Server accepted the upload but sent back something unreadable (status ${result.status}).`);
+    }
+  } finally {
+    try {
+      scratchDir.delete();
+    } catch {
+      // best-effort cleanup — a leftover scratch file isn't worth failing the upload over
+    }
+  }
+}
+
+// Same POST /api/files?is_public=<bool> route uploadFile() above uses, one
+// request per file (the server's single-file response shape, unchanged since
+// other callers of uploadOneFileWithProgress depend on it) — see
+// uploadOneFileWithProgress's own comment for why this went from one combined
+// multipart XHR request to N native upload tasks: real per-file progress
+// only comes from the latter. Weighted by each file's own size so a batch's
+// overall percentage still reflects total bytes sent, not "files completed."
+export async function uploadFilesWithProgress(
+  tunnelUrl: string,
+  token: string,
+  files: { uri: string; name: string; type: string; size?: number }[],
+  isPublic: boolean,
+  onProgress: (percent: number) => void,
+  folderId?: string | null
+): Promise<UploadedFile[]> {
+  const folderQuery = folderId ? `&folder_id=${encodeURIComponent(folderId)}` : '';
+  const url = `${tunnelUrl}/api/files?is_public=${isPublic}${folderQuery}`;
+
+  const knownTotal = files.reduce((sum, f) => sum + (f.size ?? 0), 0);
+  const sentPerFile = new Array(files.length).fill(0);
+  const reportProgress = () => {
+    if (knownTotal <= 0) return;
+    const totalSent = sentPerFile.reduce((a, b) => a + b, 0);
+    onProgress(Math.min(100, Math.round((totalSent / knownTotal) * 100)));
+  };
+
+  const uploaded: UploadedFile[] = [];
+  const failures: { file_name: string; error: string }[] = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    try {
+      const result = await uploadOneFileWithProgress(url, token, file, (loaded, total) => {
+        sentPerFile[i] = total > 0 ? loaded : sentPerFile[i];
+        reportProgress();
+      });
+      uploaded.push(result);
+      sentPerFile[i] = file.size ?? sentPerFile[i]; // count this file as fully sent regardless of the last progress tick's rounding
+      reportProgress();
+    } catch (err) {
+      failures.push({ file_name: file.name, error: err instanceof Error ? err.message : 'Upload failed' });
+    }
+  }
+
+  if (failures.length) {
+    const names = failures.map((f) => f.file_name).filter(Boolean).join(', ');
+    const error = new Error(
+      uploaded.length > 0
+        ? `${failures.length} of ${files.length} file(s) failed to upload${names ? ` (${names})` : ''}`
+        : (failures[0]?.error || "Couldn't upload those files.")
+    ) as Error & { uploaded?: UploadedFile[] };
+    error.uploaded = uploaded; // files that did succeed, so the caller can still show them
+    throw error;
+  }
+
+  return uploaded;
 }
 
 // Public endpoint, no auth header needed — safe to use directly as an <Image> uri.
@@ -1457,16 +1673,17 @@ export async function updateMarketplaceBannerConfig(
 // there were wrong on several endpoint paths, HTTP methods, and body/response
 // field names — see each function's own note for what changed.
 
-// spaceId is sent as a query param but GET /api/initiatives on the real
-// server never reads req.query.space_id at all (confirmed directly against
-// api/server.js) — it's a no-op today, every call returns the hub's full
-// initiative list regardless. Kept here (rather than removed) since it's
-// harmless to send and documents the intent; callers who actually need a
-// space's initiatives must filter the returned array client-side by
-// `initiative.space_id` themselves (see app/spaces/[slug].tsx) until/unless
-// the server route is fixed to honor it.
-export async function listInitiatives(tunnelUrl: string, token: string, spaceId?: string): Promise<Initiative[]> {
-  const params = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : '';
+// clubId is sent as a query param (still `space_id` on the wire — see the
+// ── Clubs ── note above) but GET /api/initiatives on the real server never
+// reads req.query.space_id at all (confirmed directly against api/server.js)
+// — it's a no-op today, every call returns the hub's full initiative list
+// regardless. Kept here (rather than removed) since it's harmless to send
+// and documents the intent; callers who actually need a club's initiatives
+// must filter the returned array client-side by `initiative.space_id`
+// themselves (see app/clubs/[slug].tsx) until/unless the server route is
+// fixed to honor it.
+export async function listInitiatives(tunnelUrl: string, token: string, clubId?: string): Promise<Initiative[]> {
+  const params = clubId ? `?space_id=${encodeURIComponent(clubId)}` : '';
   const res = await fetch(`${tunnelUrl}/api/initiatives${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -1478,11 +1695,11 @@ export async function listInitiatives(tunnelUrl: string, token: string, spaceId?
 }
 
 // Real route/body per api/server.js's POST /api/initiatives local-mode
-// branch — title/category/goal/description/color, plus space_id (accepted
-// separately from the rest of the body, never proxied to an external
-// provider) to link it under a space's "Start an initiative here" entry
-// point. No dedicated mobile create screen existed before this — see
-// app/initiatives/create.tsx.
+// branch — title/category/goal/description/color, plus space_id (still that
+// literal field name on the wire — accepted separately from the rest of the
+// body, never proxied to an external provider) to link it under a club's
+// "Start an initiative here" entry point. No dedicated mobile create screen
+// existed before this — see app/initiatives/create.tsx.
 export async function createInitiative(
   tunnelUrl: string,
   token: string,
@@ -2129,111 +2346,115 @@ export async function deleteUpdateComment(tunnelUrl: string, token: string, comm
   }
 }
 
-// ── Spaces ───────────────────────────────────────────────────────────
-// Real shapes/routes read straight from api/server.js's /api/spaces* handlers
-// (see the note on the Space/SpaceMember/SpaceFile types in types.ts for
-// specifics — member_count as a string, my_role/my_status null-not-default,
-// etc.) — not the design handoff. All addressed by slug, not id.
+// ── Clubs ───────────────────────────────────────────────────────────
+// Called "Spaces" server-side, still — see types.ts's own ── Clubs ── note
+// for why this file's exported names read "Club" while every URL below is
+// still /api/spaces* verbatim (renaming those would mean editing
+// api/server.js, out of scope for this pass). Real shapes/routes read
+// straight from api/server.js's /api/spaces* handlers (see the note on the
+// Club/ClubMember/ClubFile types in types.ts for specifics — member_count as
+// a string, my_role/my_status null-not-default, etc.) — not the design
+// handoff. All addressed by slug, not id.
 
 // Real route/body per api/server.js's POST /api/spaces local-mode branch —
 // name + slug are both required server-side (it also re-cleans whatever
 // slug it's given, stripping to [a-z0-9-]), description/visibility optional
 // (visibility defaults to 'public' server-side too). No dedicated mobile
-// create screen existed before this — see app/spaces/create.tsx, which
+// create screen existed before this — see app/clubs/create.tsx, which
 // derives the slug from the name client-side rather than exposing a
 // separate slug field.
-export async function createSpace(
+export async function createClub(
   tunnelUrl: string,
   token: string,
   data: { name: string; slug: string; description?: string; visibility?: string }
-): Promise<Space> {
+): Promise<Club> {
   const res = await fetch(`${tunnelUrl}/api/spaces`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't create that space."));
+    throw new Error(await readErrorMessage(res, "Couldn't create that club."));
   }
-  return readJson<Space>(res, "Couldn't create that space.");
+  return readJson<Club>(res, "Couldn't create that club.");
 }
 
-export async function getSpace(tunnelUrl: string, token: string, slug: string): Promise<Space> {
+export async function getClub(tunnelUrl: string, token: string, slug: string): Promise<Club> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load this space."));
+    throw new Error(await readErrorMessage(res, "Couldn't load this club."));
   }
-  return readJson<Space>(res, "Couldn't load this space.");
+  return readJson<Club>(res, "Couldn't load this club.");
 }
 
-// GET /api/spaces — every space on the hub (plus any federated "Society
+// GET /api/spaces — every club on the hub (plus any federated "Society
 // Plus" ones the hub's spaces provider proxies in), each row carrying the
 // caller's own my_role/my_status if they've joined/requested/been invited —
-// used by the Browse Spaces screen's Discover list. Ordered newest-created
-// first by the server; unlike listMySpaces this includes spaces the caller
+// used by the Browse Clubs screen's Discover list. Ordered newest-created
+// first by the server; unlike listMyClubs this includes clubs the caller
 // has never interacted with at all (my_role/my_status both null).
-export async function listAllSpaces(tunnelUrl: string, token: string): Promise<Space[]> {
+export async function listAllClubs(tunnelUrl: string, token: string): Promise<Club[]> {
   const res = await fetch(`${tunnelUrl}/api/spaces`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load spaces for this hub."));
+    throw new Error(await readErrorMessage(res, "Couldn't load clubs for this hub."));
   }
-  return readJson<Space[]>(res, "Couldn't load spaces for this hub.");
+  return readJson<Club[]>(res, "Couldn't load clubs for this hub.");
 }
 
 // GET /api/spaces/mine — active memberships only (the server's own JOIN
-// requires status = 'active'), used for the "Your spaces" monogram strip.
-export async function listMySpaces(tunnelUrl: string, token: string): Promise<Space[]> {
+// requires status = 'active'), used for the "Your clubs" monogram strip.
+export async function listMyClubs(tunnelUrl: string, token: string): Promise<Club[]> {
   const res = await fetch(`${tunnelUrl}/api/spaces/mine`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load your spaces."));
+    throw new Error(await readErrorMessage(res, "Couldn't load your clubs."));
   }
-  return readJson<Space[]>(res, "Couldn't load your spaces.");
+  return readJson<Club[]>(res, "Couldn't load your clubs.");
 }
 
-// No dedicated "mutual spaces" route exists elsewhere in this app — added
-// specifically for the other-member profile screen's "Shared spaces" strip
-// (see app/spaces/shared-with/:userId in api/server.js). Returns spaces
+// No dedicated "mutual clubs" route exists elsewhere in this app — added
+// specifically for the other-member profile screen's "Shared clubs" strip
+// (see app/spaces/shared-with/:userId in api/server.js). Returns clubs
 // where both the caller and :userId are active members.
-export async function listSharedSpaces(tunnelUrl: string, token: string, userId: string): Promise<Space[]> {
+export async function listSharedClubs(tunnelUrl: string, token: string, userId: string): Promise<Club[]> {
   const res = await fetch(`${tunnelUrl}/api/spaces/shared-with/${encodeURIComponent(userId)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load shared spaces."));
+    throw new Error(await readErrorMessage(res, "Couldn't load shared clubs."));
   }
-  return readJson<Space[]>(res, "Couldn't load shared spaces.");
+  return readJson<Club[]>(res, "Couldn't load shared clubs.");
 }
 
-// Returns { status: 'active' | 'pending' } — active for public spaces,
+// Returns { status: 'active' | 'pending' } — active for public clubs,
 // pending for private ones (403s outright for invite-only unless already
-// invited). The space detail screen re-fetches the full Space afterward
+// invited). The club detail screen re-fetches the full Club afterward
 // rather than trying to merge this narrow response in by hand.
-export async function joinSpace(tunnelUrl: string, token: string, slug: string): Promise<{ status: string }> {
+export async function joinClub(tunnelUrl: string, token: string, slug: string): Promise<{ status: string }> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/join`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't join this space."));
+    throw new Error(await readErrorMessage(res, "Couldn't join this club."));
   }
-  return readJson(res, "Couldn't join this space.");
+  return readJson(res, "Couldn't join this club.");
 }
 
-// 400s if the caller is the space's owner ("Transfer ownership before
+// 400s if the caller is the club's owner ("Transfer ownership before
 // leaving") — surfaced as-is via readErrorMessage, no special-casing here.
-export async function leaveSpace(tunnelUrl: string, token: string, slug: string): Promise<void> {
+export async function leaveClub(tunnelUrl: string, token: string, slug: string): Promise<void> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/leave`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't leave this space."));
+    throw new Error(await readErrorMessage(res, "Couldn't leave this club."));
   }
 }
 
@@ -2241,18 +2462,18 @@ export async function leaveSpace(tunnelUrl: string, token: string, slug: string)
 // spacesService.update — name/description/visibility/category/web_public
 // (the Settings tab) and banner_mode/banner_color/banner_gradient_from/
 // banner_gradient_to (the banner style swatches) all go through this same
-// route, just with different partial payloads. Server-gated to the space's
+// route, just with different partial payloads. Server-gated to the club's
 // own admins/owner (canManageSpace); category '' explicitly clears it
 // (COALESCE only skips a real SQL NULL, not an empty string — see
 // api/server.js's own note on this route).
-export async function updateSpace(
+export async function updateClub(
   tunnelUrl: string,
   token: string,
   slug: string,
   data: Partial<{
     name: string;
     description: string;
-    visibility: SpaceVisibility;
+    visibility: ClubVisibility;
     category: string;
     web_public: boolean;
     banner_mode: 'solid' | 'gradient';
@@ -2260,7 +2481,7 @@ export async function updateSpace(
     banner_gradient_from: string;
     banner_gradient_to: string;
   }>
-): Promise<Space> {
+): Promise<Club> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -2269,18 +2490,18 @@ export async function updateSpace(
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't save those settings."));
   }
-  return readJson<Space>(res, "Couldn't save those settings.");
+  return readJson<Club>(res, "Couldn't save those settings.");
 }
 
 // Owner-only server-side (or a hub-level admin) — posts are kept, just
 // detached (space_id set to NULL), not deleted themselves.
-export async function deleteSpace(tunnelUrl: string, token: string, slug: string): Promise<void> {
+export async function deleteClub(tunnelUrl: string, token: string, slug: string): Promise<void> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't delete this space."));
+    throw new Error(await readErrorMessage(res, "Couldn't delete this club."));
   }
 }
 
@@ -2289,46 +2510,46 @@ export async function deleteSpace(tunnelUrl: string, token: string, slug: string
 // ready to treat that failure as "you're not in" rather than a generic error.
 // Returns every post/event in one shot (no category split server-side) —
 // split client-side on `!!event_date`, same convention the general feed uses.
-export async function listSpacePosts(tunnelUrl: string, token: string, slug: string): Promise<HubPost[]> {
+export async function listClubPosts(tunnelUrl: string, token: string, slug: string): Promise<HubPost[]> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/posts`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, 'Join this space to view posts.'));
+    throw new Error(await readErrorMessage(res, 'Join this club to view posts.'));
   }
-  return readJson<HubPost[]>(res, "Couldn't load this space's posts.");
+  return readJson<HubPost[]>(res, "Couldn't load this club's posts.");
 }
 
-// Same active-member gate as listSpacePosts. Files here are always post
+// Same active-member gate as listClubPosts. Files here are always post
 // attachments (owns_file uploads go through POST .../posts with a media
 // file, is_public: false) — never navigate these to the general
 // app/files/[id].tsx screen, which gates on is_public/ownership and would
 // 403/hide them for any member who isn't the uploader.
-export async function listSpaceFiles(tunnelUrl: string, token: string, slug: string): Promise<SpaceFile[]> {
+export async function listClubFiles(tunnelUrl: string, token: string, slug: string): Promise<ClubFile[]> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/files`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, 'Join this space to view files.'));
+    throw new Error(await readErrorMessage(res, 'Join this club to view files.'));
   }
-  return readJson<SpaceFile[]>(res, "Couldn't load this space's files.");
+  return readJson<ClubFile[]>(res, "Couldn't load this club's files.");
 }
 
-export async function listSpaceMembers(tunnelUrl: string, token: string, slug: string): Promise<SpaceMember[]> {
+export async function listClubMembers(tunnelUrl: string, token: string, slug: string): Promise<ClubMember[]> {
   const res = await fetch(`${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/members`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load this space's members."));
+    throw new Error(await readErrorMessage(res, "Couldn't load this club's members."));
   }
-  return readJson<SpaceMember[]>(res, "Couldn't load this space's members.");
+  return readJson<ClubMember[]>(res, "Couldn't load this club's members.");
 }
 
 // GET /api/spaces/:slug/banner streams the image straight from MinIO — no
 // `authenticate` middleware on that route (confirmed against api/server.js),
 // same reasoning as initiativeBannerUrl above: not reachable through
 // getMediaUrl/HubMedia (no hub_files row backs it), just a plain public URL.
-export function spaceBannerUrl(tunnelUrl: string, slug: string): string {
+export function clubBannerUrl(tunnelUrl: string, slug: string): string {
   return `${tunnelUrl}/api/spaces/${encodeURIComponent(slug)}/banner`;
 }
 
@@ -2428,13 +2649,13 @@ export async function listCallEvents(tunnelUrl: string, token: string, conversat
   return Array.isArray(data.call_events) ? data.call_events : [];
 }
 
-// Pass spaceSlug to get that space's own live list instead of the hub-wide
+// Pass clubSlug to get that club's own live list instead of the hub-wide
 // one (real GET /api/comms/live?space_slug=X, membership-checked server-side
-// — see api/comms.js's own note) — a space-scoped broadcast never shows up
+// — see api/comms.js's own note) — a club-scoped broadcast never shows up
 // in the plain hub-wide call, and vice versa, same "doesn't leak into the
-// main feed unless explicitly shared" precedent as space posts.
-export async function listLiveComms(tunnelUrl: string, token: string, spaceSlug?: string): Promise<LiveCommsItem[]> {
-  const query = spaceSlug ? `?space_slug=${encodeURIComponent(spaceSlug)}` : '';
+// main feed unless explicitly shared" precedent as club posts.
+export async function listLiveComms(tunnelUrl: string, token: string, clubSlug?: string): Promise<LiveCommsItem[]> {
+  const query = clubSlug ? `?space_slug=${encodeURIComponent(clubSlug)}` : '';
   const res = await fetch(`${tunnelUrl}/api/comms/live${query}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -2449,8 +2670,8 @@ export async function listLiveComms(tunnelUrl: string, token: string, spaceSlug?
 // silent camera-preview connection — requires an existing roomName, never
 // creates a room, and the server marks it hidden so it doesn't count as a
 // real viewer (see api/comms.js's /token route in the citinet-web repo).
-// spaceSlug (host/create only, i.e. only meaningful when roomName is
-// omitted) scopes the new room to that space — the server re-validates
+// clubSlug (host/create only, i.e. only meaningful when roomName is
+// omitted) scopes the new room to that club — the server re-validates
 // active membership on every subsequent join itself from the room's own
 // metadata, so a joiner never needs to (and doesn't) resend it.
 export async function getCommsToken(
@@ -2460,12 +2681,12 @@ export async function getCommsToken(
   roomName?: string,
   title?: string,
   preview?: boolean,
-  spaceSlug?: string
+  clubSlug?: string
 ): Promise<{ room_name: string; token: string; livekit_url: string }> {
   const res = await fetch(`${tunnelUrl}/api/comms/token`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind, room_name: roomName, title, preview, space_slug: spaceSlug }),
+    body: JSON.stringify({ kind, room_name: roomName, title, preview, space_slug: clubSlug }),
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't connect."));

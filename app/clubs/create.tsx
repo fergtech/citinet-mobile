@@ -6,11 +6,11 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { createSpace } from '@/lib/api/hubService';
-import { SpaceVisibility } from '@/lib/api/types';
+import { createClub } from '@/lib/api/hubService';
+import { ClubVisibility } from '@/lib/api/types';
 import { useSession } from '@/lib/session/session-context';
 
-const VISIBILITY_OPTIONS: { id: SpaceVisibility; label: string; hint: string }[] = [
+const VISIBILITY_OPTIONS: { id: ClubVisibility; label: string; hint: string }[] = [
   { id: 'public', label: 'Public', hint: 'Anyone in the hub can see and join instantly.' },
   { id: 'private', label: 'Private', hint: 'Anyone can find it, but joining needs approval.' },
   { id: 'invite-only', label: 'Invite-only', hint: 'Only people you invite can join.' },
@@ -32,14 +32,15 @@ function slugify(name: string): string {
 // No dedicated mobile create screen existed before this — reached from the
 // Create tab's launcher sheet (app/modal.tsx). Same minimal-real-screen
 // approach as app/initiatives/create.tsx: one form, not a multi-step wizard,
-// wired to the real POST /api/spaces.
-export default function CreateSpaceScreen() {
+// wired to the real POST /api/spaces (still that literal route — see
+// hubService's own ── Clubs ── note).
+export default function CreateClubScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState<SpaceVisibility>('public');
+  const [visibility, setVisibility] = useState<ClubVisibility>('public');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,20 +53,20 @@ export default function CreateSpaceScreen() {
     }
     setSaving(true);
     setError(null);
-    createSpace(session.hub.tunnelUrl, session.token, {
+    createClub(session.hub.tunnelUrl, session.token, {
       name: name.trim(),
       slug,
       description: description.trim() || undefined,
       visibility,
     })
       .then((created) => {
-        router.replace({ pathname: '/spaces/[slug]', params: { slug: created.slug } });
+        router.replace({ pathname: '/clubs/[slug]', params: { slug: created.slug } });
       })
       .catch((err) => {
         // A slug collision (409, "A space with that slug already exists")
         // is the one error worth a nudge beyond the generic message — same
         // name taken is the realistic case here, not a truly random clash.
-        setError(err instanceof Error ? err.message : "Couldn't create that space.");
+        setError(err instanceof Error ? err.message : "Couldn't create that club.");
         setSaving(false);
       });
   }
@@ -79,7 +80,7 @@ export default function CreateSpaceScreen() {
           <ThemedText style={styles.cancel}>Cancel</ThemedText>
         </Pressable>
         <ThemedText type="defaultSemiBold" style={styles.headerTitle}>
-          New space
+          New club
         </ThemedText>
         <Pressable
           onPress={handleSave}
@@ -102,7 +103,7 @@ export default function CreateSpaceScreen() {
         <TextInput
           value={name}
           onChangeText={setName}
-          placeholder="What's this space called?"
+          placeholder="What's this club called?"
           placeholderTextColor={Colors[colorScheme].icon}
           maxLength={80}
           style={[styles.input, { color: Colors[colorScheme].text }]}

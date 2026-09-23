@@ -83,7 +83,9 @@ export default function VendorEditorScreen() {
       const uploaded = await uploadFile(session.hub.tunnelUrl, session.token, {
         uri: asset.uri,
         name: asset.fileName ?? `vendor-logo-${Date.now()}.jpg`,
-        type: asset.mimeType ?? 'image/jpeg',
+        // `|| ` not `??` — some Android pickers return mimeType as '' (falsy
+        // but not nullish), which would otherwise slip past a ?? fallback.
+        type: asset.mimeType || 'image/jpeg',
       });
       setLogoFileName(uploaded.file_name);
     } catch (err) {

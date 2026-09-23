@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { File, Paths } from 'expo-file-system';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -15,10 +16,12 @@ import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { deleteFile, getMediaUrl, getMember, listFiles, setFileVisibility } from '@/lib/api/hubService';
 import { FileVisibility, HubFile, HubMember } from '@/lib/api/types';
+import { useE2EKeys } from '@/lib/crypto/e2e-context';
 import { FILE_KIND_META, fileKind, formatBytes, isPreviewable } from '@/lib/files/kind';
 import { saveFileToDevice } from '@/lib/files/save-to-device';
 import { useSession } from '@/lib/session/session-context';
 import { confirmDestructive } from '@/lib/ui/confirm';
+import { goBack } from '@/lib/ui/go-back';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
 import { timeAgo } from '@/lib/ui/time-ago';
 
@@ -75,10 +78,78 @@ function AudioPlayerCard({ uri, name }: { uri: string; name: string }) {
   );
 }
 
+// Fetches a private file's (encrypted) bytes, decrypts them, and writes the
+// plaintext to a local cache file — expo-audio/expo-video/expo-image and the
+// PDF WebView all need a real local or streamable source, and a private
+// file's network URL only ever serves ciphertext server-side (see
+// lib/crypto/e2e-context.tsx's encryptFile/decryptFile). A public/hub file
+// skips this entirely and previews straight from its network URL, unchanged.
+async function resolveDecryptedPreviewUri(
+  url: string,
+  file: HubFile,
+  decryptFile: (data: Uint8Array) => Promise<Uint8Array | null>,
+  onProgress?: (percent: number) => void
+): Promise<string> {
+  // XHR, not fetch: a private preview has to fully buffer before it can be
+  // decrypted (no progressive/streaming decrypt), and on a slow link — e.g.
+  // this hub's tunnel is exposed via Tailscale Funnel, which always relays
+  // through the public internet even for two devices on the same LAN, never
+  // a local shortcut — that buffering can take a real amount of time with
+  // nothing else to show for it. fetch() has neither a built-in timeout nor
+  // download-progress events; without both, a slow-but-working transfer and
+  // a truly stuck one look identical (an infinite spinner, no error, no
+  // percent). XHR gives both.
+  const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url);
+    xhr.responseType = 'arraybuffer';
+    // A STALL timeout, not a flat one: rearmed on every progress tick. A flat
+    // wall-clock timeout would kill a connection that's merely slow but still
+    // making progress (weak/congested wifi, a big file on a mediocre link) —
+    // exactly the kind of connection this has to tolerate, since there's no
+    // resume once it's cut. Only a connection that goes fully silent for this
+    // long — no bytes at all — gets aborted.
+    const STALL_MS = 20_000;
+    let stallTimer: ReturnType<typeof setTimeout>;
+    const armStallTimer = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => xhr.abort(), STALL_MS);
+    };
+    armStallTimer();
+    xhr.onprogress = (e) => {
+      armStallTimer();
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onabort = () => reject(new Error('Connection stalled while loading this file — check your network and try again.'));
+    xhr.onerror = () => {
+      clearTimeout(stallTimer);
+      reject(new Error("Couldn't reach this hub. Check that it's online and try again."));
+    };
+    xhr.onload = () => {
+      clearTimeout(stallTimer);
+      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response as ArrayBuffer);
+      else reject(new Error(`Couldn't load this file (${xhr.status}).`));
+    };
+    xhr.send();
+  });
+  onProgress?.(100);
+  const plain = await decryptFile(new Uint8Array(buf));
+  if (!plain) throw new Error("Couldn't decrypt this file on this device.");
+  const dest = new File(Paths.cache, `preview-${file.file_id}-${file.file_name}`);
+  dest.create({ overwrite: true });
+  dest.write(plain);
+  return dest.uri;
+}
+
 export default function FileDetailScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { ensure: ensureE2EKeys, decryptFile } = useE2EKeys();
+
+  useEffect(() => {
+    ensureE2EKeys();
+  }, [ensureE2EKeys]);
 
   const [file, setFile] = useState<HubFile | null>(null);
   const [owner, setOwner] = useState<HubMember | null>(null);
@@ -86,6 +157,8 @@ export default function FileDetailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<FileVisibility>('private');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewProgress, setPreviewProgress] = useState<number | null>(null);
   const [format, setFormat] = useState<string | null>(null);
   const [imageAspect, setImageAspect] = useState(1);
   const [videoAspect, setVideoAspect] = useState(16 / 9);
@@ -127,13 +200,34 @@ export default function FileDetailScreen() {
   useEffect(() => {
     if (!session || !file || !previewable) return;
     let cancelled = false;
-    getMediaUrl(session.hub.tunnelUrl, session.token, file.file_name).then((url) => {
-      if (!cancelled) setPreviewUrl(url);
-    });
+    setPreviewError(null);
+    setPreviewProgress(null);
+    const isPrivate = visibilityOf(file) === 'private';
+    getMediaUrl(session.hub.tunnelUrl, session.token, file.file_name)
+      .then(async (url) => {
+        if (cancelled) return;
+        if (!isPrivate) {
+          setPreviewUrl(url);
+          return;
+        }
+        setPreviewProgress(0);
+        const localUri = await resolveDecryptedPreviewUri(url, file, decryptFile, (percent) => {
+          if (!cancelled) setPreviewProgress(percent);
+        });
+        if (!cancelled) setPreviewUrl(localUri);
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Couldn't load this file.";
+        // Surfaces the exact stored file_name alongside the error — the
+        // fastest way to tell a real "the blob is gone" 404 apart from a
+        // name-matching bug (the /token route looks the file up by this
+        // exact string) without needing server-side log access.
+        if (!cancelled) setPreviewError(`${message} (file_name: "${file.file_name}")`);
+      });
     return () => {
       cancelled = true;
     };
-  }, [session, file, previewable]);
+  }, [session, file, previewable, decryptFile]);
 
   useEffect(() => {
     if (kind === 'image' && previewUrl) {
@@ -197,8 +291,13 @@ export default function FileDetailScreen() {
     setError(null);
     setSavedMessage(null);
     try {
-      const url = await getMediaUrl(session.hub.tunnelUrl, session.token, file.file_name);
-      const destination = await saveFileToDevice(url, file.file_name, kind);
+      const isPrivate = visibilityOf(file) === 'private';
+      // previewUrl is already a local file:// uri holding the decrypted
+      // bytes once a private file's preview has resolved — reuse it instead
+      // of re-fetching and re-decrypting the same file over again.
+      const preDecryptedUri = isPrivate && previewUrl?.startsWith('file://') ? previewUrl : undefined;
+      const url = preDecryptedUri ? '' : await getMediaUrl(session.hub.tunnelUrl, session.token, file.file_name);
+      const destination = await saveFileToDevice(url, file.file_name, kind, isPrivate ? decryptFile : undefined, preDecryptedUri);
       setSavedMessage(destination === 'photos' ? 'Saved to Photos' : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't download that file.");
@@ -220,7 +319,7 @@ export default function FileDetailScreen() {
     if (!session || !file) return;
     confirmDestructive('Delete this file?', 'Delete', () => {
       deleteFile(session.hub.tunnelUrl, session.token, file.file_name)
-        .then(() => router.back())
+        .then(() => goBack('/files'))
         .catch((err) => setError(err instanceof Error ? err.message : "Couldn't delete that file."));
     });
   }
@@ -247,8 +346,22 @@ export default function FileDetailScreen() {
                 <ThemedText style={styles.formatLine}>{meta.label}</ThemedText>
                 <ThemedText style={styles.noPreview}>No in-app preview for {meta.label.toLowerCase()} files — download to open.</ThemedText>
               </>
+            ) : previewError ? (
+              <>
+                <View style={[styles.previewIconWrap, { backgroundColor: meta.color }]}>
+                  <IconSymbol name={meta.icon} size={40} color="#fff" />
+                </View>
+                <ThemedText style={styles.noPreview}>{previewError}</ThemedText>
+              </>
             ) : !previewUrl ? (
-              <ActivityIndicator style={styles.previewLoading} />
+              <>
+                <ActivityIndicator style={styles.previewLoading} />
+                {previewProgress !== null && (
+                  <ThemedText style={styles.formatLine}>
+                    {previewProgress < 100 ? `Loading… ${previewProgress}%` : 'Decrypting…'}
+                  </ThemedText>
+                )}
+              </>
             ) : kind === 'image' ? (
               <>
                 <Image source={{ uri: previewUrl }} style={[styles.previewImage, { aspectRatio: imageAspect }]} contentFit="contain" />

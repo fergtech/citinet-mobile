@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 
 import { ActionSheet } from '@/components/action-sheet';
+import { EmojiPickerSheet } from '@/components/emoji-picker';
+import { HubMedia } from '@/components/hub-media';
+import { LinkPreviewCard } from '@/components/link-preview-card';
 import { ReportSheet } from '@/components/report-sheet';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
@@ -11,15 +17,36 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { blockMember, getMessages, listCallEvents, listConversations, sendMessage, toggleMessageReaction } from '@/lib/api/hubService';
-import { CallEvent, CallMode, HubMessage, MessageReaction } from '@/lib/api/types';
+import { blockMember, getMediaUrl, getMessages, listCallEvents, listConversations, sendMessage, toggleMessageReaction, uploadFilesWithProgress } from '@/lib/api/hubService';
+import { CallEvent, CallMode, HubMessage, MessageAttachment, MessageReaction } from '@/lib/api/types';
 import { useCall } from '@/lib/comms/call-context';
 import { formatCallDuration, useElapsedSeconds } from '@/lib/comms/use-elapsed';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
+import { FILE_KIND_META, fileKind } from '@/lib/files/kind';
+import { guessMimeType } from '@/lib/files/mime';
+import { saveFileToDevice } from '@/lib/files/save-to-device';
 import { useSession } from '@/lib/session/session-context';
 import { isEncryptedBody } from '@/lib/ui/encrypted-message';
+import { parseMessageLinks } from '@/lib/ui/link-preview';
 import { timeAgo } from '@/lib/ui/time-ago';
+
+// Unifies expo-image-picker's ImagePickerAsset and expo-document-picker's
+// DocumentPickerAsset into one shape the composer's staging tray works with
+// — same simplification app/files/upload.tsx already uses for its own picker.
+type PickedFile = { uri: string; name: string; mimeType: string; size?: number };
+
+const EXT_FOR_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/heic': 'heic',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+};
+
+const MAX_ATTACHMENTS = 10;
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB — same cap citinet-web's composer enforces
 
 type TimelineItem = { kind: 'message'; key: string; createdAt: string; message: HubMessage } | { kind: 'call'; key: string; createdAt: string; event: CallEvent };
 
@@ -67,6 +94,64 @@ function CallEventChip({ event, selfId }: { event: CallEvent; selfId: string }) 
   );
 }
 
+// Image/video attachments render inline via HubMedia's private token-download
+// path (message attachments upload is_public: false — see handleSend's own
+// note on why that's now safe: the hub's file-access routes were fixed to
+// also authorize any member of a conversation the file was shared into, not
+// just the file's owner). Anything else (pdf, doc, zip, …) gets a tappable
+// chip that downloads it straight to the device, same as Files section
+// behavior.
+function MessageAttachmentView({
+  attachment,
+  tunnelUrl,
+  token,
+  own,
+}: {
+  attachment: MessageAttachment;
+  tunnelUrl: string;
+  token: string;
+  own: boolean;
+}) {
+  const colorScheme = useColorScheme() ?? 'light';
+  const kind = fileKind(attachment.file_name, attachment.mime_type);
+  const [saving, setSaving] = useState(false);
+
+  if (kind === 'image' || kind === 'video') {
+    return <HubMedia fileName={attachment.file_name} tunnelUrl={tunnelUrl} token={token} style={styles.attachmentMedia} />;
+  }
+
+  const meta = FILE_KIND_META[kind];
+
+  async function handleOpen() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const url = await getMediaUrl(tunnelUrl, token, attachment.file_name);
+      await saveFileToDevice(url, attachment.file_name, kind);
+    } catch (err) {
+      Alert.alert('Download failed', err instanceof Error ? err.message : "Couldn't download that file.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Pressable
+      onPress={handleOpen}
+      disabled={saving}
+      style={[styles.fileChip, { borderColor: (own ? '#fff' : Colors[colorScheme].icon) + '33' }]}>
+      {saving ? (
+        <ActivityIndicator size="small" color={own ? '#fff' : Colors[colorScheme].icon} />
+      ) : (
+        <IconSymbol name={meta.icon} size={16} color={own ? '#fff' : meta.color} />
+      )}
+      <ThemedText numberOfLines={1} style={styles.fileChipName} lightColor={own ? '#fff' : undefined} darkColor={own ? '#fff' : undefined}>
+        {attachment.file_name}
+      </ThemedText>
+    </Pressable>
+  );
+}
+
 // Own component so the elapsed-seconds tick (500ms, see use-elapsed.ts's own
 // note on why) only re-renders this small bar, not the whole thread screen.
 function MinimizedCallBar({ onPress }: { onPress: () => void }) {
@@ -103,6 +188,12 @@ export default function ConversationScreen() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [isGroup, setIsGroup] = useState(false);
+  const [stagedFiles, setStagedFiles] = useState<PickedFile[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [uploadingFileCount, setUploadingFileCount] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [showAttachSheet, setShowAttachSheet] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   // Real read receipts: GET /api/conversations/:id/messages (called by load()
   // above) already marks *this device's* read position server-side as a side
   // effect — confirmed directly in api/server.js, nothing extra to send for
@@ -250,14 +341,101 @@ export default function ConversationScreen() {
     );
   }
 
+  function addStagedFiles(files: PickedFile[]) {
+    setStagedFiles((prev) => [...prev, ...files.filter((f) => (f.size ?? 0) <= MAX_FILE_SIZE)].slice(0, MAX_ATTACHMENTS));
+  }
+
+  async function handlePickMedia() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      setError('Photo library permission is needed to attach a photo or video.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], quality: 0.7, allowsMultipleSelection: true });
+    if (result.canceled) return;
+    addStagedFiles(
+      result.assets.map((asset, i) => {
+        // `|| ` not `??` — some Android pickers return mimeType as '' (falsy
+        // but not nullish), which would otherwise slip past a ?? fallback and
+        // get stored server-side as a mimeType-less, unclassifiable file.
+        const mimeType = asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
+        const name = asset.fileName ?? `${asset.type === 'video' ? 'video' : 'photo'}-${Date.now()}-${i}.${EXT_FOR_MIME[mimeType] ?? 'jpg'}`;
+        return { uri: asset.uri, name, mimeType, size: asset.fileSize };
+      })
+    );
+    setError(null);
+  }
+
+  async function handleTakeMedia() {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      setError('Camera permission is needed to capture a photo or video.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], quality: 0.7 });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    const mimeType = asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
+    const name = asset.fileName ?? `${asset.type === 'video' ? 'video' : 'photo'}-${Date.now()}.${EXT_FOR_MIME[mimeType] ?? 'jpg'}`;
+    addStagedFiles([{ uri: asset.uri, name, mimeType, size: asset.fileSize }]);
+    setError(null);
+  }
+
+  async function handlePickFile() {
+    const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+    if (result.canceled) return;
+    addStagedFiles(
+      result.assets.map((asset) => ({ uri: asset.uri, name: asset.name, mimeType: guessMimeType(asset.name, asset.mimeType), size: asset.size }))
+    );
+    setError(null);
+  }
+
+  function removeStagedFile(index: number) {
+    setStagedFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function insertEmoji(emoji: string) {
+    setDraft((prev) => prev + emoji);
+  }
+
   async function handleSend() {
-    if (!session || !draft.trim()) return;
     const text = draft.trim();
+    const hasFiles = stagedFiles.length > 0;
+    if (!session || (!text && !hasFiles) || sending) return;
+    const filesToSend = stagedFiles;
     setDraft('');
+    setStagedFiles([]);
     setSending(true);
     try {
-      const outgoingBody = await encryptForConversation(id, peerId, text);
-      const sent = await sendMessage(session.hub.tunnelUrl, session.token, id, outgoingBody);
+      let attachmentIds: string[] | undefined;
+      if (filesToSend.length > 0) {
+        setUploadingAttachments(true);
+        setUploadingFileCount(filesToSend.length);
+        setUploadProgress(0);
+        try {
+          const uploaded = await uploadFilesWithProgress(
+            session.hub.tunnelUrl,
+            session.token,
+            filesToSend.map((f) => ({ uri: f.uri, name: f.name, type: f.mimeType, size: f.size })),
+            // is_public: false — matches citinet-web's own sendMessageWithMedia.
+            // Viewing this still works for the recipient (not just the sender)
+            // because the hub's file-access routes (GET /api/files/:filename,
+            // POST /api/files/:filename/token, GET .../download) now also
+            // authorize any member of a conversation the file was attached
+            // into, not just the file's owner — see FILE_ACCESS_CONDITION in
+            // api/server.js. Before that fix, is_public: false here meant a
+            // DM recipient always 404'd trying to view an attachment the
+            // *other* person sent.
+            false,
+            setUploadProgress
+          );
+          attachmentIds = uploaded.map((u) => u.file_id);
+        } finally {
+          setUploadingAttachments(false);
+        }
+      }
+      const outgoingBody = text ? await encryptForConversation(id, peerId, text) : '';
+      const sent = await sendMessage(session.hub.tunnelUrl, session.token, id, outgoingBody, attachmentIds);
       // POST .../messages' real response has no `reactions` field at all
       // (unlike GET .../messages, which aggregates it) — a fresh send would
       // otherwise be `undefined` here and crash the reaction row's `.length`
@@ -266,6 +444,11 @@ export default function ConversationScreen() {
       setMessages((prev) => [...prev, { ...sent, reactions: sent.reactions ?? [], attachments: sent.attachments ?? [] }]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message.');
+      // Unlike a plain text retry (cheap to retype), redoing a camera shot or
+      // file pick is real work — restore both instead of silently discarding
+      // them, so a failed/timed-out upload just leaves the composer as it was.
+      setDraft(text);
+      setStagedFiles(filesToSend);
     } finally {
       setSending(false);
     }
@@ -298,7 +481,7 @@ export default function ConversationScreen() {
     // ThemedView's) sits behind the keyboard's rounded top corners.
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ThemedView style={styles.flex}>
         <ScreenHeader
           title={title ?? 'Conversation'}
@@ -341,6 +524,7 @@ export default function ConversationScreen() {
             const own = item.sender_id === session.userId;
             const encrypted = isEncryptedBody(item.body);
             const resolved = decrypted.get(item.message_id);
+            const isPlaceholder = encrypted && !resolved;
             const bodyText = !encrypted
               ? item.body
               : resolved
@@ -348,26 +532,44 @@ export default function ConversationScreen() {
                 : resolved === null
                   ? "🔒 couldn't decrypt this message"
                   : '🔒 Encrypted message';
+            // Links only get parsed out of real (decrypted/plaintext) content —
+            // a still-encrypted placeholder string has nothing to link-ify.
+            const { text: cleanText, urls } = isPlaceholder ? { text: bodyText, urls: [] as string[] } : parseMessageLinks(bodyText);
+            const hasAttachments = !!item.attachments?.length;
             return (
               <View style={[styles.messageRow, own ? styles.messageRowOwn : styles.messageRowOther]}>
                 {!own && (
                   <ThemedText style={styles.sender}>{item.sender_username ?? 'Citinet'}</ThemedText>
                 )}
-                <Pressable
-                  onLongPress={() => setReactionSheetMessageId(item.message_id)}
-                  style={[
-                    styles.bubble,
-                    own
-                      ? [styles.bubbleOwn, { backgroundColor: Brand }]
-                      : [styles.bubbleOther, { borderColor: Colors[colorScheme].icon + '33' }],
-                  ]}>
-                  <ThemedText
-                    style={encrypted && !resolved ? styles.encryptedText : undefined}
-                    lightColor={own ? '#fff' : undefined}
-                    darkColor={own ? '#fff' : undefined}>
-                    {bodyText}
-                  </ThemedText>
-                </Pressable>
+                {(!!cleanText || hasAttachments) && (
+                  <Pressable
+                    onLongPress={() => setReactionSheetMessageId(item.message_id)}
+                    style={[
+                      styles.bubble,
+                      own
+                        ? [styles.bubbleOwn, { backgroundColor: Brand }]
+                        : [styles.bubbleOther, { borderColor: Colors[colorScheme].icon + '33' }],
+                    ]}>
+                    {!!cleanText && (
+                      <ThemedText
+                        style={isPlaceholder ? styles.encryptedText : undefined}
+                        lightColor={own ? '#fff' : undefined}
+                        darkColor={own ? '#fff' : undefined}>
+                        {cleanText}
+                      </ThemedText>
+                    )}
+                    {hasAttachments && (
+                      <View style={[styles.attachmentsWrap, !!cleanText && styles.attachmentsWrapWithText]}>
+                        {item.attachments.map((att) => (
+                          <MessageAttachmentView key={att.file_id} attachment={att} tunnelUrl={session.hub.tunnelUrl} token={session.token} own={own} />
+                        ))}
+                      </View>
+                    )}
+                  </Pressable>
+                )}
+                {urls.map((url) => (
+                  <LinkPreviewCard key={url} url={url} tunnelUrl={session.hub.tunnelUrl} />
+                ))}
                 {item.reactions.length > 0 && (
                   <View style={styles.reactionRow}>
                     {item.reactions.map((r) => (
@@ -404,7 +606,52 @@ export default function ConversationScreen() {
         />
 
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 8 : 16) }]}>
+          {uploadingAttachments && (
+            <ThemedText style={styles.uploadStatus}>
+              Uploading {uploadingFileCount > 1 ? `${uploadingFileCount} files… ` : '… '}{uploadProgress}%
+            </ThemedText>
+          )}
+          {stagedFiles.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.stagedRow} contentContainerStyle={styles.stagedRowContent}>
+              {stagedFiles.map((file, index) => {
+                const kind = fileKind(file.name, file.mimeType);
+                const kindMeta = FILE_KIND_META[kind];
+                return (
+                  <View key={`${file.uri}-${index}`} style={styles.stagedItem}>
+                    {kind === 'image' ? (
+                      <Image source={{ uri: file.uri }} style={styles.stagedThumb} contentFit="cover" />
+                    ) : kind === 'video' ? (
+                      <View style={[styles.stagedThumb, styles.stagedVideoTile]}>
+                        <IconSymbol name="play.fill" size={16} color="#fff" />
+                      </View>
+                    ) : (
+                      <View style={[styles.stagedThumb, { backgroundColor: kindMeta.color }]}>
+                        <IconSymbol name={kindMeta.icon} size={16} color="#fff" />
+                      </View>
+                    )}
+                    <Pressable
+                      onPress={() => removeStagedFile(index)}
+                      style={styles.stagedRemove}
+                      hitSlop={8}
+                      accessibilityLabel={`Remove ${file.name}`}
+                      accessibilityRole="button">
+                      <IconSymbol name="xmark.circle.fill" size={16} color="#fff" />
+                    </Pressable>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
           <View style={styles.composerRow}>
+            <Pressable
+              onPress={() => setShowAttachSheet(true)}
+              disabled={sending}
+              style={styles.composerIconButton}
+              hitSlop={8}
+              accessibilityLabel="Attach a photo, video, or file"
+              accessibilityRole="button">
+              <IconSymbol name="plus.circle.fill" size={26} color={Colors[colorScheme].icon} />
+            </Pressable>
             <TextInput
               value={draft}
               onChangeText={setDraft}
@@ -414,13 +661,33 @@ export default function ConversationScreen() {
               multiline
             />
             <Pressable
+              onPress={() => setShowEmojiPicker(true)}
+              style={styles.composerIconButton}
+              hitSlop={8}
+              accessibilityLabel="Insert an emoji"
+              accessibilityRole="button">
+              <IconSymbol name="face.smiling" size={22} color={Colors[colorScheme].icon} />
+            </Pressable>
+            <Pressable
               onPress={handleSend}
-              disabled={sending || !draft.trim()}
-              style={[styles.sendButton, { opacity: sending || !draft.trim() ? 0.4 : 1 }]}>
+              disabled={sending || (!draft.trim() && stagedFiles.length === 0)}
+              style={[styles.sendButton, { opacity: sending || (!draft.trim() && stagedFiles.length === 0) ? 0.4 : 1 }]}>
               <IconSymbol name="paperplane.fill" size={20} color={Colors[colorScheme].tint} />
             </Pressable>
           </View>
         </View>
+
+        <ActionSheet
+          visible={showAttachSheet}
+          onClose={() => setShowAttachSheet(false)}
+          options={[
+            { key: 'media', label: 'Photo or video', icon: 'photo', onPress: handlePickMedia },
+            { key: 'camera', label: 'Take photo or video', icon: 'camera.fill', onPress: handleTakeMedia },
+            { key: 'file', label: 'Choose a file', icon: 'doc', onPress: handlePickFile },
+          ]}
+        />
+
+        <EmojiPickerSheet visible={showEmojiPicker} onClose={() => setShowEmojiPicker(false)} onSelect={insertEmoji} />
 
         {peerId && (
           <ActionSheet
@@ -571,6 +838,34 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     opacity: 0.8,
   },
+  attachmentsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  attachmentsWrapWithText: {
+    marginTop: 6,
+  },
+  attachmentMedia: {
+    width: 220,
+    height: 220,
+    aspectRatio: undefined,
+    borderRadius: 12,
+  },
+  fileChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    maxWidth: 200,
+  },
+  fileChipName: {
+    fontSize: 12.5,
+    flexShrink: 1,
+  },
   reactionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -618,6 +913,41 @@ const styles = StyleSheet.create({
   sendButton: {
     paddingVertical: 8,
     paddingHorizontal: 4,
+  },
+  composerIconButton: {
+    paddingVertical: 8,
+  },
+  uploadStatus: {
+    fontSize: 11.5,
+    opacity: 0.6,
+    marginBottom: 4,
+  },
+  stagedRow: {
+    marginBottom: 8,
+  },
+  stagedRowContent: {
+    gap: 8,
+  },
+  stagedItem: {
+    width: 56,
+    height: 56,
+  },
+  stagedThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stagedVideoTile: {
+    backgroundColor: '#000',
+  },
+  stagedRemove: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 999,
   },
   sheetBackdrop: {
     flex: 1,

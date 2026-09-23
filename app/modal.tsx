@@ -73,7 +73,7 @@ const SECTIONS: ActionSection[] = [
         onPress: () => router.push({ pathname: '/compose-post', params: { from: 'compose', mode: 'poll' } }),
       },
       { key: 'initiative', icon: 'target', title: 'Start an initiative', onPress: () => router.push('/initiatives/create') },
-      { key: 'space', icon: 'building.2.fill', title: 'Create a space', onPress: () => router.push('/spaces/create') },
+      { key: 'club', icon: 'building.2.fill', title: 'Create a club', onPress: () => router.push('/clubs/create') },
     ],
   },
   {

@@ -228,7 +228,7 @@ export default function HubSelectScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ThemedView style={[styles.container, styles.transparentBg]}>
         <AuthBackground />
         <Pressable style={styles.backdrop} onPress={Keyboard.dismiss} />

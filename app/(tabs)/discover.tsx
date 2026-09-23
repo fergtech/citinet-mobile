@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
-import { router, useFocusEffect, useNavigation, type Href } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, useNavigation, type Href } from 'expo-router';
 import { useBottomTabBarHeight, type BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 
 import { EventAtlasLink } from '@/components/event-atlas-link';
@@ -289,6 +289,16 @@ export default function DiscoverScreen() {
   // viewport, so requests spread out as the user actually scrolls instead.
   const filesListRef = useRef<FlatList>(null);
   const scrollOffset = useRef(0);
+  const searchInputRef = useRef<TextInput>(null);
+
+  // A fresh value (Date.now(), not a fixed '1') every time Home's own search
+  // bar pushes here (see app/(tabs)/index.tsx) — lets the effect below tell
+  // "just arrived here wanting to search" apart from "tab regained focus for
+  // some other reason" (backing out of a pushed detail screen, switching
+  // tabs and back), which would otherwise pop the keyboard open again on
+  // every unrelated refocus since this tab stays mounted between visits.
+  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const handledFocusRef = useRef<string | undefined>(undefined);
 
   const [query, setQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
@@ -427,6 +437,20 @@ export default function DiscoverScreen() {
     }, [load])
   );
 
+  // Opens the keyboard on the search field the moment this screen is
+  // actually visible, when arrived at via Home's search bar (see `focus`
+  // above). The short delay lets the push transition finish first — focusing
+  // mid-transition can make the keyboard animate in over a still-moving
+  // screen, or simply not take on some Android devices.
+  useFocusEffect(
+    useCallback(() => {
+      if (!focus || focus === handledFocusRef.current) return;
+      handledFocusRef.current = focus;
+      const t = setTimeout(() => searchInputRef.current?.focus(), 350);
+      return () => clearTimeout(t);
+    }, [focus])
+  );
+
   function handleToggleLike(post: HubPost) {
     if (!session) return;
     const wasLiked = post.my_liked;
@@ -455,7 +479,7 @@ export default function DiscoverScreen() {
     const handle = setTimeout(() => {
       search(session.hub.tunnelUrl, session.token, trimmed)
         .then(setSearchResults)
-        .catch(() => setSearchResults({ posts: [], members: [], spaces: [] }))
+        .catch(() => setSearchResults({ posts: [], members: [], clubs: [] }))
         .finally(() => setSearching(false));
     }, 300);
     return () => clearTimeout(handle);
@@ -574,7 +598,7 @@ export default function DiscoverScreen() {
     searchResults &&
     !searchResults.posts.length &&
     !searchResults.members.length &&
-    !searchResults.spaces.length;
+    !searchResults.clubs.length;
 
   return (
     <ThemedView style={styles.container}>
@@ -587,9 +611,10 @@ export default function DiscoverScreen() {
       <View style={styles.searchWrap}>
         <IconSymbol name="safari.fill" size={16} color={Colors[colorScheme].icon} style={styles.searchIcon} />
         <TextInput
+          ref={searchInputRef}
           value={query}
           onChangeText={setQuery}
-          placeholder="Search people, spaces, posts…"
+          placeholder="Search people, clubs, posts…"
           placeholderTextColor={Colors[colorScheme].icon}
           style={[styles.searchInput, { color: Colors[colorScheme].text }]}
           autoCapitalize="none"
@@ -680,14 +705,14 @@ export default function DiscoverScreen() {
               </>
             )}
 
-            {!!searchResults?.spaces.length && (
+            {!!searchResults?.clubs.length && (
               <>
-                <ThemedText style={[styles.sectionLabel, styles.sectionLabelSpaced]}>Spaces</ThemedText>
-                {searchResults.spaces.map((s) => (
+                <ThemedText style={[styles.sectionLabel, styles.sectionLabelSpaced]}>Clubs</ThemedText>
+                {searchResults.clubs.map((s) => (
                   <Pressable
                     key={s.id}
                     style={styles.hubRow}
-                    onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: s.slug } })}>
+                    onPress={() => router.push({ pathname: '/clubs/[slug]', params: { slug: s.slug } })}>
                     <View style={styles.hubIcon}>
                       <IconSymbol name="person.fill" size={16} color={Brand} />
                     </View>
@@ -911,7 +936,7 @@ export default function DiscoverScreen() {
               {/* Unlike every sibling section's trailing row (only shown past
                   PREVIEW_COUNT, purely for pagination), this one is always
                   visible — the list screen is currently the only way to reach
-                  Initiatives at all (no Home card or Space chip yet), and it
+                  Initiatives at all (no Home card or Club chip yet), and it
                   adds real functionality (status/category filters) worth
                   reaching even with a handful of initiatives. */}
               <Pressable style={styles.seeAllRow} onPress={() => router.push('/initiatives' as Href)}>

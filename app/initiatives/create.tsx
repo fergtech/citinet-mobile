@@ -17,18 +17,19 @@ import { useSession } from '@/lib/session/session-context';
 // duplicate aliases for the same hex — one chip, not two).
 const COLOR_ORDER = Object.keys(INITIATIVE_COLORS).filter((c) => c !== 'grey');
 
-// No 3-step create wizard exists anywhere in this app yet — the Spaces spec
-// (app/spaces/[slug].tsx's "Start an initiative here" row) assumes one, per
+// No 3-step create wizard exists anywhere in this app yet — the Clubs spec
+// (app/clubs/[slug].tsx's "Start an initiative here" row) assumes one, per
 // a design mock this codebase doesn't actually implement. This is a real,
 // single-screen equivalent instead of a decorative multi-step mockup: same
 // POST /api/initiatives the general Initiatives screen would eventually need
-// anyway, just reached from one place for now. spaceId/spaceName (when
-// present) prefill hub_initiative_meta.space_id via createInitiative,
-// exactly the field app/spaces/[slug].tsx's own Initiatives tab filters on.
+// anyway, just reached from one place for now. clubId/clubName (when
+// present) prefill hub_initiative_meta.space_id (still that literal field —
+// see hubService's own ── Clubs ── note) via createInitiative, exactly the
+// field app/clubs/[slug].tsx's own Initiatives tab filters on.
 export default function CreateInitiativeScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
-  const { spaceId, spaceName } = useLocalSearchParams<{ spaceId?: string; spaceName?: string }>();
+  const { clubId, clubName } = useLocalSearchParams<{ clubId?: string; clubName?: string }>();
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState(INITIATIVE_CATEGORY_ORDER[0]);
@@ -58,7 +59,9 @@ export default function CreateInitiativeScreen() {
     setBannerAsset({
       uri: asset.uri,
       name: asset.fileName ?? `initiative-banner-${Date.now()}.jpg`,
-      type: asset.mimeType ?? 'image/jpeg',
+      // `|| ` not `??` — some Android pickers return mimeType as '' (falsy
+      // but not nullish), which would otherwise slip past a ?? fallback.
+      type: asset.mimeType || 'image/jpeg',
     });
   }
 
@@ -77,7 +80,7 @@ export default function CreateInitiativeScreen() {
       goal: goal.trim() || undefined,
       description: description.trim() || undefined,
       color,
-      space_id: spaceId || undefined,
+      space_id: clubId || undefined,
     })
       .then(async (created) => {
         // Banner upload needs a real initiative id first (create-then-upload,
@@ -122,9 +125,9 @@ export default function CreateInitiativeScreen() {
 
       <ScrollView contentContainerStyle={styles.body} automaticallyAdjustKeyboardInsets contentInsetAdjustmentBehavior="automatic">
         {error && <ThemedText style={styles.error}>{error}</ThemedText>}
-        {!!spaceName && (
-          <ThemedText style={styles.spaceNote}>
-            <IconSymbol name="target" size={12} color={Brand} /> Starting under {spaceName}
+        {!!clubName && (
+          <ThemedText style={styles.clubNote}>
+            <IconSymbol name="target" size={12} color={Brand} /> Starting under {clubName}
           </ThemedText>
         )}
 
@@ -252,7 +255,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 12,
   },
-  spaceNote: {
+  clubNote: {
     fontSize: 12.5,
     opacity: 0.6,
     marginBottom: 4,

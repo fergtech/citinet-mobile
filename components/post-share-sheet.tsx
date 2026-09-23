@@ -19,7 +19,7 @@ type Props = {
 };
 
 // The three ways to get a post out of this one screen: rebroadcast it inside
-// the hub itself (space post -> main feed, author/mod-only — reuses the
+// the hub itself (club post -> main feed, author/mod-only — reuses the
 // existing PATCH /api/posts/:id/share-to-feed rather than a new general
 // repost concept, which the backend doesn't have), hand out a public web
 // link with real preview metadata (citinet-web's share-og.js patches the

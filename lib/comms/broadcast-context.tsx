@@ -6,7 +6,10 @@ import { useSession } from '@/lib/session/session-context';
 
 export type BroadcastPhase = 'idle' | 'starting' | 'live' | 'ended';
 export type BroadcastRole = 'host' | 'viewer';
-export type BroadcastAudience = 'hub' | 'space' | 'neighbors';
+// 'club' — client-side rename only, see hubService's own ── Clubs ── note;
+// never sent to the server as this literal string (getCommsToken only ever
+// sends space_slug, never the audience value itself).
+export type BroadcastAudience = 'hub' | 'club' | 'neighbors';
 
 export type BroadcastComment = {
   id: string;
@@ -32,11 +35,12 @@ export type BroadcastState = {
   livekitUrl: string | null;
   title: string;
   audience: BroadcastAudience;
-  // Set only for a space-scoped broadcast (audience === 'space') — threaded
+  // Set only for a club-scoped broadcast (audience === 'club') — threaded
   // to getCommsToken so the server stamps/enforces it on the room itself
-  // (see api/comms.js's own note on POST /api/comms/token). Null for a
-  // plain hub-wide broadcast/room.
-  spaceSlug: string | null;
+  // (see api/comms.js's own note on POST /api/comms/token, still space_slug
+  // there — see hubService's own ── Clubs ── note). Null for a plain
+  // hub-wide broadcast/room.
+  clubSlug: string | null;
   hostId: string | null;
   hostName: string | null;
   // Wall-clock timestamp, not a tick counter — same reasoning as
@@ -71,7 +75,7 @@ const idleState: BroadcastState = {
   livekitUrl: null,
   title: '',
   audience: 'hub',
-  spaceSlug: null,
+  clubSlug: null,
   hostId: null,
   hostName: null,
   startedAt: null,
@@ -87,7 +91,7 @@ const idleState: BroadcastState = {
 
 type BroadcastContextValue = {
   broadcast: BroadcastState;
-  startBroadcast: (args: { title: string; audience: BroadcastAudience; spaceSlug?: string | null }) => void;
+  startBroadcast: (args: { title: string; audience: BroadcastAudience; clubSlug?: string | null }) => void;
   joinAsViewer: (item: LiveCommsItem) => void;
   end: () => void;
   reset: () => void;
@@ -117,7 +121,7 @@ export function BroadcastProvider({ children }: { children: ReactNode }) {
   broadcastRef.current = broadcast;
 
   const startBroadcast = useCallback<BroadcastContextValue['startBroadcast']>(
-    ({ title, audience, spaceSlug }) => {
+    ({ title, audience, clubSlug }) => {
       if (!session) return;
       // Carry forward mic/cam from whatever the setup screen's toggles left
       // them at — spreading idleState wholesale here (its micOn/camOn are
@@ -128,14 +132,14 @@ export function BroadcastProvider({ children }: { children: ReactNode }) {
         phase: 'starting',
         title,
         audience,
-        spaceSlug: spaceSlug ?? null,
+        clubSlug: clubSlug ?? null,
         role: 'host',
         hostId: session.userId,
         hostName: session.displayName,
         micOn: prev.micOn,
         camOn: prev.camOn,
       }));
-      getCommsToken(session.hub.tunnelUrl, session.token, 'broadcast', undefined, title, undefined, spaceSlug ?? undefined)
+      getCommsToken(session.hub.tunnelUrl, session.token, 'broadcast', undefined, title, undefined, clubSlug ?? undefined)
         .then((res) => {
           setBroadcast((prev) =>
             prev.phase === 'starting'
@@ -158,7 +162,7 @@ export function BroadcastProvider({ children }: { children: ReactNode }) {
         phase: 'starting',
         role: 'viewer',
         title: item.title,
-        spaceSlug: item.space_slug ?? null,
+        clubSlug: item.space_slug ?? null,
         hostId: item.host_id,
         hostName: item.host_username,
       });

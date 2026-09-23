@@ -1,9 +1,10 @@
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useScrollToTop } from '@react-navigation/native';
-import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect, type Href } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Linking,
   Platform,
   Pressable,
   RefreshControl,
@@ -15,25 +16,21 @@ import {
 } from 'react-native';
 
 import { useAppDrawer } from '@/components/app-drawer';
-import { LeafletMap } from '@/components/atlas/leaflet-map';
-import { useDiscoverDrawer } from '@/components/discover-drawer';
-import { EventAtlasLink } from '@/components/event-atlas-link';
-import { FeaturedCarousel } from '@/components/featured-carousel';
+import { BrandGradient } from '@/components/brand-gradient';
+import { HubAvatar } from '@/components/hub-avatar';
 import { HubInfoModal } from '@/components/hub-info-modal';
 import { HubMedia } from '@/components/hub-media';
-import { InitiativeUpdateCard, type InitiativeUpdateRow } from '@/components/initiative-update-card';
-import { ListingCard } from '@/components/marketplace/listing-card';
-import { PostRow } from '@/components/post-row';
+import { type InitiativeUpdateRow } from '@/components/initiative-update-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { ColorCycleText } from '@/components/ui/color-cycle-text';
 import { CustomIcon } from '@/components/ui/custom-icon';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
 import { DashboardSkeleton } from '@/components/ui/list-skeleton';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { readCache, writeCache } from '@/lib/api/dataCache';
 import {
-  getFeatured,
   getInitiative,
   getInitiativeActivity,
   getPosts,
@@ -44,12 +41,9 @@ import {
   listInitiatives,
   listMarketplaceListings,
   listMembers,
-  toggleLike,
-  toggleRsvp,
 } from '@/lib/api/hubService';
 import {
   AtlasPin,
-  FeaturedItem,
   HubFile,
   HubMember,
   HubPost,
@@ -57,24 +51,48 @@ import {
   InitiativeTaskSummary,
   MarketplaceListing,
 } from '@/lib/api/types';
-import { flushWriteQueue, voteOrQueue } from '@/lib/api/write-queue';
-import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
-import { distanceMeters, formatDistanceMiles } from '@/lib/atlas/geocoding';
-import { useHubCenter } from '@/lib/atlas/hub-center';
-import { findNearestPanoramaxImage, type PanoramaxImage } from '@/lib/atlas/panoramax';
-import { FILE_KIND_META, fileKind } from '@/lib/files/kind';
+import { flushWriteQueue } from '@/lib/api/write-queue';
+import { fileKind } from '@/lib/files/kind';
 import { useSession } from '@/lib/session/session-context';
-import { formatEventWhen, isPastEvent } from '@/lib/ui/format-event';
 import { isLocalConnection } from '@/lib/ui/is-local-connection';
-import { applyVote } from '@/lib/ui/poll';
-import { usePostConsumption } from '@/lib/ui/post-consumption';
 import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { timeAgo } from '@/lib/ui/time-ago';
 
 // InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
-// the card that renders it — this just builds the array.
+// even though the card itself no longer renders on Home (see the unified
+// activity list below) — fetchInitiativeUpdates still builds this same
+// shape, and that component still renders it on the initiative's own screen.
 
 const HOME_CACHE_KEY = 'home-dashboard';
+
+// The same five commands citinet-web's Dashboard.tsx quick-action row
+// offers (create-post, create-event, add-pin, new-listing, find-people) —
+// matched 1:1, in the same order, so the two feel like the same feature
+// wearing different clothes rather than two different feature sets. The
+// rest of this app's create surface (file upload, poll, initiative, club —
+// see app/modal.tsx's own SECTIONS) stays reachable the way it already was,
+// via the tab bar's center "+" button, same as before this pass. Pushes
+// straight to each editor rather than through app/modal.tsx first, so no
+// `from: 'compose'` param here: that value specifically tells an editor it
+// was reached via the launcher and should dismiss(2) (itself + the
+// launcher) on success — going through it here would pop one screen too
+// many, past Home.
+const QUICK_ACTIONS: { key: string; icon: IconSymbolName; label: string; href: Href }[] = [
+  { key: 'post', icon: 'pencil', label: 'Post', href: '/compose-post' as Href },
+  { key: 'event', icon: 'calendar', label: 'Event', href: '/event-editor' as Href },
+  { key: 'pin', icon: 'mappin.and.ellipse', label: 'Add Pin', href: '/atlas/editor' as Href },
+  { key: 'listing', icon: 'tag.fill', label: 'New Listing', href: '/marketplace/editor' as Href },
+  { key: 'people', icon: 'person.2.fill', label: 'Find People', href: '/discover' as Href },
+];
+
+// Verbatim match of web's greetingForHour, including "Still up" rather than
+// a plain "Good night" for the small hours — same wry touch, same threshold.
+function timeOfDayGreeting(hour: number): string {
+  if (hour < 5) return 'Still up';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
 
 // Everything load() below fetches, cached as one blob (same one-blob-per-
 // screen shape as Feed's own dataCache use) so reopening Home shows the last
@@ -85,13 +103,55 @@ const HOME_CACHE_KEY = 'home-dashboard';
 type HomeCacheData = {
   posts: HubPost[];
   events: HubPost[];
-  featured: FeaturedItem[];
   atlasPins: AtlasPin[];
   files: HubFile[];
   listings: MarketplaceListing[];
   initiativeUpdates: InitiativeUpdateRow[];
   members: HubMember[];
 };
+
+// One card in the "Featured" grid — see the featuredCards memo below.
+type FeaturedCard = {
+  key: string;
+  label: string;
+  icon: IconSymbolName;
+  title: string;
+  timestamp: number;
+  onPress: () => void;
+  // Set when the source item actually carries an uploaded image/video —
+  // that file, not a synthesized fallback (no Atlas Panoramax/map lookup
+  // here, unlike the old dedicated Atlas preview row), rendered as the
+  // card's cover instead of the plain icon-badge layout. mediaIsPublic
+  // mirrors HubMedia's own isPublic prop — true for pin/post media (always
+  // public server-side, same as any post attachment) and file cards,
+  // false-only-possible for a file that's neither is_public nor web_public
+  // (excluded before a card is ever built — see featuredCards below).
+  mediaFileName?: string | null;
+  mediaIsPublic?: boolean;
+};
+
+// A row of the unified "Recent Activity" list — see the activityRows memo
+// below. Either avatarUserId or icon is set, never both: a real per-user
+// avatar when the source item has a resolvable actor, an icon badge when it
+// doesn't (marketplace listings, initiative updates).
+type ActivityRow = {
+  key: string;
+  timestamp: number;
+  onPress: () => void;
+  actorLabel: string;
+  summary: string;
+  avatarUserId?: string | null;
+  avatarName?: string;
+  icon?: IconSymbolName;
+  iconColor?: string;
+};
+
+// web's own Recent Activity slices to 5 (see useActivityFeed.ts) — mobile
+// folds in two more source types (marketplace, initiatives) that web's
+// dashboard doesn't surface at all, so a slightly larger cap keeps all five
+// source types realistically able to show up rather than being crowded out
+// by whichever type happens to post most often.
+const RECENT_ACTIVITY_LIMIT = 8;
 
 // There's no hub-wide "recent activity across all initiatives" endpoint —
 // GET /api/initiatives/:id/activity is per-initiative (see hubService's
@@ -222,258 +282,18 @@ function initiativeActivityHref(initiativeId: string, kind: string, taskId: stri
   return { pathname: '/initiatives/[id]', params: { id: initiativeId } } as unknown as Href;
 }
 
-// Each Home section is a bounded preview with a "View more" link to its own
-// full screen, not an inline expand — keeps the dashboard glanceable and keeps
-// later sections reachable no matter how much content an earlier one has.
-//
-// latitude/longitude are non-optional on AtlasPin — every pin already has a
-// real, working location — so this always renders a genuine preview instead
-// of a plain category-icon swatch, with the exact same priority as the pin
-// detail screen's own banner: uploaded photo, else the nearest Panoramax
-// street-view thumbnail, else a small live map centered on the pin.
-function LatestAtlasRow({
-  pin,
-  meters,
-  tunnelUrl,
-  token,
-}: {
-  pin: AtlasPin;
-  meters: number | null;
-  tunnelUrl: string;
-  token: string;
-}) {
-  const meta = ATLAS_CATEGORIES[pin.category];
-  const [panoramax, setPanoramax] = useState<PanoramaxImage | null>(null);
-
-  // Same "only checked when there's no uploaded photo" guard as pin detail —
-  // a real photo the owner chose always wins, and most pins outside
-  // Panoramax's coverage will simply resolve to null (the common case, not
-  // an error), leaving the map fallback below in place.
-  useEffect(() => {
-    if (pin.image_file_name) return;
-    let cancelled = false;
-    findNearestPanoramaxImage(pin.latitude, pin.longitude).then((match) => {
-      if (!cancelled && match) setPanoramax(match);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [pin.image_file_name, pin.latitude, pin.longitude]);
-
-  return (
-    <Pressable
-      style={styles.atlasLatestRow}
-      onPress={() => router.push({ pathname: '/atlas/[id]', params: { id: pin.id } })}>
-      <View style={styles.atlasLatestPreview}>
-        {pin.image_file_name ? (
-          <HubMedia fileName={pin.image_file_name} tunnelUrl={tunnelUrl} token={token} style={styles.atlasLatestPreviewMedia} />
-        ) : panoramax ? (
-          <>
-            <Image source={{ uri: panoramax.thumbnailUrl }} style={StyleSheet.absoluteFill} contentFit="cover" />
-            {/* etalab-2.0 (Panoramax's imagery license) expects attribution
-                on reuse — same requirement as the pin detail banner, just a
-                smaller tag to fit this narrower box. No "explore" badge
-                here: tapping this row already opens the full pin detail,
-                which offers the real interactive street-view link. */}
-            <View style={styles.atlasLatestPanoramaxCredit}>
-              <ThemedText style={styles.atlasLatestPanoramaxCreditLabel} lightColor="#fff" darkColor="#fff">
-                Panoramax
-              </ThemedText>
-            </View>
-          </>
-        ) : (
-          <>
-            <LeafletMap pins={[pin]} center={[pin.latitude, pin.longitude]} zoom={16} style={StyleSheet.absoluteFill} />
-            {/* Decorative close-up, not interactive — same reasoning as the
-                pin-detail banner's map fallback: this blocks touches from
-                reaching the WebView so the row's own Pressable and the
-                outer ScrollView's scroll gesture keep working instead of
-                the map eating them. */}
-            <View style={StyleSheet.absoluteFill} />
-          </>
-        )}
-      </View>
-      <View style={styles.atlasLatestContent}>
-        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={2}>
-          {pin.title}
-        </ThemedText>
-        <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-          {meta.label} · {timeAgo(pin.created_at)}
-          {meters !== null ? ` · ${formatDistanceMiles(meters)}` : ''}
-        </ThemedText>
-        {!!pin.description?.trim() && (
-          <ThemedText style={styles.atlasLatestDescription} numberOfLines={3}>
-            {pin.description}
-          </ThemedText>
-        )}
-      </View>
-    </Pressable>
-  );
-}
-
-// A compact teaser, not the full PostRow — title/date/location only, no
-// body text/media/RSVP-button/like-comment footer, since the full event
-// content already renders below in Feed (as a normal PostRow, once it's the
-// most recent post). Showing the body here too just duplicated that.
-//
-// Flat row (atlasLatestRow), not a boxed/tinted card — this app's Home rows
-// (Atlas/Files/Discussions) are deliberately chrome-free, full-bleed rows
-// separated by a hairline divider, not card containers; a background-fill
-// box here would break that convention (product ask, re-confirmed after an
-// earlier pass tried exactly that).
-//
-// Taps here go to the Events tab (all upcoming/past events), not this one
-// post's detail screen — Feed's own PostRow below already links straight to
-// that same post, so pointing both rows at the identical destination was
-// redundant. This row's job is "browse what's coming up"; Feed's job is
-// "read this specific post."
-function LatestEventRow({ event }: { event: HubPost }) {
-  return (
-    <Pressable style={styles.atlasLatestRow} onPress={() => router.push('/events' as Href)}>
-      <View style={styles.atlasLatestContent}>
-        <ThemedText style={styles.eventTeaserLabel}>Upcoming</ThemedText>
-        <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, styles.eventTitleLarger]} numberOfLines={2}>
-          {event.title ?? 'Event'}
-        </ThemedText>
-        <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-          {event.event_date ? formatEventWhen(event.event_date, true) : 'Date TBA'}
-          {event.rsvp_count > 0 ? ` · ${event.rsvp_count} going` : ''}
-        </ThemedText>
-        {!!event.event_location && (
-          <EventAtlasLink location={event.event_location} eventTitle={event.title} eventId={event.id} />
-        )}
-      </View>
-    </Pressable>
-  );
-}
-
-// One of up to 3 latest files visible beyond just their owner — is_public
-// (hub) or web_public (anyone with the link). Back to the compact 44px
-// icon/thumb size the very first pass used (the 170-wide bleed-to-edge
-// treatment was for a single-file preview; a 3-row list reads better small).
-// Meta is now just "@uploader · Nh ago" — size/visibility dropped from the
-// line entirely now that the row is this small.
-function FileHomeRow({
-  file,
-  tunnelUrl,
-  token,
-  uploaderUsername,
-}: {
-  file: HubFile;
-  tunnelUrl: string;
-  token: string;
-  uploaderUsername?: string;
-}) {
-  const kind = fileKind(file.file_name, file.mime_type);
-  const meta = FILE_KIND_META[kind];
-  // Only image/video can actually be rendered as a thumbnail (expo-image/expo-video
-  // both need a real visual asset to decode) — everything else keeps the type icon.
-  const hasPreview = kind === 'image' || kind === 'video';
-
-  return (
-    <Pressable
-      style={styles.fileGridCard}
-      onPress={() => router.push({ pathname: '/files/[id]', params: { id: file.file_id } })}>
-      {hasPreview ? (
-        <HubMedia
-          fileName={file.file_name}
-          tunnelUrl={tunnelUrl}
-          token={token}
-          previewSeconds={4}
-          style={styles.fileLatestThumb}
-          isPublic={file.is_public || file.web_public}
-        />
-      ) : (
-        <View style={[styles.fileLatestIcon, { backgroundColor: meta.color }]}>
-          <IconSymbol name={meta.icon} size={18} color="#fff" />
-        </View>
-      )}
-      <View style={styles.fileGridCardContent}>
-        <ThemedText type="defaultSemiBold" style={styles.atlasLatestTitle} numberOfLines={1}>
-          {file.file_name}
-        </ThemedText>
-        <ThemedText style={styles.atlasLatestMeta} numberOfLines={1}>
-          {uploaderUsername ? `@${uploaderUsername} · ` : ''}
-          {timeAgo(file.uploaded_at)}
-        </ThemedText>
-      </View>
-    </Pressable>
-  );
-}
-
-// The section's own trailing "See all files" card — styled and sized
-// (fileGridCard, 48% width) to match FileHomeRow exactly, so it reads as the
-// grid's own 6th cell (truly trailing the file list) rather than a separate
-// full-width row bolted on below it.
-function SeeAllFilesCard() {
-  return (
-    <Pressable style={styles.fileGridCard} onPress={() => router.push('/files?tab=shared' as Href)}>
-      <View style={[styles.fileLatestIcon, { backgroundColor: Brand + '22' }]}>
-        <IconSymbol name="externaldrive.fill" size={18} color={Brand} />
-      </View>
-      <View style={styles.fileGridCardContent}>
-        <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]} numberOfLines={1}>
-          See all files
-        </ThemedText>
-      </View>
-    </Pressable>
-  );
-}
-
-// Same idea as SeeAllFilesCard — the trailing "See all marketplace" card
-// sits inside the horizontal strip itself (marketplaceStripCard's 150px
-// width) as its own last item, so it truly trails the listing strip rather
-// than sitting in a separate full-width row below it. The row's default
-// cross-axis stretch (no explicit height set here) makes it match whatever
-// height the real ListingCards in the strip come out to.
-function SeeAllMarketplaceCard() {
-  return (
-    <Pressable style={[styles.marketplaceStripCard, styles.marketplaceSeeAllCard]} onPress={() => router.push('/marketplace' as Href)}>
-      <View style={[styles.marketplaceSeeAllIcon, { backgroundColor: Brand + '22' }]}>
-        <IconSymbol name="storefront.fill" size={20} color={Brand} />
-      </View>
-      <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]} numberOfLines={1}>
-        See all
-      </ThemedText>
-    </Pressable>
-  );
-}
-
-// Same idea again for Initiatives — sized to match InitiativeUpdateCard's own
-// fixed 150px/3:5 card shape (see components/initiative-update-card.tsx's
-// CARD_WIDTH/aspectRatio) so it sits as the strip's own trailing card rather
-// than a separate row below it.
-function SeeAllInitiativesCard() {
-  return (
-    <Pressable style={styles.initiativeSeeAllCard} onPress={() => router.push('/initiatives' as Href)}>
-      <View style={[styles.initiativeSeeAllIcon, { backgroundColor: Brand + '22' }]}>
-        <CustomIcon name="bullseyeArrow" size={20} color={Brand} />
-      </View>
-      <ThemedText type="defaultSemiBold" style={[styles.atlasLatestTitle, { color: Brand }]} numberOfLines={1}>
-        See all
-      </ThemedText>
-    </Pressable>
-  );
-}
-
 export default function HomeScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, otherSessions, switchToHub } = useSession();
   const appDrawer = useAppDrawer();
-  const discoverDrawer = useDiscoverDrawer();
 
-  const hubCenter = useHubCenter();
   const [posts, setPosts] = useState<HubPost[]>([]);
   const [events, setEvents] = useState<HubPost[]>([]);
-  const [featured, setFeatured] = useState<FeaturedItem[]>([]);
   const [atlasPins, setAtlasPins] = useState<AtlasPin[]>([]);
   const [files, setFiles] = useState<HubFile[]>([]);
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [initiativeUpdates, setInitiativeUpdates] = useState<InitiativeUpdateRow[]>([]);
   const [members, setMembers] = useState<Map<string, HubMember>>(new Map());
-  // Dismissing a featured card only clears it for this session (plain component
-  // state, never persisted) — it comes back next time the user signs in.
-  const [dismissedFeaturedIds, setDismissedFeaturedIds] = useState<Set<string>>(new Set());
   const [showHubInfo, setShowHubInfo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -503,7 +323,6 @@ export default function HomeScreen() {
       if (!cached) return;
       setPosts(cached.posts);
       setEvents(cached.events);
-      setFeatured(cached.featured);
       setAtlasPins(cached.atlasPins);
       setFiles(cached.files);
       setListings(cached.listings);
@@ -537,7 +356,6 @@ export default function HomeScreen() {
       Promise.all([
         getPosts(session.hub.tunnelUrl, session.token),
         getUpcomingEvents(session.hub.tunnelUrl, session.token),
-        getFeatured(session.hub.tunnelUrl, session.token),
         listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
         listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
         // GET /api/marketplace/listings already returns newest-first (see
@@ -551,10 +369,9 @@ export default function HomeScreen() {
         listMembers(session.hub.tunnelUrl, session.token).catch(() => []),
         fetchInitiativeUpdates(session.hub.tunnelUrl, session.token),
       ])
-        .then(([postsPage, nextEvents, nextFeatured, nextPins, nextFiles, nextListings, nextMembers, nextInitiativeUpdates]) => {
+        .then(([postsPage, nextEvents, nextPins, nextFiles, nextListings, nextMembers, nextInitiativeUpdates]) => {
           setPosts(postsPage.posts);
           setEvents(nextEvents);
-          setFeatured(nextFeatured);
           setAtlasPins(nextPins);
           setFiles(nextFiles);
           setListings(nextListings);
@@ -564,7 +381,6 @@ export default function HomeScreen() {
           writeCache(session.hub.slug, HOME_CACHE_KEY, {
             posts: postsPage.posts,
             events: nextEvents,
-            featured: nextFeatured,
             atlasPins: nextPins,
             files: nextFiles,
             listings: nextListings,
@@ -676,323 +492,207 @@ export default function HomeScreen() {
     [setTabBarHidden]
   );
 
-  // Liking/voting/RSVPing the single Discussions preview counts as an
-  // immediate "consumed" signal (see lib/ui/post-consumption.tsx) — opening
-  // it into post/[id] is covered separately, by that screen's own markOpened.
-  const { markEngaged } = usePostConsumption();
-
   // Only iOS's tab bar floats over content (see app/(tabs)/_layout.tsx) —
-  // compensate so the last section doesn't end up hidden behind the glass.
+  // compensate so the list doesn't end up hidden behind the glass.
   const tabBarHeight = useBottomTabBarHeight();
   const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
 
-  function handleToggleLike(post: HubPost) {
-    if (!session) return;
-    markEngaged(post.id);
-    const wasLiked = post.my_liked;
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === post.id ? { ...p, my_liked: !wasLiked, like_count: p.like_count + (wasLiked ? -1 : 1) } : p
-      )
-    );
-    toggleLike(session.hub.tunnelUrl, session.token, post.id).catch(() => {
-      setPosts((prev) =>
-        prev.map((p) => (p.id === post.id ? { ...p, my_liked: wasLiked, like_count: post.like_count } : p))
-      );
-    });
-  }
+  // One card per feature area (Atlas/Posts/Events/Files), each showing
+  // whatever's freshest in that category — the same computed-not-curated
+  // "Featured cards" web Dashboard.tsx builds from its activity feed
+  // (freshest of pin_added / discussion|announcement|project|request /
+  // event / file_shared), not the old admin-curated hub_featured carousel
+  // this replaced. Deliberate: an admin's picks read as top-down and
+  // disconnected from what a given member actually cares about, where "here's
+  // what's freshest in each part of the hub" stays neutral and in the
+  // logged-in member's own frame (product ask, 2026-09-20). Fixed pin/post/
+  // event/file order, same as web — no cross-category ranking, each bucket
+  // just shows its own single freshest item or is skipped if empty.
+  const featuredCards = useMemo<FeaturedCard[]>(() => {
+    const cards: FeaturedCard[] = [];
 
-  function handleDismissFeatured(id: string) {
-    setDismissedFeaturedIds((prev) => new Set(prev).add(id));
-  }
+    const latestPin = [...atlasPins].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+    if (latestPin) {
+      cards.push({
+        key: 'pin',
+        label: 'Latest Atlas Pin',
+        icon: 'mappin.and.ellipse',
+        title: latestPin.title,
+        timestamp: new Date(latestPin.created_at).getTime(),
+        onPress: () => router.push({ pathname: '/atlas/[id]', params: { id: latestPin.id } }),
+        // Only an uploaded photo counts as cover — no Panoramax/map fallback
+        // lookup here, unlike the old dedicated Atlas preview row.
+        mediaFileName: latestPin.image_file_name,
+        mediaIsPublic: true,
+      });
+    }
 
-  const nearestPins = useMemo(() => {
-    return [...atlasPins]
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [atlasPins]);
+    const latestPost = [...posts]
+      .filter((post) => post.category !== 'EVENT')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+    if (latestPost) {
+      cards.push({
+        key: 'post',
+        label: 'Newest Community Post',
+        icon: 'newspaper.fill',
+        title: latestPost.title || latestPost.body?.slice(0, 60) || 'Untitled',
+        timestamp: new Date(latestPost.created_at).getTime(),
+        onPress: () => router.push({ pathname: '/post/[id]', params: { id: latestPost.id } }),
+        // Post attachments are always public server-side (see HubMedia's own
+        // isPublic comment) — same as any PostRow/FeaturedCarousel media.
+        mediaFileName: latestPost.media_file_name,
+        mediaIsPublic: true,
+      });
+    }
 
-  const latestPin = nearestPins[0] ?? null;
-
-  // Home only surfaces a file everyone (or anyone with the link) can actually
-  // see — a private file only its owner can open would be a dead-end tease
-  // for every other neighbor looking at Home. listFiles() already scopes the
-  // response to "mine + is_public" (see hubService), so this only needs to
-  // additionally require is_public/web_public to exclude the caller's own
-  // still-private uploads.
-  const latestPublicFiles = useMemo(() => {
-    const visible = files.filter((f) => f.is_public || f.web_public);
-    // 5, not 6 — the grid's 6th cell is always the trailing "See all files"
-    // card (see SeeAllFilesCard), so this leaves room for it without pushing
-    // the grid to a 4th row.
-    return [...visible].sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()).slice(0, 5);
-  }, [files]);
-
-  // Already newest-first (see hubService's listMarketplaceListings comment),
-  // same slice-without-resorting Discover's own recentListings strip uses.
-  const latestListings = listings.slice(0, 5);
-
-  const latestPost = useMemo(
-    () => [...posts].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null,
-    [posts]
-  );
-
-  const featuredEvent = useMemo(() => {
-    const upcoming = events
-      .filter((event) => event.event_date && !isPastEvent(event.event_date))
-      .sort((a, b) => new Date(a.event_date!).getTime() - new Date(b.event_date!).getTime());
-    if (upcoming.length > 0) return upcoming[0];
-
-    const upcomingIds = new Set(events.map((event) => event.id));
-    return posts
-      .filter((post) => post.category === 'EVENT' && post.event_date && !upcomingIds.has(post.id))
-      .sort((a, b) => new Date(b.event_date!).getTime() - new Date(a.event_date!).getTime())[0] ?? null;
-  }, [events, posts]);
-
-  // Section ordering keys off when a section last got something new, not
-  // what that latest thing happens to be about — so this deliberately uses
-  // created_at (when the event was posted), not event_date (when it's
-  // scheduled to happen). A just-added event pushes the whole Events
-  // section to the top even if it's scheduled a month out; the one actually
-  // displayed there stays featuredEvent (soonest upcoming) as before, this
-  // is only a separate signal for section placement. Same
-  // events + EVENT-category-posts union featuredEvent itself draws from.
-  const eventsLatestAt = useMemo(() => {
+    // Same union as activityRows below — `events` ∪ EVENT-category `posts`
+    // not already in `events`.
     const eventIds = new Set(events.map((event) => event.id));
-    const relevant = [...events, ...posts.filter((post) => post.category === 'EVENT' && !eventIds.has(post.id))];
-    if (relevant.length === 0) return null;
-    return Math.max(...relevant.map((item) => new Date(item.created_at).getTime()));
-  }, [events, posts]);
+    const latestEvent = [...events, ...posts.filter((post) => post.category === 'EVENT' && !eventIds.has(post.id))].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )[0];
+    if (latestEvent) {
+      cards.push({
+        key: 'event',
+        label: 'Recent Event',
+        icon: 'calendar',
+        title: latestEvent.title ?? 'Event',
+        timestamp: new Date(latestEvent.created_at).getTime(),
+        onPress: () => router.push({ pathname: '/post/[id]', params: { id: latestEvent.id } }),
+        mediaFileName: latestEvent.media_file_name,
+        mediaIsPublic: true,
+      });
+    }
 
-  function handleVotePoll(post: HubPost, optionIndex: number) {
-    if (!session) return;
-    markEngaged(post.id);
-    const previousPoll = post.poll;
-    setPosts((prev) => prev.map((item) => (item.id === post.id ? applyVote(item, optionIndex) : item)));
-    voteOrQueue(session.hub.tunnelUrl, session.token, post.id, optionIndex).catch(() => {
-      setPosts((prev) => prev.map((item) => (item.id === post.id ? { ...item, poll: previousPoll } : item)));
-    });
-  }
+    const latestFile = [...files]
+      .filter((file) => file.is_public || file.web_public)
+      .sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime())[0];
+    if (latestFile) {
+      const kind = fileKind(latestFile.file_name, latestFile.mime_type);
+      cards.push({
+        key: 'file',
+        label: 'Newly Shared File',
+        icon: 'doc.text.fill',
+        title: latestFile.file_name,
+        timestamp: new Date(latestFile.uploaded_at).getTime(),
+        onPress: () => router.push({ pathname: '/files/[id]', params: { id: latestFile.file_id } }),
+        // The file itself is the cover, but only when it's actually a
+        // renderable image/video — the same hasPreview gate the old
+        // FileHomeRow used, so a PDF/doc card still falls back to the icon
+        // badge instead of HubMedia failing to decode it as an image.
+        mediaFileName: kind === 'image' || kind === 'video' ? latestFile.file_name : null,
+        mediaIsPublic: latestFile.is_public || latestFile.web_public,
+      });
+    }
 
-  // featuredEvent is derived (useMemo) from posts/events, not its own state
-  // — updating both source lists here is what makes the memo recompute with
-  // the new my_rsvp/rsvp_count, same "apply everywhere it could be" pattern
-  // app/events.tsx uses for its own upcoming/past split.
-  function handleToggleRsvp(event: HubPost) {
-    if (!session) return;
-    markEngaged(event.id);
-    const wasGoing = event.my_rsvp;
-    const apply = (list: HubPost[]) =>
-      list.map((e) => (e.id === event.id ? { ...e, my_rsvp: !wasGoing, rsvp_count: e.rsvp_count + (wasGoing ? -1 : 1) } : e));
-    setPosts(apply);
-    setEvents(apply);
-    toggleRsvp(session.hub.tunnelUrl, session.token, event.id).catch(() => {
-      const rollback = (list: HubPost[]) =>
-        list.map((e) => (e.id === event.id ? { ...e, my_rsvp: wasGoing, rsvp_count: event.rsvp_count } : e));
-      setPosts(rollback);
-      setEvents(rollback);
-    });
-  }
+    return cards;
+  }, [atlasPins, posts, events, files]);
+
+  // One flat, merged, recency-sorted list — the mobile match for web
+  // Dashboard.tsx's own "Recent Activity" (see useActivityFeed.ts there):
+  // every source Home already fetches, folded into the same shape and
+  // capped to RECENT_ACTIVITY_LIMIT, replacing what used to be five
+  // separately labeled/dividered sections below the carousel. Detail stays
+  // one tap away on each feature's own tab; this is a browse surface, not a
+  // duplicate of it.
+  const activityRows = useMemo<ActivityRow[]>(() => {
+    const rows: ActivityRow[] = [];
+
+    // Posts ∪ events, deduped by id — `events` (getUpcomingEvents) can
+    // include upcoming EVENT-category posts outside `posts`' own page, and
+    // `posts` can include EVENT-category posts (past, or beyond that
+    // upcoming set) that aren't in `events` — same union the old
+    // eventsLatestAt memo computed before this list replaced it.
+    const postsById = new Map<string, HubPost>();
+    for (const post of posts) postsById.set(post.id, post);
+    for (const event of events) if (!postsById.has(event.id)) postsById.set(event.id, event);
+
+    for (const post of postsById.values()) {
+      rows.push({
+        key: `post-${post.id}`,
+        timestamp: new Date(post.created_at).getTime(),
+        onPress: () => router.push({ pathname: '/post/[id]', params: { id: post.id } }),
+        actorLabel: post.author_username ? `@${post.author_username}` : 'A neighbor',
+        summary: 'posted',
+        avatarUserId: post.author_id,
+        avatarName: post.author_username ?? '?',
+      });
+    }
+
+    for (const pin of atlasPins) {
+      rows.push({
+        key: `pin-${pin.id}`,
+        timestamp: new Date(pin.created_at).getTime(),
+        onPress: () => router.push({ pathname: '/atlas/[id]', params: { id: pin.id } }),
+        actorLabel: pin.author_username ? `@${pin.author_username}` : 'A neighbor',
+        summary: 'pinned to the Atlas',
+        avatarUserId: pin.author_id,
+        avatarName: pin.author_username ?? '?',
+      });
+    }
+
+    // Same "everyone (or anyone with the link) can actually see it" scope as
+    // the old Files section — is_public (hub) or web_public (anyone with the
+    // link); listFiles() already scopes the response to "mine + is_public".
+    for (const file of files) {
+      if (!file.is_public && !file.web_public) continue;
+      const uploader = members.get(file.owner_id)?.username;
+      rows.push({
+        key: `file-${file.file_id}`,
+        timestamp: new Date(file.uploaded_at).getTime(),
+        onPress: () => router.push({ pathname: '/files/[id]', params: { id: file.file_id } }),
+        actorLabel: uploader ? `@${uploader}` : 'A neighbor',
+        summary: 'shared a file',
+        avatarUserId: file.owner_id,
+        avatarName: uploader ?? '?',
+      });
+    }
+
+    // Marketplace/initiatives have no single per-user actor the way a post,
+    // pin, or file upload does (a listing belongs to a vendor; an initiative
+    // activity row only carries a free-text actor_name, not a resolvable
+    // user id) — an icon badge stands in for the avatar on these two, same
+    // leading-visual slot, just no photo to put there.
+    for (const listing of listings) {
+      rows.push({
+        key: `listing-${listing.id}`,
+        timestamp: new Date(listing.created_at).getTime(),
+        onPress: () => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } }),
+        actorLabel: listing.vendor_name,
+        summary: 'listed an item',
+        icon: 'tag.fill',
+        iconColor: Brand,
+      });
+    }
+
+    for (const update of initiativeUpdates) {
+      rows.push({
+        key: `initiative-${update.entry.id}`,
+        timestamp: new Date(update.entry.created_at).getTime(),
+        onPress: () => router.push(initiativeActivityHref(update.initiativeId, update.entry.kind, update.taskId)),
+        actorLabel: update.initiativeTitle,
+        summary: update.entry.text,
+        icon: 'target',
+        iconColor: Brand,
+      });
+    }
+
+    rows.sort((a, b) => b.timestamp - a.timestamp);
+    return rows.slice(0, RECENT_ACTIVITY_LIMIT);
+  }, [posts, events, atlasPins, files, listings, initiativeUpdates, members]);
 
   if (!session) return null;
 
-  const visibleFeatured = featured.filter((item) => !dismissedFeaturedIds.has(item.id));
-
-  // Sections reorder by recency — whichever one has the most recent new
-  // thing (a post, an event, a pin, a file, a listing, an initiative
-  // update) leads, then the next-most-recent, and so on. FeaturedCarousel
-  // is curated/pinned separately above and isn't part of this ranking.
-  // Discussions always has an entry (even with 0 posts, "No posts yet."
-  // still renders, same as before) so it needs a real sort key too — 0
-  // (oldest possible) rather than being left out, so it naturally settles
-  // to the bottom rather than winning ties against genuinely-empty timestamps.
-  const homeSections: { key: string; latestAt: number; node: ReactNode }[] = [];
-
-  if (featuredEvent) {
-    homeSections.push({
-      key: 'events',
-      latestAt: eventsLatestAt ?? 0,
-      node: (
-        <View style={styles.section} key="events">
-          <ThemedText style={styles.sectionLabel}>Events</ThemedText>
-          <LatestEventRow event={featuredEvent} />
-          <View style={styles.sectionDivider} />
-        </View>
-      ),
-    });
-  }
-
-  if (latestPin) {
-    homeSections.push({
-      key: 'atlas',
-      latestAt: new Date(latestPin.created_at).getTime(),
-      node: (
-        <View style={styles.section} key="atlas">
-          <ThemedText style={styles.sectionLabel}>From the Atlas</ThemedText>
-          <LatestAtlasRow
-            pin={latestPin}
-            meters={hubCenter ? distanceMeters(hubCenter[0], hubCenter[1], latestPin.latitude, latestPin.longitude) : null}
-            tunnelUrl={session.hub.tunnelUrl}
-            token={session.token}
-          />
-          <View style={styles.sectionDivider} />
-        </View>
-      ),
-    });
-  }
-
-  if (latestPublicFiles.length > 0) {
-    homeSections.push({
-      key: 'files',
-      latestAt: new Date(latestPublicFiles[0].uploaded_at).getTime(),
-      node: (
-        <View style={styles.section} key="files">
-          <ThemedText style={styles.sectionLabel}>Latest uploads to {session.hub.name}</ThemedText>
-          <View style={styles.fileGrid}>
-            {latestPublicFiles.map((file) => (
-              <FileHomeRow
-                key={file.file_id}
-                file={file}
-                tunnelUrl={session.hub.tunnelUrl}
-                token={session.token}
-                uploaderUsername={members.get(file.owner_id)?.username}
-              />
-            ))}
-            <SeeAllFilesCard />
-          </View>
-          <View style={styles.sectionDivider} />
-        </View>
-      ),
-    });
-  }
-
-  if (latestListings.length > 0) {
-    homeSections.push({
-      key: 'marketplace',
-      latestAt: new Date(latestListings[0].created_at).getTime(),
-      node: (
-        <View style={styles.section} key="marketplace">
-          <ThemedText style={styles.sectionLabel}>Marketplace</ThemedText>
-          {/* Same horizontal-strip shape as FeaturedCarousel atop the
-              screen — edgeToEdgeScroll cancels the section's own 20px
-              padding so cards start flush at the screen edge, same trick
-              atlasLatestPreview uses for its own full-bleed preview. */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.edgeToEdgeScroll}
-            contentContainerStyle={styles.marketplaceStrip}>
-            {latestListings.map((listing) => (
-              <ListingCard
-                key={listing.id}
-                listing={listing}
-                tunnelUrl={session.hub.tunnelUrl}
-                token={session.token}
-                onPress={() => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } })}
-                style={styles.marketplaceStripCard}
-              />
-            ))}
-            <SeeAllMarketplaceCard />
-          </ScrollView>
-        </View>
-      ),
-    });
-  }
-
-  if (initiativeUpdates.length > 0) {
-    homeSections.push({
-      key: 'initiatives',
-      latestAt: new Date(initiativeUpdates[0].entry.created_at).getTime(),
-      node: (
-        <View style={styles.section} key="initiatives">
-          <ThemedText style={styles.sectionLabel}>Initiatives</ThemedText>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.edgeToEdgeScroll}
-            contentContainerStyle={styles.initiativeStrip}>
-            {initiativeUpdates.map((row) => (
-              <InitiativeUpdateCard
-                key={row.entry.id}
-                row={row}
-                tunnelUrl={session.hub.tunnelUrl}
-                onPress={() => router.push(initiativeActivityHref(row.initiativeId, row.entry.kind, row.taskId))}
-              />
-            ))}
-            <SeeAllInitiativesCard />
-          </ScrollView>
-        </View>
-      ),
-    });
-  }
-
-  homeSections.push({
-    key: 'discussions',
-    latestAt: latestPost ? new Date(latestPost.created_at).getTime() : 0,
-    node: (
-      <View style={styles.feedSection} key="discussions">
-        <ThemedText style={styles.sectionLabel}>Feed</ThemedText>
-        {latestPost && (
-          <PostRow
-            post={latestPost}
-            tunnelUrl={session.hub.tunnelUrl}
-            token={session.token}
-            onToggleLike={handleToggleLike}
-            onVotePoll={handleVotePoll}
-            onToggleRsvp={handleToggleRsvp}
-          />
-        )}
-        {!loading && posts.length === 0 && <ThemedText style={styles.rowMeta}>No posts yet.</ThemedText>}
-      </View>
-    ),
-  });
-
-  homeSections.sort((a, b) => b.latestAt - a.latestAt);
+  const firstName = (session.displayName || session.username).split(' ')[0];
+  const now = new Date();
+  const greeting = timeOfDayGreeting(now.getHours());
+  const dateStr = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const timeStr = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
   const isLocal = isLocalConnection(session.hub.tunnelUrl);
 
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        {/* Tap-to-open fallback for AppDrawer (components/app-drawer.tsx),
-            not just its left-edge swipe — important on Android, where that
-            edge-swipe competes with (and often loses to) the system's own
-            back gesture in gesture-navigation mode, see EDGE_WIDTH's comment
-            there. A button gives Android users a reliable way in regardless
-            of how that gesture race goes. */}
-        <Pressable onPress={appDrawer.toggle} hitSlop={12} accessibilityLabel="Menu" accessibilityRole="button">
-          <IconSymbol name="line.3.horizontal" size={22} color={Colors[colorScheme].text} />
-        </Pressable>
-        <Pressable
-          style={styles.headerTitleRow}
-          onPress={() => setShowHubInfo(true)}
-          accessibilityLabel={`${session.hub.name} hub info`}
-          accessibilityRole="button">
-          <ThemedText type="title" style={styles.headerTitle} numberOfLines={1}>
-            {session.hub.name}
-          </ThemedText>
-          {/* http:// only ever comes from a LAN connection (mDNS-discovered
-              or manually entered, per lib/discovery/nearbyHubs.ts and
-              hub-select.tsx's handleManualConnect) -- every registry/tunnel
-              hub uses https://, so this needs no new plumbing to tell them
-              apart. */}
-          <View style={[styles.connectionBadge, isLocal ? styles.connectionBadgeLocal : styles.connectionBadgeWeb]}>
-            <ThemedText style={[styles.connectionBadgeText, { color: isLocal ? '#22c55e' : Colors[colorScheme].icon }]}>
-              {isLocal ? 'Local' : 'Web'}
-            </ThemedText>
-          </View>
-        </Pressable>
-        {/* Pulled off the tab bar — that slot now shows notifications
-            instead (see app/(tabs)/_layout.tsx) — same CustomIcon "search"
-            vector this button used to render there, just relocated. Opens
-            the experimental right-edge DiscoverDrawer (components/
-            discover-drawer.tsx) instead of navigating to /discover — that
-            screen is still reachable directly (deep link, back-nav), this is
-            just an alternate, non-navigating entry point next to swiping. */}
-        <Pressable onPress={discoverDrawer.toggle} hitSlop={12} accessibilityLabel="Search" accessibilityRole="button">
-          <CustomIcon size={24} name="search" color={Colors[colorScheme].text} />
-        </Pressable>
-      </View>
-
       <HubInfoModal
         visible={showHubInfo}
         onClose={() => setShowHubInfo(false)}
@@ -1002,28 +702,212 @@ export default function HomeScreen() {
         onSwitchHub={switchToHub}
       />
 
-      {/* Only blocks the screen when there's truly nothing to show yet —
-          cache-seeded content (see the readCache effect above) renders
-          immediately and revalidates in the background instead, same as
-          Feed/Post Detail's own pattern. Shaped section placeholders, not a
-          spinner — see components/ui/list-skeleton.tsx. */}
-      {loading && !hasContentRef.current && <DashboardSkeleton />}
-      {error && <ThemedText style={styles.error}>{error}</ThemedText>}
-
+      {/* One unified scroll, header included — re-tapping the Home tab
+          already scrolls back to the very top (useScrollToTop(scrollRef)
+          below), so pinning the header/search/quick-actions outside the
+          scroll bought nothing but a permanent chunk of lost vertical space
+          (product ask, 2026-09-20). */}
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={{ paddingBottom: 24 + extraBottomInset }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
+        // progressViewOffset pushes the spinner down by roughly the header's
+        // own top clearance (see styles.header's paddingTop: 60, same flat
+        // value) — now that the header is the scroll's own first child
+        // instead of sitting fixed above it, an un-offset spinner would
+        // rest right at the very top of the screen (behind the status bar/
+        // notch on both platforms) instead of somewhere actually visible.
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} progressViewOffset={60} />}
         onScroll={handleScroll}
         scrollEventThrottle={16}>
-        <FeaturedCarousel
-          items={visibleFeatured}
-          tunnelUrl={session.hub.tunnelUrl}
-          token={session.token}
-          onDismiss={handleDismissFeatured}
-        />
+        <View style={styles.header}>
+          {/* Tap-to-open fallback for AppDrawer (components/app-drawer.tsx),
+              not just its left-edge swipe — important on Android, where that
+              edge-swipe competes with (and often loses to) the system's own
+              back gesture in gesture-navigation mode, see EDGE_WIDTH's comment
+              there. A button gives Android users a reliable way in regardless
+              of how that gesture race goes. */}
+          <Pressable onPress={appDrawer.toggle} hitSlop={12} accessibilityLabel="Menu" accessibilityRole="button">
+            <IconSymbol name="line.3.horizontal" size={22} color={Colors[colorScheme].text} />
+          </Pressable>
+          <Pressable
+            style={styles.headerTitleRow}
+            onPress={() => setShowHubInfo(true)}
+            accessibilityLabel={`${session.hub.name} hub info`}
+            accessibilityRole="button">
+            <ThemedText type="title" style={styles.headerTitle} numberOfLines={1}>
+              {session.hub.name}
+            </ThemedText>
+            {/* http:// only ever comes from a LAN connection (mDNS-discovered
+                or manually entered, per lib/discovery/nearbyHubs.ts and
+                hub-select.tsx's handleManualConnect) -- every registry/tunnel
+                hub uses https://, so this needs no new plumbing to tell them
+                apart. */}
+            <View style={[styles.connectionBadge, isLocal ? styles.connectionBadgeLocal : styles.connectionBadgeWeb]}>
+              <ThemedText style={[styles.connectionBadgeText, { color: isLocal ? '#22c55e' : Colors[colorScheme].icon }]}>
+                {isLocal ? 'Local' : 'Web'}
+              </ThemedText>
+            </View>
+          </Pressable>
+        </View>
 
-        {homeSections.map((section) => section.node)}
+        <View style={styles.greetingRow}>
+          <ThemedText type="title" style={styles.greetingText} numberOfLines={1}>
+            {greeting}, <ColorCycleText style={styles.greetingText}>{firstName}</ColorCycleText>
+          </ThemedText>
+          <ThemedText style={styles.dateTimeText} numberOfLines={1}>
+            {dateStr} · {timeStr}
+          </ThemedText>
+        </View>
+
+        {/* The one search surface for Home, standing in for the web
+            dashboard's single universal search bar — navigates to the real
+            Discover screen (app/(tabs)/discover.tsx), which already covers
+            posts/events/atlas/marketplace/initiatives/files/people/other hubs
+            with real server-side search. Used to open a separate DiscoverDrawer
+            that duplicated a subset of that same screen; that drawer's gone
+            now (2026-09-20 nav cleanup), so this is a direct navigation, not a
+            toggle. Rendered as a real search-bar shape rather than an icon so
+            it reads as an entry point, not a utility button, same intent as
+            the web version even though this app has no typed command-routing
+            to match its "doubles as a command palette" half. The `focus`
+            param (a fresh timestamp every tap) tells Discover's own screen to
+            open its keyboard the moment it's actually visible — see that
+            screen's own handledFocusRef comment for why it's a changing value
+            and not a fixed '1'. */}
+        <Pressable
+          style={styles.searchBar}
+          onPress={() => router.push({ pathname: '/discover', params: { focus: String(Date.now()) } })}
+          accessibilityLabel="Search"
+          accessibilityRole="button">
+          <CustomIcon size={16} name="search" color={Colors[colorScheme].icon} />
+          <ThemedText style={styles.searchBarPlaceholder} numberOfLines={1}>
+            Search posts, events, pins, people…
+          </ThemedText>
+        </Pressable>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.quickActionsRow}>
+          {QUICK_ACTIONS.map((action) => (
+            <Pressable key={action.key} style={styles.quickActionPill} onPress={() => router.push(action.href)}>
+              <IconSymbol name={action.icon} size={15} color={Colors[colorScheme].text} />
+              <ThemedText style={styles.quickActionLabel}>{action.label}</ThemedText>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {error && <ThemedText style={styles.error}>{error}</ThemedText>}
+
+        {/* Only blocks the body when there's truly nothing to show yet —
+            cache-seeded content (see the readCache effect above) renders
+            immediately and revalidates in the background instead, same as
+            Feed/Post Detail's own pattern. Shaped section placeholders, not a
+            spinner — see components/ui/list-skeleton.tsx. The header/search/
+            quick-actions above render regardless, so menu/hub-switch/search
+            stay reachable even before the first load settles. */}
+        {loading && !hasContentRef.current ? (
+          <DashboardSkeleton />
+        ) : (
+          <>
+            {featuredCards.length > 0 && (
+              <View style={styles.section}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.featuredScroll}
+                  contentContainerStyle={styles.featuredGrid}>
+                  {featuredCards.map((card) =>
+                    card.mediaFileName ? (
+                      // Cover treatment — same idea as the old FeaturedCarousel's
+                      // media cards (full-bleed image/video, dark-scrim
+                      // overlay text), just applied per feature-area card
+                      // instead of an admin-curated one.
+                      <Pressable key={card.key} style={styles.featuredCard} onPress={card.onPress}>
+                        <HubMedia
+                          fileName={card.mediaFileName}
+                          tunnelUrl={session.hub.tunnelUrl}
+                          token={session.token}
+                          isPublic={card.mediaIsPublic}
+                          previewSeconds={4}
+                          style={styles.featuredCardMedia}
+                        />
+                        <LinearGradient
+                          colors={['transparent', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.85)']}
+                          locations={[0, 0.5, 1]}
+                          style={styles.featuredCardScrim}>
+                          <ThemedText style={[styles.featuredCardEyebrow, styles.featuredCardTextOnMedia]}>{card.label}</ThemedText>
+                          <ThemedText
+                            type="defaultSemiBold"
+                            numberOfLines={1}
+                            style={[styles.featuredCardTitle, styles.featuredCardTextOnMedia]}>
+                            {card.title}
+                          </ThemedText>
+                          <ThemedText numberOfLines={1} style={[styles.featuredCardMeta, styles.featuredCardTextOnMedia]}>
+                            {timeAgo(new Date(card.timestamp).toISOString())} · View →
+                          </ThemedText>
+                        </LinearGradient>
+                      </Pressable>
+                    ) : (
+                      <Pressable key={card.key} style={[styles.featuredCard, styles.featuredCardPlainCard]} onPress={card.onPress}>
+                        <BrandGradient style={styles.featuredCardIconBadge}>
+                          <IconSymbol name={card.icon} size={16} color="#fff" />
+                        </BrandGradient>
+                        <ThemedText style={styles.featuredCardEyebrow}>{card.label}</ThemedText>
+                        <ThemedText type="defaultSemiBold" style={styles.featuredCardTitle} numberOfLines={1}>
+                          {card.title}
+                        </ThemedText>
+                        <ThemedText style={styles.featuredCardMeta} numberOfLines={1}>
+                          {timeAgo(new Date(card.timestamp).toISOString())} · View →
+                        </ThemedText>
+                      </Pressable>
+                    )
+                  )}
+                </ScrollView>
+              </View>
+            )}
+
+            <View style={styles.section}>
+              <ThemedText style={styles.sectionLabel}>Recent Activity</ThemedText>
+              {activityRows.length === 0 ? (
+                !loading && <ThemedText style={styles.rowMeta}>No activity yet.</ThemedText>
+              ) : (
+                activityRows.map((row, index) => (
+                  <Pressable
+                    key={row.key}
+                    style={[styles.activityRow, index === activityRows.length - 1 && styles.activityRowLast]}
+                    onPress={row.onPress}>
+                    {row.icon ? (
+                      <View style={[styles.activityIconBadge, { backgroundColor: (row.iconColor ?? Brand) + '22' }]}>
+                        <IconSymbol name={row.icon} size={16} color={row.iconColor ?? Brand} />
+                      </View>
+                    ) : (
+                      <HubAvatar
+                        userId={row.avatarUserId ?? null}
+                        displayName={row.avatarName ?? '?'}
+                        tunnelUrl={session.hub.tunnelUrl}
+                        size={36}
+                      />
+                    )}
+                    <ThemedText numberOfLines={2} style={styles.activityText}>
+                      <ThemedText style={styles.activityActor}>{row.actorLabel} </ThemedText>
+                      {row.summary} <ThemedText style={styles.activityTime}>· {timeAgo(new Date(row.timestamp).toISOString())}</ThemedText>
+                    </ThemedText>
+                  </Pressable>
+                ))
+              )}
+            </View>
+
+            {/* Same footer link as web Dashboard.tsx, same destination — this
+                app's actual public issue tracker, not a placeholder. */}
+            <Pressable
+              style={styles.feedbackLink}
+              onPress={() => Linking.openURL('https://github.com/fergtech/citinet/issues/new/choose')}>
+              <ThemedText style={styles.feedbackLinkText}>Help shape Citinet</ThemedText>
+              <IconSymbol name="chevron.right" size={13} color={Brand} />
+            </Pressable>
+          </>
+        )}
       </ScrollView>
     </ThemedView>
   );
@@ -1077,28 +961,145 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 12,
   },
+  greetingRow: {
+    paddingHorizontal: 20,
+    marginBottom: 14,
+  },
+  greetingText: {
+    fontSize: 24,
+    lineHeight: 29,
+  },
+  dateTimeText: {
+    opacity: 0.5,
+    fontSize: 13,
+    marginTop: 2,
+  },
+  // Hairline border, no fill — same "soft border, no boxed chrome" read as
+  // the rest of Home, not a solid search-field background.
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#8884',
+  },
+  searchBarPlaceholder: {
+    flex: 1,
+    opacity: 0.6,
+    fontSize: 14.5,
+  },
+  quickActionsRow: {
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingBottom: 22,
+  },
+  // Outlined pill, not filled — same reasoning as searchBar above; the
+  // Brand-colored icon carries enough weight against the flat background
+  // without needing a tinted fill behind it.
+  quickActionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#8884',
+  },
+  quickActionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
   section: {
     paddingHorizontal: 20,
     marginBottom: 24,
   },
-  // Narrower than `section` — Feed's PostRow content (body text, media) benefits
-  // from the extra width more than the other home sections do.
-  feedSection: {
-    paddingHorizontal: 10,
-    marginBottom: 24,
+  // Cancels `section`'s own 20px horizontal padding (same trick the old
+  // marketplace/initiative strips used) so cards start flush at the screen
+  // edge instead of inset like the section label above them.
+  featuredScroll: {
+    marginHorizontal: -20,
   },
-  // Closes off a section's content the same way PostRow's own
-  // borderBottomWidth does for a Discussions post (see components/post-row.tsx)
-  // — rendered as a plain sibling directly inside `section` rather than a
-  // border on the content row/grid itself, several of which (atlasLatestRow)
-  // bleed edge-to-edge via a negative margin and would carry the line all
-  // the way to the screen edges if it were a border on them instead. As a
-  // plain child of `section` it inherits that View's own 20px horizontal
-  // padding for its inset, same as sectionLabel above it.
-  sectionDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#8884',
-    marginTop: 14,
+  // Single horizontally-scrollable row, not a wrapped 2-column grid (product
+  // ask, 2026-09-20 — reads as one glanceable strip instead of a block that
+  // pushes the rest of Home down). Hairline-bordered, not web's blurred
+  // glass fill — same "soft border, no boxed chrome" idiom as searchBar/
+  // quickActionPill above.
+  featuredGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 20,
+  },
+  // A fixed pixel height (not aspectRatio) on purpose — the media variant's
+  // only children (HubMedia, the gradient scrim) are both absolutely
+  // positioned, so the Pressable itself has no real intrinsic content size
+  // to size from. aspectRatio + all-absolute children is a genuinely
+  // fragile combination in RN's layout engine (observed directly: it
+  // produced a wildly oversized card with a large blank gap below it, not
+  // the intended 4:5 box) — an explicit height sidesteps that ambiguity
+  // entirely. Both card variants share this same width/height so the strip
+  // reads as one consistent row instead of mismatched card sizes.
+  featuredCard: {
+    width: 150,
+    height: 140,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#8884',
+    overflow: 'hidden',
+  },
+  featuredCardPlainCard: {
+    padding: 12,
+  },
+  featuredCardMedia: {
+    ...StyleSheet.absoluteFillObject,
+    width: undefined,
+    height: undefined,
+    aspectRatio: undefined,
+    borderRadius: 0,
+  },
+  featuredCardScrim: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    padding: 10,
+  },
+  // White + text shadow so the label/title/meta stay legible over whatever
+  // photo/video the card happens to be covering — same treatment
+  // FeaturedCarousel's own overlayTitle/overlayCaption used.
+  featuredCardTextOnMedia: {
+    color: '#fff',
+    opacity: 1,
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
+  },
+  featuredCardIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  featuredCardEyebrow: {
+    fontSize: 10,
+    fontWeight: '700',
+    opacity: 0.55,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  featuredCardTitle: {
+    fontSize: 14,
+    marginTop: 2,
+  },
+  featuredCardMeta: {
+    fontSize: 11.5,
+    opacity: 0.55,
+    marginTop: 3,
   },
   sectionLabel: {
     fontSize: 12,
@@ -1107,194 +1108,54 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 8,
   },
-  atlasLatestRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginHorizontal: -20,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    // Hairline top/bottom separators removed for now (product ask, to see
-    // how the section reads without them) — was borderTopWidth/
-    // borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#8884'.
-  },
-  atlasLatestIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  atlasLatestThumb: {
-    width: 38,
-    height: 38,
-    aspectRatio: undefined,
-    borderRadius: 11,
-  },
-  // Wider than the plain 38px category-icon swatch above — this is a real
-  // preview (photo or live map), not a decorative glyph, so it earns more
-  // room. Started at 170, narrowed to 2/3 of that per product ask.
-  atlasLatestPreview: {
-    width: 113,
-    height: 110,
-    borderRadius: 0,
-    overflow: 'hidden',
-    backgroundColor: '#8882',
-    // Bleeds flush to atlasLatestRow's own top/bottom/left edges, same
-    // treatment (and same reasoning) as fileLatestThumb/fileLatestIcon.
-    marginTop: -14,
-    marginBottom: -14,
-    marginLeft: -20,
-  },
-  atlasLatestPreviewMedia: {
-    width: '100%',
-    height: '100%',
-    aspectRatio: undefined,
-    borderRadius: 0,
-  },
-  fileLatestThumb: {
-    width: 44,
-    height: 44,
-    aspectRatio: undefined,
-    borderRadius: 12,
-  },
-  fileLatestIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  atlasLatestPanoramaxCredit: {
-    position: 'absolute',
-    left: 6,
-    bottom: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 5,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-  },
-  atlasLatestPanoramaxCreditLabel: {
-    fontSize: 9,
-    fontWeight: '600',
-  },
-  atlasLatestContent: {
-    flex: 1,
-    gap: 4,
-  },
-  // atlasLatestTitle is 16/21 (fontSize/lineHeight) -- same +2 bump asked
-  // for here, scoped to just this row.
-  eventTitleLarger: {
-    fontSize: 18,
-    lineHeight: 23,
-  },
-  // Plain text label, not a boxed/pill badge — no background fill on Home
-  // rows, per project convention (see LatestEventRow's own comment).
-  eventTeaserLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Brand,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  atlasLatestTitle: {
-    fontSize: 16,
-    lineHeight: 21,
-  },
-  atlasLatestMeta: {
-    opacity: 0.6,
-    fontSize: 12.5,
-  },
-  atlasLatestDescription: {
-    fontSize: 14,
-    lineHeight: 19,
-    opacity: 0.8,
-  },
   rowMeta: {
     opacity: 0.6,
     fontSize: 13,
   },
-  // 2 columns, up to 6 files (3 rows) — same idea as atlasLatestRow's list
-  // layout, just wrapped instead of stacked, so each card gets its own
-  // (non-bleeding) style rather than reusing the full-width row.
-  fileGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    rowGap: 14,
-  },
-  fileGridCard: {
-    width: '48%',
+  // One flat row per activityRows entry, hairline divider between rows (not
+  // after the last one) — the merged-list version of the same "no boxed/
+  // tinted cards, full-bleed rows" convention the old per-category sections
+  // used, just one list instead of five.
+  activityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: '#8884',
   },
-  fileGridCardContent: {
+  activityRowLast: {
+    borderBottomWidth: 0,
+  },
+  activityIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activityText: {
     flex: 1,
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  activityActor: {
+    fontWeight: '600',
+  },
+  activityTime: {
+    opacity: 0.6,
+  },
+  feedbackLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
+    alignSelf: 'flex-start',
+    marginHorizontal: 20,
+    marginTop: 4,
   },
-  // Cancels the section's own 20px horizontal padding (same trick as
-  // atlasLatestPreview/fileLatestThumb) so the strip's cards start flush at
-  // the screen edge, same as FeaturedCarousel/Discover's own strips.
-  edgeToEdgeScroll: {
-    marginHorizontal: -20,
-  },
-  // No horizontal padding on purpose — matches FeaturedCarousel/Discover's
-  // own strips, which start flush at the exact screen edge (draggable from
-  // the edge, first card touching it) rather than inset like the section
-  // label above it.
-  marketplaceStrip: {
-    gap: 10,
-  },
-  // Smaller than Discover's own marketplaceCard (180px, ListingCard's
-  // default borderRadius: 14) — this strip is a Home preview, not
-  // Discover's full browsing shelf, so a touch narrower and a touch less
-  // rounded reads as the more compact of the two.
-  marketplaceStripCard: {
-    width: 150,
-    borderRadius: 10,
-  },
-  // Combined with marketplaceStripCard above (for matching width/radius) on
-  // SeeAllMarketplaceCard — ListingCard supplies its own backgroundColor via
-  // its base `card` style, which this card has none of on its own, so it
-  // needs one here plus the centered icon+label layout ListingCard doesn't have.
-  marketplaceSeeAllCard: {
-    backgroundColor: '#8881',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 20,
-  },
-  marketplaceSeeAllIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Same edge-to-edge/gap convention as marketplaceStrip above — the cards
-  // themselves (InitiativeUpdateCard) own their own fixed width/aspect ratio.
-  initiativeStrip: {
-    gap: 10,
-  },
-  // Mirrors InitiativeUpdateCard's own fixed 150px width / 3:5 aspect ratio
-  // (hardcoded to match rather than imported — that component doesn't
-  // export its CARD_WIDTH/aspectRatio constants) so this card sits flush
-  // alongside the real ones in the strip.
-  initiativeSeeAllCard: {
-    width: 150,
-    aspectRatio: 3 / 5,
-    borderRadius: 12,
-    backgroundColor: '#8881',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  initiativeSeeAllIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
+  feedbackLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Brand,
   },
 });

@@ -42,7 +42,7 @@ export type InitiativeUpdateRow = {
 // scrim applies over all three cases identically, so the text block reads
 // the same regardless of source. `primaryText` is always shown (the card's
 // main point — an activity sentence for InitiativeUpdateCard below, the
-// initiative's own title for SpaceInitiativeCard); secondary/tertiary are
+// initiative's own title for ClubInitiativeCard); secondary/tertiary are
 // each optional since what's worth surfacing differs by caller.
 function InitiativeCoverCard({
   category: categoryRaw,
@@ -132,14 +132,14 @@ export function InitiativeUpdateCard({
   );
 }
 
-// The same card, retargeted at a Space's own "Initiatives" tab (app/spaces/
+// The same card, retargeted at a Club's own "Initiatives" tab (app/clubs/
 // [slug].tsx) — listing the initiatives themselves, not their activity, so
 // the meta actually shown is different: there's no activity sentence to lead
 // with, so the initiative's own title takes the primary line instead, and
 // status/category/progress (the same facts SpaceInitiativeRow-era rows
 // showed) fill the two lines under it rather than an initiative title +
 // timestamp.
-export function SpaceInitiativeCard({
+export function ClubInitiativeCard({
   initiative,
   tunnelUrl,
   onPress,

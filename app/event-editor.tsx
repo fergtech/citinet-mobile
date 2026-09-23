@@ -106,7 +106,14 @@ export default function EventEditorScreen() {
         event_date: eventDate.toISOString(),
         event_location: location.trim() || undefined,
         media: imageAsset
-          ? { uri: imageAsset.uri, name: imageAsset.fileName ?? `event-photo-${Date.now()}.jpg`, type: imageAsset.mimeType ?? 'image/jpeg' }
+          ? {
+              uri: imageAsset.uri,
+              name: imageAsset.fileName ?? `event-photo-${Date.now()}.jpg`,
+              // `|| ` not `??` — some Android pickers return mimeType as ''
+              // (falsy but not nullish), which would otherwise slip past a
+              // ?? fallback.
+              type: imageAsset.mimeType || 'image/jpeg',
+            }
           : null,
       });
       if (result.queued) {

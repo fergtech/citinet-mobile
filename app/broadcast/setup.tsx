@@ -10,7 +10,7 @@ import { useSession } from '@/lib/session/session-context';
 
 const AUDIENCE_OPTIONS: { value: BroadcastAudience; label: string }[] = [
   { value: 'hub', label: 'Whole hub' },
-  { value: 'space', label: 'A space' },
+  { value: 'club', label: 'A club' },
   { value: 'neighbors', label: 'Neighbors' },
 ];
 
@@ -19,21 +19,21 @@ const AUDIENCE_OPTIONS: { value: BroadcastAudience; label: string }[] = [
 // tapping a LiveCard on the Messages screen (see BroadcastProvider's
 // joinAsViewer), never through here.
 //
-// `spaceSlug`/`spaceName` params arrive only when opened from a space's own
-// Broadcast button (app/spaces/[slug].tsx) — same screen, same flow, just
+// `clubSlug`/`clubName` params arrive only when opened from a club's own
+// Broadcast button (app/clubs/[slug].tsx) — same screen, same flow, just
 // with the audience already decided instead of picked from the generic
 // hub-wide row below: there's nothing to "choose" (you're already in that
-// space), and until this param existed AUDIENCE_OPTIONS' own 'space' entry
-// was just a label with no actual space behind it.
+// club), and until this param existed AUDIENCE_OPTIONS' own 'club' entry
+// was just a label with no actual club behind it.
 export default function BroadcastSetupScreen() {
   const { session } = useSession();
   const { broadcast, startBroadcast, toggleMic, toggleCam } = useBroadcast();
-  const { spaceSlug, spaceName } = useLocalSearchParams<{ spaceSlug?: string; spaceName?: string }>();
-  const [title, setTitle] = useState(spaceSlug && spaceName ? `Live from ${spaceName}` : '');
-  const [audience, setAudience] = useState<BroadcastAudience>(spaceSlug ? 'space' : 'hub');
+  const { clubSlug, clubName } = useLocalSearchParams<{ clubSlug?: string; clubName?: string }>();
+  const [title, setTitle] = useState(clubSlug && clubName ? `Live from ${clubName}` : '');
+  const [audience, setAudience] = useState<BroadcastAudience>(clubSlug ? 'club' : 'hub');
 
   function handleGoLive() {
-    startBroadcast({ title: title.trim() || 'Live broadcast', audience, spaceSlug });
+    startBroadcast({ title: title.trim() || 'Live broadcast', audience, clubSlug });
     router.back();
   }
 
@@ -75,13 +75,13 @@ export default function BroadcastSetupScreen() {
         <ThemedText style={styles.sectionLabel} lightColor="rgba(255,255,255,0.6)" darkColor="rgba(255,255,255,0.6)">
           Who can watch
         </ThemedText>
-        {spaceSlug ? (
+        {clubSlug ? (
           // Fixed, not a picker — there's nothing to choose here, this
-          // screen was opened from that space's own Broadcast button.
+          // screen was opened from that club's own Broadcast button.
           <View style={[styles.audiencePill, styles.audiencePillActive, styles.audiencePillFixed]}>
             <IconSymbol name="building.2.fill" size={13} color="#fff" />
             <ThemedText style={[styles.audiencePillLabel, styles.audiencePillLabelActive]} lightColor="#fff" darkColor="#fff">
-              {spaceName || 'This space'}
+              {clubName || 'This club'}
             </ThemedText>
           </View>
         ) : (
@@ -197,7 +197,7 @@ const styles = StyleSheet.create({
   audiencePillActive: {
     backgroundColor: '#DC2B2B',
   },
-  // Only used for the fixed space-scoped indicator above — the icon needs
+  // Only used for the fixed club-scoped indicator above — the icon needs
   // row layout the plain text-only pills below don't.
   audiencePillFixed: {
     flexDirection: 'row',

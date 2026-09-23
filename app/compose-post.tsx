@@ -33,7 +33,10 @@ function defaultMediaName(asset: ImagePicker.ImagePickerAsset): string {
 }
 
 function defaultMediaType(asset: ImagePicker.ImagePickerAsset): string {
-  return asset.mimeType ?? (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
+  // `|| ` not `??` — some Android pickers return mimeType as '' (falsy but
+  // not nullish), which would otherwise slip past a ?? fallback and get
+  // stored server-side as a mimeType-less, unclassifiable file.
+  return asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
 }
 
 function formatDate(d: Date): string {

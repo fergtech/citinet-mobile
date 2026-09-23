@@ -24,6 +24,7 @@ const MAPPING = {
   'message.fill': 'chat-bubble',
   'person.fill': 'person',
   'xmark': 'close',
+  'xmark.circle.fill': 'cancel',
   'checkmark.circle.fill': 'check-circle',
   'circle': 'radio-button-unchecked',
   'calendar': 'event',
@@ -137,6 +138,9 @@ const MAPPING = {
   // Space category badges (Discover filter chips)
   'figure.and.child.holdinghands': 'family-restroom',
   'dumbbell.fill': 'fitness-center',
+  // Message composer (attach menu + emoji picker triggers)
+  'plus.circle.fill': 'add-circle',
+  'face.smiling': 'emoji-emotions',
 } as IconMapping;
 
 /**

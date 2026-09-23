@@ -143,7 +143,9 @@ export default function InitiativeDetailScreen() {
       await uploadInitiativeBanner(session.hub.tunnelUrl, session.token, initiative.id, {
         uri: asset.uri,
         name: asset.fileName ?? `initiative-banner-${Date.now()}.jpg`,
-        type: asset.mimeType ?? 'image/jpeg',
+        // `|| ` not `??` — some Android pickers return mimeType as '' (falsy
+        // but not nullish), which would otherwise slip past a ?? fallback.
+        type: asset.mimeType || 'image/jpeg',
       });
       load();
     } catch (err) {

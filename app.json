@@ -63,6 +63,7 @@
       "favicon": "./assets/images/apple-touch-icon.png"
     },
     "plugins": [
+      "react-native-quick-crypto",
       "expo-router",
       [
         "expo-splash-screen",

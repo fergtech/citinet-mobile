@@ -24,7 +24,7 @@ export function notificationIcon(type: NotificationType): { icon: IconSymbolName
 // same substance) but trimmed for a compact list row — that function's
 // output is a full email subject+line, this is a title + optional subtitle.
 // Subtitle is genuinely optional: omitted wherever showing one would need an
-// extra per-row fetch (the space/initiative/post's own name/title isn't on
+// extra per-row fetch (the club/initiative/post's own name/title isn't on
 // the notification row itself, only its id) rather than faked.
 export function notificationCopy(n: HubNotification, hubName: string): { title: string; subtitle?: string } {
   const actor = n.actor_username ? `@${n.actor_username}` : 'Someone';
@@ -34,7 +34,7 @@ export function notificationCopy(n: HubNotification, hubName: string): { title: 
     case 'reply':
       return { title: `${actor} replied to your post` };
     case 'space_invite':
-      return { title: `${actor} invited you to a Space` };
+      return { title: `${actor} invited you to a Club` };
     case 'initiative_invite':
       return { title: `${actor} invited you to a project` };
     case 'join_request':
@@ -61,8 +61,8 @@ export function notificationHref(n: HubNotification): Href | null {
     case 'reply':
       return n.ref_id ? ({ pathname: '/post/[id]', params: { id: n.ref_id } } as Href) : null;
     case 'space_invite':
-      // ref_id is the space's slug, not an id — see HubNotification's own note.
-      return n.ref_id ? ({ pathname: '/spaces/[slug]', params: { slug: n.ref_id } } as Href) : null;
+      // ref_id is the club's slug, not an id — see HubNotification's own note.
+      return n.ref_id ? ({ pathname: '/clubs/[slug]', params: { slug: n.ref_id } } as Href) : null;
     case 'initiative_invite':
       return n.ref_id ? ({ pathname: '/initiatives/[id]', params: { id: n.ref_id } } as Href) : null;
     case 'join_request':

@@ -61,7 +61,7 @@ export default function E2EUnlockScreen() {
     // through, not just this screen's.
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ThemedView style={styles.container}>
         <View style={styles.header}>
         <ThemedText type="title" style={styles.headerTitle}>

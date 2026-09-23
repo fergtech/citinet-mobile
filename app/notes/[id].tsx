@@ -191,7 +191,7 @@ export default function NoteEditorScreen() {
     // ThemedView's) sits behind the keyboard's rounded top corners.
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ThemedView style={styles.flex}>
         <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Cancel" accessibilityRole="button">

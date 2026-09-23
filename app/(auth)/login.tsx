@@ -83,7 +83,7 @@ export default function LoginScreen() {
   }
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ThemedView style={[styles.container, styles.transparentBg]}>
         <AuthBackground />
         {/* Dismisses the keyboard on any tap that isn't itself a touchable

@@ -116,9 +116,9 @@ function RootNavigator() {
         <Stack.Screen name="initiatives/[id]/roles" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/resources" options={{ headerShown: false }} />
         <Stack.Screen name="initiatives/[id]/updates" options={{ headerShown: false }} />
-        <Stack.Screen name="spaces/index" options={{ headerShown: false }} />
-        <Stack.Screen name="spaces/[slug]" options={{ headerShown: false }} />
-        <Stack.Screen name="spaces/create" options={{ headerShown: false }} />
+        <Stack.Screen name="clubs/index" options={{ headerShown: false }} />
+        <Stack.Screen name="clubs/[slug]" options={{ headerShown: false }} />
+        <Stack.Screen name="clubs/create" options={{ headerShown: false }} />
         <Stack.Screen name="conversation/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="call/setup" options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="broadcast/setup" options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'fade' }} />

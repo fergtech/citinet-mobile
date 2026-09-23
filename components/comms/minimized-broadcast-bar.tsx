@@ -5,7 +5,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useBroadcast } from '@/lib/comms/broadcast-context';
 import { formatCallDuration, useElapsedSeconds } from '@/lib/comms/use-elapsed';
 
-// Shared between app/(tabs)/messages.tsx and app/spaces/[slug].tsx — a
+// Shared between app/(tabs)/messages.tsx and app/clubs/[slug].tsx — a
 // minimized broadcast (this device's own, host or viewer) can be restored
 // from either screen, not just wherever it happened to be minimized from.
 // Own component, not inlined into either caller, so the elapsed-seconds

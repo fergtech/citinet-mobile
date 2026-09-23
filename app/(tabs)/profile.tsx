@@ -13,14 +13,14 @@ import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { HubAvatar } from '@/components/hub-avatar';
-import { SpaceAvatar } from '@/components/space-avatar';
+import { ClubAvatar } from '@/components/club-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { listMySpaces } from '@/lib/api/hubService';
-import { Space } from '@/lib/api/types';
+import { listMyClubs } from '@/lib/api/hubService';
+import { Club } from '@/lib/api/types';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { useThemePreference } from '@/lib/ui/theme-preference';
@@ -29,7 +29,7 @@ import { useSession } from '@/lib/session/session-context';
 
 // The Profile tab's own full screen — identity up top, then a Settings
 // section. See app/profile/[userId].tsx for the other-member equivalent
-// (identity + a Message CTA + its own "Shared spaces" strip, no Settings).
+// (identity + a Message CTA + its own "Shared clubs" strip, no Settings).
 export default function ProfileScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, signOut } = useSession();
@@ -38,15 +38,16 @@ export default function ProfileScreen() {
   const tabBarHeight = useBottomTabBarHeight();
   const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
 
-  // "Your spaces" — GET /api/spaces/mine already scopes to active
-  // memberships only, no client-side filtering needed. Own-profile
-  // equivalent of the other-member screen's "Shared spaces" strip.
-  const [mySpaces, setMySpaces] = useState<Space[]>([]);
+  // "Your clubs" — GET /api/spaces/mine already scopes to active
+  // memberships only, no client-side filtering needed (still that literal
+  // route — see hubService's own ── Clubs ── note). Own-profile equivalent
+  // of the other-member screen's "Shared clubs" strip.
+  const [myClubs, setMyClubs] = useState<Club[]>([]);
   useFocusEffect(
     useCallback(() => {
       if (!session) return;
-      listMySpaces(session.hub.tunnelUrl, session.token)
-        .then(setMySpaces)
+      listMyClubs(session.hub.tunnelUrl, session.token)
+        .then(setMyClubs)
         .catch(() => {});
     }, [session])
   );
@@ -119,7 +120,7 @@ export default function ProfileScreen() {
           </ThemedText>
         </View>
 
-        {/* Content features (Notes/Files/Saved pins now; Spaces/Initiatives
+        {/* Content features (Notes/Files/Saved pins now; Clubs/Initiatives
             will join this group later) — kept separate from Settings below,
             same grouping treatment as the "Leave hub" section. */}
         <View style={styles.section}>
@@ -150,18 +151,18 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
 
-        {mySpaces.length > 0 && (
+        {myClubs.length > 0 && (
           <>
-            <ThemedText style={styles.sectionLabel}>Your spaces</ThemedText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.spacesStrip}>
-              {mySpaces.map((space) => (
+            <ThemedText style={styles.sectionLabel}>Your clubs</ThemedText>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.clubsStrip}>
+              {myClubs.map((club) => (
                 <Pressable
-                  key={space.id}
-                  onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: space.slug } })}
-                  style={styles.spaceItem}>
-                  <SpaceAvatar space={space} size={38} showBanner tunnelUrl={session.hub.tunnelUrl} />
-                  <ThemedText style={styles.spaceItemLabel} numberOfLines={1}>
-                    {space.name}
+                  key={club.id}
+                  onPress={() => router.push({ pathname: '/clubs/[slug]', params: { slug: club.slug } })}
+                  style={styles.clubItem}>
+                  <ClubAvatar club={club} size={38} showBanner tunnelUrl={session.hub.tunnelUrl} />
+                  <ThemedText style={styles.clubItemLabel} numberOfLines={1}>
+                    {club.name}
                   </ThemedText>
                 </Pressable>
               ))}
@@ -278,17 +279,17 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
   },
-  spacesStrip: {
+  clubsStrip: {
     paddingHorizontal: 20,
     gap: 16,
     marginBottom: 24,
   },
-  spaceItem: {
+  clubItem: {
     alignItems: 'center',
     width: 64,
     gap: 6,
   },
-  spaceItemLabel: {
+  clubItemLabel: {
     fontSize: 11.5,
     textAlign: 'center',
   },

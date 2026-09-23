@@ -1,10 +1,10 @@
 import { Pressable, StyleSheet, View } from 'react-native';
-import { router } from 'expo-router';
 
 import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { goBack } from '@/lib/ui/go-back';
 
 export function ScreenHeader({
   title,
@@ -43,7 +43,7 @@ export function ScreenHeader({
   const colorScheme = useColorScheme() ?? 'light';
   return (
     <View style={styles.header}>
-      <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
+      <Pressable onPress={() => goBack()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">
         <IconSymbol name="chevron.left" size={24} color={Colors[colorScheme].text} />
       </Pressable>
       <Pressable

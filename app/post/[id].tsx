@@ -223,7 +223,7 @@ export default function PostDetailScreen() {
 
   // Reading the full post on its own screen is the strongest "consumed"
   // signal there is — no dwell timer needed, mark it the moment this screen
-  // is focused (covers every path in: Feed, Home, Discover, Spaces, Events,
+  // is focused (covers every path in: Feed, Home, Discover, Clubs, Events,
   // a deep link, all funnel through this one screen).
   const { markOpened } = usePostConsumption();
   useFocusEffect(useCallback(() => markOpened(id), [id, markOpened]));
@@ -323,7 +323,7 @@ export default function PostDetailScreen() {
     // surface (Colors[colorScheme].background) whenever the keyboard was up.
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: Colors[colorScheme].background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ThemedView style={styles.flex}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} hitSlop={12} accessibilityLabel="Back" accessibilityRole="button">

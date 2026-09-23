@@ -119,10 +119,23 @@ export default function AtlasScreen() {
     if (!query.trim()) setSearchedLocation(null);
   }, [query]);
 
+  // A search result within 100m of a pin that already exists opens that pin
+  // directly instead of treating the spot as empty — mirrors web's own
+  // dedup (AtlasScreen.tsx checks the same 100m radius at every "travel to a
+  // place" call site: search select, and a deep-linked location).
+  function findNearbyPin(lat: number, lng: number): AtlasPin | null {
+    return pins.find((p) => distanceMeters(lat, lng, p.latitude, p.longitude) <= 100) ?? null;
+  }
+
   function travelTo(lat: number, lng: number, label: string) {
-    setSearchedLocation({ lat, lng, label });
     setShowSuggestions(false);
     Keyboard.dismiss();
+    const nearby = findNearbyPin(lat, lng);
+    if (nearby) {
+      router.push({ pathname: '/atlas/[id]', params: { id: nearby.id } });
+      return;
+    }
+    setSearchedLocation({ lat, lng, label });
   }
 
   // Picking a suggestion travels the map there immediately — the query text
@@ -159,9 +172,16 @@ export default function AtlasScreen() {
     const q = queryParam?.trim();
     if (!q) return;
     geocodeLocation(q, hubCenter ?? undefined).then((coords) => {
-      if (coords) setSearchedLocation({ lat: coords[0], lng: coords[1], label: q });
+      if (!coords) return;
+      const nearby = findNearbyPin(coords[0], coords[1]);
+      if (nearby) {
+        router.push({ pathname: '/atlas/[id]', params: { id: nearby.id } });
+        return;
+      }
+      setSearchedLocation({ lat: coords[0], lng: coords[1], label: q });
     });
-  }, [queryParam, hubCenter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryParam, hubCenter, pins]);
 
   // Deep-links straight into a pre-filled "New pin" — coordinates and title
   // already known, all that's left is category/description/photo. Same

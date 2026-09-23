@@ -7,8 +7,8 @@ import { Brand } from '@/constants/theme';
 import { LiveCommsItem } from '@/lib/api/types';
 
 // Shared between app/(tabs)/messages.tsx's own "Live now" strip (hub-wide)
-// and app/spaces/[slug].tsx's (space-scoped, via listLiveComms's own
-// spaceSlug param) — same card either way, just fed a different list.
+// and app/clubs/[slug].tsx's (club-scoped, via listLiveComms's own
+// clubSlug param) — same card either way, just fed a different list.
 //
 // No preview thumbnail exists for a room's stream (would mean subscribing
 // to every live card's video just to render a list, expensive for what's

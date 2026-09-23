@@ -1,28 +1,19 @@
 import * as Haptics from 'expo-haptics';
 import { router, type Href } from 'expo-router';
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  Easing,
-  interpolate,
-  interpolateColor,
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { Easing, interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CitinetAboutModal } from '@/components/citinet-about-modal';
 import { ThemedText } from '@/components/themed-text';
+import { ColorCycleText } from '@/components/ui/color-cycle-text';
 import { CustomIcon } from '@/components/ui/custom-icon';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSession } from '@/lib/session/session-context';
-import { useDrawerCoordinator } from '@/lib/ui/drawer-coordinator';
 
 // Only this strip at the physical left edge can start opening it. Wider on
 // Android: a narrow strip there loses the touch to Android's own system
@@ -43,43 +34,14 @@ const COMMIT_RATIO = 0.4;
 const FLING_VELOCITY = 800;
 const SETTLE_DURATION_MS = 240;
 
-// Same trio as components/ambient-glow.tsx's ORBS — reused here (rather than
-// the blue/purple/cyan/teal/pink first floated) so the wordmark pulls from
-// the same brand palette as the rest of the app's ambient motion.
-const WORDMARK_PALETTE = ['#ff9f43', '#8b5cf6', '#ef4444'];
-const WORDMARK_INPUT_RANGE = [...Array(WORDMARK_PALETTE.length + 1).keys()]; // [0,1,2,3]
-const WORDMARK_OUTPUT_RANGE = [...WORDMARK_PALETTE, WORDMARK_PALETTE[0]]; // loop back matches start
-const WORDMARK_CYCLE_MS = 6000;
-
 // The "Citinet" header label's animated counterpart to a plain ThemedText —
-// its color continuously cycles through WORDMARK_PALETTE (interpolateColor)
-// rather than resting on one fixed brand color. Uses Reanimated's own
-// Animated.Text directly (not a wrapped ThemedText, and nothing inside an
-// SVG <Defs> the way the About row icon almost got animated) — Text is a
-// real host component Reanimated forwards a ref to safely, unlike SVG's
-// Stop/LinearGradient defs, which don't render a host view at all and crash
-// on unmount ("Cannot find host instance for this component") when wrapped
-// with Animated.createAnimatedComponent.
+// see components/ui/color-cycle-text.tsx for the effect itself (also used
+// by Home's own greeting now, for the signed-in user's name).
 function CitinetWordmark() {
-  const hue = useSharedValue(0);
-
-  useEffect(() => {
-    hue.value = withRepeat(
-      withTiming(WORDMARK_PALETTE.length, { duration: WORDMARK_CYCLE_MS, easing: Easing.linear }),
-      -1,
-      false
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    color: interpolateColor(hue.value % WORDMARK_PALETTE.length, WORDMARK_INPUT_RANGE, WORDMARK_OUTPUT_RANGE),
-  }));
-
   return (
-    <Animated.Text style={[styles.logoLabel, animatedStyle]} accessibilityRole="header">
+    <ColorCycleText style={styles.logoLabel} accessibilityRole="header">
       citinet
-    </Animated.Text>
+    </ColorCycleText>
   );
 }
 
@@ -116,7 +78,7 @@ export function useAppDrawer(): AppDrawerContextValue {
  * a full-screen modal like call setup.
  *
  * Holds only destinations that don't already have bottom-tab real estate
- * (Atlas, Initiatives, Events, Feed, Files, Spaces, About) -- Home/Discover/Messages/
+ * (Atlas, Initiatives, Events, Feed, Files, Clubs, About) -- Home/Discover/Messages/
  * Profile staying out of here is deliberate, so this doesn't become a
  * second, redundant navigation surface. "About" opens CitinetAboutModal
  * (about Citinet itself, not this hub) instead of a route -- there's no
@@ -128,7 +90,6 @@ export function AppDrawer({ children }: { children: ReactNode }) {
   const colorScheme = useColorScheme() ?? 'light';
   const insets = useSafeAreaInsets();
   const { session } = useSession();
-  const { activeDrawer, notifyOpened, notifyClosed, canOpen } = useDrawerCoordinator();
   const [open, setOpen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const translateX = useSharedValue(0);
@@ -136,18 +97,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
   function setOpenJS(next: boolean) {
     if (next !== open && Platform.OS === 'ios') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setOpen(next);
-    if (next) notifyOpened('app');
-    else notifyClosed('app');
   }
-
-  // DiscoverDrawer (right edge) opening while this one is already open --
-  // force it shut so the two can never both be visible/mid-gesture at once
-  // (mutual exclusion is otherwise just "whoever's edge gesture fires
-  // second wins", which is how the overlapping-backdrops bug happened).
-  useEffect(() => {
-    if (activeDrawer === 'discover' && open) close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDrawer]);
 
   // withTiming + a plain ease-out, not withSpring -- a spring here (even a
   // fairly damped one) still overshoots past its target and settles back,
@@ -184,7 +134,6 @@ export function AppDrawer({ children }: { children: ReactNode }) {
     // needs to be out of the way underneath it, not perfectly choreographed.
     translateX.value = withTiming(0, { duration: 150 });
     setOpen(false);
-    notifyClosed('app');
     router.push(href);
   }
 
@@ -193,13 +142,9 @@ export function AppDrawer({ children }: { children: ReactNode }) {
   // technique every edge-swipe-drawer implementation uses. activeOffsetX(10)
   // (positive-only) means it only ever recognizes a rightward drag --
   // opening, never closing -- so it can't fight the close gesture below.
-  // .enabled(canOpen('app')) additionally shuts this off entirely while
-  // DiscoverDrawer is open, so a left-edge swipe can't fight its way in
-  // mid-gesture on the other drawer.
   const edgePan = Gesture.Pan()
     .activeOffsetX(10)
     .failOffsetY([-15, 15])
-    .enabled(canOpen('app'))
     .onUpdate((e) => {
       translateX.value = Math.min(DRAWER_WIDTH, Math.max(0, e.translationX));
     })
@@ -263,11 +208,11 @@ export function AppDrawer({ children }: { children: ReactNode }) {
         <DrawerRow icon={<IconSymbol name="newspaper.fill" size={26} color={rowColor} />} label="Feed" onPress={() => go('/feed')} />
         <DrawerRow icon={<CustomIcon name="filesGlyph" size={26} color={rowColor} />} label="Files" onPress={() => go('/files')} />
         {/* `as Href` — expo-router's generated route types (.expo/types)
-            haven't picked up this new index route as the bare `/spaces` yet,
-            only `/spaces/index`; same situation initiatives/index.tsx notes
+            haven't picked up this new index route as the bare `/clubs` yet,
+            only `/clubs/index`; same situation initiatives/index.tsx notes
             for its own not-yet-typed push. Drop the cast once the dev
             server's next typegen pass resolves it. */}
-        <DrawerRow icon={<IconSymbol name="square.grid.2x2" size={26} color={rowColor} />} label="Spaces" onPress={() => go('/spaces' as Href)} />
+        <DrawerRow icon={<IconSymbol name="square.grid.2x2" size={26} color={rowColor} />} label="Clubs" onPress={() => go('/clubs' as Href)} />
         <View style={styles.divider} />
         <DrawerRow
           icon={<IconSymbol name="info.circle" size={26} color={rowColor} />}
@@ -281,14 +226,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
 
       <Animated.View style={[styles.flex, contentStyle]}>
         {children}
-        {/* activeDrawer === 'app' on top of `open` (not just `open` alone) --
-            when DiscoverDrawer takes over, the coordinator's activeDrawer
-            flips to 'discover' in the same render that triggers this
-            drawer's own close effect, one render ahead of `open` itself
-            catching up. Gating on both means this overlay unmounts in that
-            same render instead of lagging an extra frame behind, so the two
-            drawers' overlays can never both be mounted at once. */}
-        {open && activeDrawer === 'app' && (
+        {open && (
           <GestureDetector gesture={closeGesture}>
             <Animated.View style={[StyleSheet.absoluteFill, styles.overlay, overlayStyle]} />
           </GestureDetector>

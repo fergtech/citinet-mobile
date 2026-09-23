@@ -9,6 +9,14 @@ const EXT_KIND: Record<string, FileKind> = {
   xls: 'sheet', xlsx: 'sheet', csv: 'sheet', ods: 'sheet',
   ppt: 'slides', pptx: 'slides', key: 'slides', odp: 'slides',
   zip: 'zip', rar: 'zip', '7z': 'zip', tar: 'zip', gz: 'zip',
+  // Same extension sets as citinet-web's own classifyMime() fallback — a
+  // rescue for when mime_type comes back generic/wrong (e.g. a document
+  // picker on Android that doesn't always resolve a real mimeType for a
+  // photo reached via the Files/SAF picker rather than the photo library,
+  // which then gets stored as application/octet-stream server-side).
+  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', svg: 'image', bmp: 'image', ico: 'image', heic: 'image', heif: 'image',
+  mp4: 'video', m4v: 'video', mov: 'video', webm: 'video', avi: 'video', mkv: 'video', ogv: 'video', '3gp': 'video',
+  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio', aac: 'audio', m4a: 'audio', wma: 'audio', opus: 'audio',
 };
 
 export function fileKind(fileName: string, mimeType: string | null): FileKind {

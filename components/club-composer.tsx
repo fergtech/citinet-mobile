@@ -15,9 +15,10 @@ import { prepareImageForUpload } from '@/lib/media/prepare-image-upload';
 // Both composers below are condensed, inline-card adaptations of
 // app/compose-post.tsx and app/event-editor.tsx — same fields, same
 // createPostOrQueue call, same "will send once it's back" queued treatment
-// — just embedded atop a Space's own Posts/Events tab (app/spaces/[slug].tsx)
+// — just embedded atop a Club's own Posts/Events tab (app/clubs/[slug].tsx)
 // instead of living as a separate pushed screen, and every post/event
-// created here carries `space_slug` so it lands scoped to this space rather
+// created here carries `space_slug` (still that literal field name — see
+// hubService's own ── Clubs ── note) so it lands scoped to this club rather
 // than the hub-wide feed. Each starts collapsed to a single placeholder row
 // (mirrors citinet web's own SpacesScreen ComposePost) and expands in place
 // on tap — no navigation, so whatever's already loaded in the tab stays put.
@@ -31,7 +32,10 @@ function defaultMediaName(asset: ImagePicker.ImagePickerAsset): string {
 }
 
 function defaultMediaType(asset: ImagePicker.ImagePickerAsset): string {
-  return asset.mimeType ?? (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
+  // `|| ` not `??` — some Android pickers return mimeType as '' (falsy but
+  // not nullish), which would otherwise slip past a ?? fallback and get
+  // stored server-side as a mimeType-less, unclassifiable file.
+  return asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg');
 }
 
 function formatDate(d: Date): string {
@@ -45,22 +49,22 @@ function formatTime(d: Date): string {
 type ComposeMode = 'post' | 'poll';
 
 // Posts tab — typical post creation, same as compose-post.tsx's own 'post'
-// mode, plus a Poll mode switch (also from compose-post.tsx) since a space's
-// Posts tab is exactly where a member would want to ask the space something,
+// mode, plus a Poll mode switch (also from compose-post.tsx) since a club's
+// Posts tab is exactly where a member would want to ask the club something,
 // not just share an update. No Event mode here — that's the Events tab's
 // own dedicated composer below, kept separate rather than a third mode here
 // since "which tab is this going to show up under" is a real, different
 // question for a post vs. an event (feedPosts/eventPosts split on
-// event_date, see app/spaces/[slug].tsx).
-export function SpacePostComposer({
+// event_date, see app/clubs/[slug].tsx).
+export function ClubPostComposer({
   tunnelUrl,
   token,
-  spaceSlug,
+  clubSlug,
   onPosted,
 }: {
   tunnelUrl: string;
   token: string;
-  spaceSlug: string;
+  clubSlug: string;
   onPosted: () => void;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
@@ -213,13 +217,13 @@ export function SpacePostComposer({
               closes_at: closesAt?.toISOString(),
               quorum_pct: quorumPct,
               pass_pct: passPct,
-              space_slug: spaceSlug,
+              space_slug: clubSlug,
             })
           : await createPostOrQueue(tunnelUrl, token, {
               category: 'DISCUSSION',
               body: text.trim(),
               media,
-              space_slug: spaceSlug,
+              space_slug: clubSlug,
             });
       if (result.queued) {
         Alert.alert(
@@ -244,7 +248,7 @@ export function SpacePostComposer({
         <View style={styles.placeholderIcon}>
           <IconSymbol name="pencil" size={14} color={Brand} />
         </View>
-        <ThemedText style={styles.placeholderLabel}>Share something with this space…</ThemedText>
+        <ThemedText style={styles.placeholderLabel}>Share something with this club…</ThemedText>
       </Pressable>
     );
   }
@@ -269,7 +273,7 @@ export function SpacePostComposer({
         multiline
         editable={!posting}
         autoFocus
-        placeholder={mode === 'poll' ? 'Ask your neighbors something…' : 'Share something with this space…'}
+        placeholder={mode === 'poll' ? 'Ask your neighbors something…' : 'Share something with this club…'}
         placeholderTextColor={Colors[colorScheme].icon}
         style={[styles.textInput, { color: Colors[colorScheme].text }]}
       />
@@ -455,18 +459,18 @@ function defaultEventDate(): Date {
 }
 
 // Events tab — event creation only, no plain-post/poll modes here at all
-// (unlike SpacePostComposer above) since anything typed here always becomes
+// (unlike ClubPostComposer above) since anything typed here always becomes
 // an EVENT-category post; same fields as app/event-editor.tsx, condensed
 // into an inline card instead of a pushed screen.
-export function SpaceEventComposer({
+export function ClubEventComposer({
   tunnelUrl,
   token,
-  spaceSlug,
+  clubSlug,
   onPosted,
 }: {
   tunnelUrl: string;
   token: string;
-  spaceSlug: string;
+  clubSlug: string;
   onPosted: () => void;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
@@ -539,9 +543,16 @@ export function SpaceEventComposer({
         event_date: eventDate.toISOString(),
         event_location: location.trim() || undefined,
         media: imageAsset
-          ? { uri: imageAsset.uri, name: imageAsset.fileName ?? `event-photo-${Date.now()}.jpg`, type: imageAsset.mimeType ?? 'image/jpeg' }
+          ? {
+              uri: imageAsset.uri,
+              name: imageAsset.fileName ?? `event-photo-${Date.now()}.jpg`,
+              // `|| ` not `??` — some Android pickers return mimeType as ''
+              // (falsy but not nullish), which would otherwise slip past a
+              // ?? fallback.
+              type: imageAsset.mimeType || 'image/jpeg',
+            }
           : null,
-        space_slug: spaceSlug,
+        space_slug: clubSlug,
       });
       if (result.queued) {
         Alert.alert('Saved to send later', "You're offline or the hub is unreachable — this event will post automatically once it's back.");
@@ -563,7 +574,7 @@ export function SpaceEventComposer({
         <View style={styles.placeholderIcon}>
           <IconSymbol name="calendar" size={14} color={Brand} />
         </View>
-        <ThemedText style={styles.placeholderLabel}>Add an event for this space…</ThemedText>
+        <ThemedText style={styles.placeholderLabel}>Add an event for this club…</ThemedText>
       </Pressable>
     );
   }

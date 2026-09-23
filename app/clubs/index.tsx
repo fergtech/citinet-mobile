@@ -10,40 +10,42 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { listAllSpaces, listMySpaces, spaceBannerUrl } from '@/lib/api/hubService';
-import { Space } from '@/lib/api/types';
-import { SPACE_CATEGORY_FILTERS, spaceCategoryMeta, spaceMonogramColor, spaceVisibilityMeta, type SpaceCategory } from '@/lib/spaces/meta';
+import { listAllClubs, listMyClubs, clubBannerUrl } from '@/lib/api/hubService';
+import { Club } from '@/lib/api/types';
+import { CLUB_CATEGORY_FILTERS, clubCategoryMeta, clubMonogramColor, clubVisibilityMeta, type ClubCategory } from '@/lib/clubs/meta';
 import { useSession } from '@/lib/session/session-context';
 
 // Mirrors citinet web's SpacesScreen — a Discover/Joined toggle plus category
-// filters over GET /api/spaces (every space on the hub) vs GET /api/spaces/mine
-// (active memberships only). Neither of those two full lists had anywhere to
-// live on mobile before this screen: app/spaces/[slug].tsx (the detail view)
-// is only ever reached today via search results, the "Your spaces" strip, or
-// a direct link — there was no way to browse spaces you haven't joined yet.
+// filters over GET /api/spaces (every club on the hub) vs GET /api/spaces/mine
+// (active memberships only) — still those literal server routes (see
+// hubService's own ── Clubs ── note; renamed client-side only). Neither of
+// those two full lists had anywhere to live on mobile before this screen:
+// app/clubs/[slug].tsx (the detail view) is only ever reached today via
+// search results, the "Your clubs" strip, or a direct link — there was no
+// way to browse clubs you haven't joined yet.
 
-function SpaceAvatar({ space, tunnelUrl }: { space: Space; tunnelUrl: string }) {
-  const category = spaceCategoryMeta(space.category);
+function ClubAvatar({ club, tunnelUrl }: { club: Club; tunnelUrl: string }) {
+  const category = clubCategoryMeta(club.category);
   return (
     <View style={styles.avatarWrap}>
       <View style={styles.avatar}>
-        {space.banner_mode === 'image' && space.banner_image_file_name ? (
-          <Image source={{ uri: spaceBannerUrl(tunnelUrl, space.slug) }} style={StyleSheet.absoluteFill} contentFit="cover" />
-        ) : space.banner_mode === 'gradient' && space.banner_gradient_from && space.banner_gradient_to ? (
+        {club.banner_mode === 'image' && club.banner_image_file_name ? (
+          <Image source={{ uri: clubBannerUrl(tunnelUrl, club.slug) }} style={StyleSheet.absoluteFill} contentFit="cover" />
+        ) : club.banner_mode === 'gradient' && club.banner_gradient_from && club.banner_gradient_to ? (
           <LinearGradient
-            colors={[space.banner_gradient_from, space.banner_gradient_to]}
+            colors={[club.banner_gradient_from, club.banner_gradient_to]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
         ) : (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: spaceMonogramColor(space) }]} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: clubMonogramColor(club) }]} />
         )}
         {/* Faint scrim so the letter stays legible over a banner photo —
             matches web's own bg-black/10 treatment on this same row avatar. */}
         <View style={[StyleSheet.absoluteFill, styles.avatarScrim]} />
         <ThemedText style={styles.avatarLetter} lightColor="#fff" darkColor="#fff">
-          {space.name.charAt(0).toUpperCase()}
+          {club.name.charAt(0).toUpperCase()}
         </ThemedText>
       </View>
       {category && (
@@ -55,27 +57,27 @@ function SpaceAvatar({ space, tunnelUrl }: { space: Space; tunnelUrl: string }) 
   );
 }
 
-function SpaceRow({ space, tunnelUrl }: { space: Space; tunnelUrl: string }) {
+function ClubRow({ club, tunnelUrl }: { club: Club; tunnelUrl: string }) {
   const colorScheme = useColorScheme() ?? 'light';
-  const visibility = spaceVisibilityMeta(space.visibility);
-  const memberCount = Number(space.member_count) || 0;
-  const onlineCount = space.online_count || 0;
+  const visibility = clubVisibilityMeta(club.visibility);
+  const memberCount = Number(club.member_count) || 0;
+  const onlineCount = club.online_count || 0;
 
   return (
-    <Pressable style={styles.row} onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: space.slug } })}>
-      <SpaceAvatar space={space} tunnelUrl={tunnelUrl} />
+    <Pressable style={styles.row} onPress={() => router.push({ pathname: '/clubs/[slug]', params: { slug: club.slug } })}>
+      <ClubAvatar club={club} tunnelUrl={tunnelUrl} />
       <View style={styles.rowContent}>
         <View style={styles.nameLine}>
           <ThemedText type="defaultSemiBold" style={styles.name} numberOfLines={1}>
-            {space.name}
+            {club.name}
           </ThemedText>
           <IconSymbol name={visibility.icon} size={12} color={Colors[colorScheme].icon} style={styles.visibilityIcon} />
         </View>
         <ThemedText style={styles.rowMeta} numberOfLines={1}>
-          {space.description?.trim() || `${memberCount} ${memberCount === 1 ? 'neighbor' : 'neighbors'}`}
+          {club.description?.trim() || `${memberCount} ${memberCount === 1 ? 'neighbor' : 'neighbors'}`}
         </ThemedText>
         <View style={styles.statsLine}>
-          {!!space.description?.trim() && (
+          {!!club.description?.trim() && (
             <ThemedText style={styles.statsText}>
               {memberCount} {memberCount === 1 ? 'neighbor' : 'neighbors'}
             </ThemedText>
@@ -87,68 +89,68 @@ function SpaceRow({ space, tunnelUrl }: { space: Space; tunnelUrl: string }) {
             </View>
           )}
         </View>
-        {space.my_status === 'pending' && <ThemedText style={styles.pendingText}>Pending approval</ThemedText>}
-        {space.my_status === 'invited' && <ThemedText style={[styles.invitedText, { color: Brand }]}>Invited — tap to accept</ThemedText>}
+        {club.my_status === 'pending' && <ThemedText style={styles.pendingText}>Pending approval</ThemedText>}
+        {club.my_status === 'invited' && <ThemedText style={[styles.invitedText, { color: Brand }]}>Invited — tap to accept</ThemedText>}
       </View>
     </Pressable>
   );
 }
 
-export default function SpacesScreen() {
+export default function ClubsScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session } = useSession();
-  const [mySpaces, setMySpaces] = useState<Space[]>([]);
-  const [allSpaces, setAllSpaces] = useState<Space[]>([]);
+  const [myClubs, setMyClubs] = useState<Club[]>([]);
+  const [allClubs, setAllClubs] = useState<Club[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showAll, setShowAll] = useState(false);
-  const [categoryFilter, setCategoryFilter] = useState<SpaceCategory | 'all'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<ClubCategory | 'all'>('all');
 
   const load = useCallback(() => {
     if (!session) return;
     setLoading(true);
     setError(null);
-    Promise.all([listMySpaces(session.hub.tunnelUrl, session.token), listAllSpaces(session.hub.tunnelUrl, session.token)])
+    Promise.all([listMyClubs(session.hub.tunnelUrl, session.token), listAllClubs(session.hub.tunnelUrl, session.token)])
       .then(([mine, all]) => {
-        setMySpaces(mine);
-        setAllSpaces(all);
+        setMyClubs(mine);
+        setAllClubs(all);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load spaces."))
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load clubs."))
       .finally(() => setLoading(false));
   }, [session]);
 
   useFocusEffect(load);
 
-  const displaySpaces = useMemo(() => {
+  const displayClubs = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (showAll ? allSpaces : mySpaces)
+    return (showAll ? allClubs : myClubs)
       .filter((s) => !needle || s.name.toLowerCase().includes(needle))
       .filter((s) => categoryFilter === 'all' || s.category === categoryFilter);
-  }, [showAll, allSpaces, mySpaces, search, categoryFilter]);
+  }, [showAll, allClubs, myClubs, search, categoryFilter]);
 
-  // Invited-but-not-yet-accepted spaces only ever come back from the full
-  // Discover list (listMySpaces only returns active memberships) — surfaced
+  // Invited-but-not-yet-accepted clubs only ever come back from the full
+  // Discover list (listMyClubs only returns active memberships) — surfaced
   // here regardless of which tab is showing, same as web's own banner.
-  const pendingInvites = useMemo(() => allSpaces.filter((s) => s.my_status === 'invited'), [allSpaces]);
+  const pendingInvites = useMemo(() => allClubs.filter((s) => s.my_status === 'invited'), [allClubs]);
 
   if (!session) return null;
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title="Spaces" rightIcon="plus" onRightPress={() => router.push('/spaces/create')} rightAccessibilityLabel="Create a space" />
+      <ScreenHeader title="Clubs" rightIcon="plus" onRightPress={() => router.push('/clubs/create')} rightAccessibilityLabel="Create a club" />
 
-      {loading && mySpaces.length === 0 && allSpaces.length === 0 && <ActivityIndicator style={styles.spinner} />}
+      {loading && myClubs.length === 0 && allClubs.length === 0 && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
       <FlatList
-        data={displaySpaces}
+        data={displayClubs}
         keyExtractor={(item) => item.id}
         style={styles.listFlex}
         contentContainerStyle={styles.list}
         onRefresh={load}
         refreshing={loading}
-        renderItem={({ item }) => <SpaceRow space={item} tunnelUrl={session.hub.tunnelUrl} />}
+        renderItem={({ item }) => <ClubRow club={item} tunnelUrl={session.hub.tunnelUrl} />}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListHeaderComponent={
           <View style={styles.filters}>
@@ -157,7 +159,7 @@ export default function SpacesScreen() {
               <TextInput
                 value={search}
                 onChangeText={setSearch}
-                placeholder="Search spaces"
+                placeholder="Search clubs"
                 placeholderTextColor={Colors[colorScheme].icon}
                 style={[styles.searchInput, { color: Colors[colorScheme].text }]}
               />
@@ -171,7 +173,7 @@ export default function SpacesScreen() {
               </Pressable>
               <Pressable onPress={() => setShowAll(false)} style={[styles.toggleBtn, !showAll && { backgroundColor: Colors[colorScheme].text }]}>
                 <ThemedText style={styles.toggleLabel} lightColor={!showAll ? Colors.light.background : undefined} darkColor={!showAll ? Colors.dark.background : undefined}>
-                  Joined{mySpaces.length > 0 ? ` (${mySpaces.length})` : ''}
+                  Joined{myClubs.length > 0 ? ` (${myClubs.length})` : ''}
                 </ThemedText>
               </Pressable>
             </View>
@@ -182,11 +184,11 @@ export default function SpacesScreen() {
                   All
                 </ThemedText>
               </Pressable>
-              {SPACE_CATEGORY_FILTERS.filter((f) => f.value !== 'all').map((f) => {
+              {CLUB_CATEGORY_FILTERS.filter((f) => f.value !== 'all').map((f) => {
                 const active = categoryFilter === f.value;
-                const meta = spaceCategoryMeta(f.value);
+                const meta = clubCategoryMeta(f.value);
                 return (
-                  <Pressable key={f.value} onPress={() => setCategoryFilter(f.value as SpaceCategory)} style={[styles.chip, active && { backgroundColor: Brand }]}>
+                  <Pressable key={f.value} onPress={() => setCategoryFilter(f.value as ClubCategory)} style={[styles.chip, active && { backgroundColor: Brand }]}>
                     {meta && <IconSymbol name={meta.icon} size={13} color={active ? '#fff' : Colors[colorScheme].icon} />}
                     <ThemedText style={styles.chipLabel} lightColor={active ? '#fff' : undefined} darkColor={active ? '#fff' : undefined}>
                       {f.label}
@@ -205,7 +207,7 @@ export default function SpacesScreen() {
                   <Pressable
                     key={s.id}
                     style={styles.invitesBannerRow}
-                    onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: s.slug } })}>
+                    onPress={() => router.push({ pathname: '/clubs/[slug]', params: { slug: s.slug } })}>
                     <IconSymbol name="chevron.right" size={13} color={Brand} />
                     <ThemedText style={styles.invitesBannerRowLabel}>{s.name}</ThemedText>
                   </Pressable>
@@ -221,10 +223,10 @@ export default function SpacesScreen() {
                 <IconSymbol name="square.grid.2x2" size={22} color={Colors[colorScheme].icon} />
               </View>
               <ThemedText type="defaultSemiBold" style={styles.emptyTitle}>
-                {showAll ? 'No spaces on this hub yet' : 'No spaces joined yet'}
+                {showAll ? 'No clubs on this hub yet' : 'No clubs joined yet'}
               </ThemedText>
               <ThemedText style={styles.emptySubtitle}>
-                {showAll ? 'Be the first to create one.' : 'Switch to Discover to find spaces to join.'}
+                {showAll ? 'Be the first to create one.' : 'Switch to Discover to find clubs to join.'}
               </ThemedText>
             </View>
           ) : null

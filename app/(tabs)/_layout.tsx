@@ -6,7 +6,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedTabBar } from '@/components/animated-tab-bar';
 import { AppDrawer } from '@/components/app-drawer';
 import { CreateTabButton } from '@/components/create-tab-button';
-import { DiscoverDrawer } from '@/components/discover-drawer';
 import { HapticTab } from '@/components/haptic-tab';
 import { HubAvatar } from '@/components/hub-avatar';
 import { CustomIcon } from '@/components/ui/custom-icon';
@@ -15,7 +14,6 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { listUnreadNotifications } from '@/lib/api/hubService';
 import { useSession } from '@/lib/session/session-context';
-import { DrawerCoordinatorProvider } from '@/lib/ui/drawer-coordinator';
 import { getTabBarStyle } from '@/lib/ui/tab-bar-style';
 import { TabBarVisibilityProvider } from '@/lib/ui/tab-bar-visibility';
 
@@ -43,8 +41,6 @@ export default function TabLayout() {
   );
 
   return (
-    <DrawerCoordinatorProvider>
-    <DiscoverDrawer>
     <AppDrawer>
     <TabBarVisibilityProvider>
     <Tabs
@@ -95,10 +91,12 @@ export default function TabLayout() {
         name="discover"
         options={{
           title: 'Explore',
-          // Pulled off the tab bar — reached from Home's own header search
-          // icon instead now (see app/(tabs)/index.tsx). href: null keeps
-          // this a real, navigable route (expo-router still registers it),
-          // it just no longer gets a tab bar button of its own.
+          // Pulled off the tab bar — reached from Home's own search bar
+          // instead now (see app/(tabs)/index.tsx), which used to open a
+          // separate DiscoverDrawer that duplicated this screen; that drawer
+          // is gone now, so the search bar navigates straight here. href:
+          // null keeps this a real, navigable route (expo-router still
+          // registers it), it just no longer gets a tab bar button of its own.
           href: null,
         }}
       />
@@ -183,8 +181,6 @@ export default function TabLayout() {
     </Tabs>
     </TabBarVisibilityProvider>
     </AppDrawer>
-    </DiscoverDrawer>
-    </DrawerCoordinatorProvider>
   );
 }
 

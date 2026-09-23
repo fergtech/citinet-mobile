@@ -70,7 +70,9 @@ export default function BannerEditorScreen() {
       const uploaded = await uploadFile(session.hub.tunnelUrl, session.token, {
         uri: asset.uri,
         name: asset.fileName ?? `marketplace-banner-${Date.now()}.jpg`,
-        type: asset.mimeType ?? 'image/jpeg',
+        // `|| ` not `??` — some Android pickers return mimeType as '' (falsy
+        // but not nullish), which would otherwise slip past a ?? fallback.
+        type: asset.mimeType || 'image/jpeg',
       });
       setImageFileName(uploaded.file_name);
     } catch (err) {

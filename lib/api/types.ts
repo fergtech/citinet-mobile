@@ -104,9 +104,10 @@ export type HubPost = {
   // Only selected by a handful of routes (GET /api/posts, /api/posts/:id,
   // /api/spaces/:slug/posts, /api/search) — absent (undefined) elsewhere
   // (getUpcomingEvents, getFeatured, etc.), so treat a missing value the same
-  // as "not a space post"/"not yet shared," not as a hard guarantee either
+  // as "not a club post"/"not yet shared," not as a hard guarantee either
   // way. Drives the "Share to Hub" option's eligibility — see
-  // components/post-share-sheet.tsx.
+  // components/post-share-sheet.tsx. Still `space_id` — that's the server's
+  // real field name (see the ── Clubs ── block further down), unrenamed.
   space_id?: string | null;
   shared_to_feed?: boolean;
   // Only selected by GET /api/posts — the authoritative "has this user seen
@@ -147,6 +148,19 @@ export type MessageReaction = {
   reacted_by_me: boolean;
 };
 
+// A file uploaded alongside a message (POST /api/files, referenced by id —
+// same route post/reply attachments use, see lib/files/kind.ts). Field is
+// `file_id`, not `id` — matches the server's real JSON_BUILD_OBJECT shape in
+// GET/POST .../messages (confirmed directly against api/server.js; citinet
+// web's own HubMessageAttachment type calls it `id` but only after its
+// hubService normalizes the raw `file_id` on the way in).
+export type MessageAttachment = {
+  file_id: string;
+  file_name: string;
+  mime_type: string;
+  size: number;
+};
+
 export type HubMessage = {
   message_id: string;
   conversation_id: string;
@@ -154,7 +168,7 @@ export type HubMessage = {
   sender_username: string | null;
   body: string;
   created_at: string;
-  attachments: unknown[];
+  attachments: MessageAttachment[];
   reactions: MessageReaction[];
 };
 
@@ -227,8 +241,9 @@ export type LiveCommsItem = {
   host_id: string;
   host_username: string;
   participant_count: number;
-  // Only ever present on a space-scoped broadcast/room (see POST /api/comms/
-  // token's own space_slug param) — absent (not null) on a plain hub-wide one.
+  // Only ever present on a club-scoped broadcast/room (see POST /api/comms/
+  // token's own space_slug param) — absent (not null) on a plain hub-wide
+  // one. Still space_id/space_slug — the server's real field names.
   space_id?: string;
   space_slug?: string;
 };
@@ -269,9 +284,11 @@ export type SearchMemberResult = {
 // The real GET /api/search spaces SQL selects a lot more than this (slug,
 // description, visibility, banner fields, my_role/my_status) via `...r` —
 // only slug is added here, the minimum needed to navigate a result to
-// app/spaces/[slug].tsx now that it exists. Was previously a dead-end
+// app/clubs/[slug].tsx now that it exists. Was previously a dead-end
 // non-interactive row in Discover's search results for exactly that reason.
-export type SearchSpaceResult = {
+// "Club" client-side — see the ── Clubs ── block below for why the name
+// differs from the server's own "Spaces" naming.
+export type SearchClubResult = {
   id: string;
   slug: string;
   name: string;
@@ -279,37 +296,42 @@ export type SearchSpaceResult = {
   score: number;
 };
 
-// ── Spaces ────────────────────────────────────────────────────────
-// Confirmed directly against api/server.js's real hub_spaces/hub_space_members
-// SQL (the POST/GET/PATCH/join/leave/members/posts/files routes under
-// /api/spaces), not guessed from the design handoff. A few things worth
-// flagging for callers:
+// ── Clubs ────────────────────────────────────────────────────────
+// Renamed client-side only (2026-09-20 product ask: "Spaces" reads to users
+// as "Clubs" everywhere in this app now) — the server (api/server.js) still
+// calls all of this "Spaces"/hub_spaces/hub_space_members, still serves it
+// under /api/spaces, and every field below still matches that real SQL
+// verbatim; only the TS type names in this file changed, not the wire
+// format. Confirmed directly against api/server.js's real hub_spaces/
+// hub_space_members SQL (the POST/GET/PATCH/join/leave/members/posts/files
+// routes under /api/spaces), not guessed from the design handoff. A few
+// things worth flagging for callers:
 // - visibility 'invite-only' exists on the server (POST .../join 403s for it
 //   unless already invited) but has no dedicated UI treatment specified yet
-//   — spaceVisibilityMeta falls back to 'private' styling for it.
+//   — clubVisibilityMeta falls back to 'private' styling for it.
 // - my_role/my_status are null (not 'member'/undefined) when the caller has
-//   never interacted with the space at all — a LEFT JOIN, not a default.
+//   never interacted with the club at all — a LEFT JOIN, not a default.
 // - member_count comes back as a numeric STRING, not a number: every one of
 //   these SELECTs does `COUNT(DISTINCT ...) AS member_count` with no ::int
 //   cast (unlike open_roles_count elsewhere in this codebase, which does
 //   cast), and node-pg parses bigint/count aggregates as strings by default.
 //   Confirmed against api/server.js directly, not assumed — Number(...) it
 //   before use.
-export type SpaceVisibility = 'public' | 'private' | 'invite-only';
-export type SpaceBannerMode = 'image' | 'solid' | 'gradient' | null;
-export type SpaceMemberRole = 'owner' | 'admin' | 'moderator' | 'member';
-export type SpaceMemberStatus = 'active' | 'pending' | 'invited';
+export type ClubVisibility = 'public' | 'private' | 'invite-only';
+export type ClubBannerMode = 'image' | 'solid' | 'gradient' | null;
+export type ClubMemberRole = 'owner' | 'admin' | 'moderator' | 'member';
+export type ClubMemberStatus = 'active' | 'pending' | 'invited';
 
-export type Space = {
+export type Club = {
   id: string;
   slug: string;
   name: string;
   description: string | null;
-  visibility: SpaceVisibility;
+  visibility: ClubVisibility;
   created_by: string;
   created_at: string;
   updated_at: string;
-  banner_mode: SpaceBannerMode;
+  banner_mode: ClubBannerMode;
   banner_color: string | null;
   banner_gradient_from: string | null;
   banner_gradient_to: string | null;
@@ -320,39 +342,39 @@ export type Space = {
   member_count: string;
   // Unlike member_count, this one *is* ::int-cast in SQL (added alongside
   // this type, so it started right) — a real number, not a string. Exists
-  // so the space detail screen's "N posts" meta stat can show for a public
-  // space the viewer hasn't joined yet, since GET .../posts itself 403s for
+  // so the club detail screen's "N posts" meta stat can show for a public
+  // club the viewer hasn't joined yet, since GET .../posts itself 403s for
   // non-members.
   post_count: number;
   // Plain nullable TEXT column — a free-form Discover filter aid (see
-  // spaceCategoryMeta), not a real taxonomy the server enforces. null/''/an
+  // clubCategoryMeta), not a real taxonomy the server enforces. null/''/an
   // unrecognized value all mean "uncategorized".
   category: string | null;
   // ::int-cast like post_count — active members with a presence heartbeat
   // (hub_users.last_seen_at) inside the last 5 minutes.
   online_count: number;
-  my_role: SpaceMemberRole | null;
-  my_status: SpaceMemberStatus | null;
+  my_role: ClubMemberRole | null;
+  my_status: ClubMemberStatus | null;
 };
 
 // Matches GET /api/spaces/:slug/members' real SELECT — active AND pending
 // (and invited) rows come back in one list; filter by `status` client-side
 // for anything that needs just the active roster.
-export type SpaceMember = {
+export type ClubMember = {
   user_id: string;
   username: string;
   display_name: string | null;
   avatar_url: string | null;
   profile_headline: string | null;
-  role: SpaceMemberRole;
-  status: SpaceMemberStatus;
+  role: ClubMemberRole;
+  status: ClubMemberStatus;
   joined_at: string;
 };
 
 // Matches GET /api/spaces/:slug/files' real SELECT — note the bare `id`
 // (not `file_id`, unlike HubFile elsewhere in this app) since that route
 // aliases f.id directly with no rename.
-export type SpaceFile = {
+export type ClubFile = {
   id: string;
   file_name: string;
   file_key: string;
@@ -367,7 +389,11 @@ export type SpaceFile = {
 export type SearchResults = {
   posts: SearchPostResult[];
   members: SearchMemberResult[];
-  spaces: SearchSpaceResult[];
+  // Client-side field name only — the real GET /api/search response still
+  // calls this key "spaces" (see hubService's own search(), which reads
+  // data.results?.spaces into it), same untouched-server situation as the
+  // rest of the ── Clubs ── block above.
+  clubs: SearchClubResult[];
 };
 
 // body_plain/body_rich are always the encrypted-at-rest copy (see
@@ -399,13 +425,30 @@ export type HubNote = {
 // Real citinet categories (src/app/types/atlas.ts) — not the "Alerts/Resources/
 // Events/Landmarks" 4-category set from an earlier draft spec, which doesn't
 // match the actual server's ATLAS_CATEGORIES allowlist or client type.
-export type AtlasPinCategory = 'meetup' | 'safety' | 'avoid' | 'infrastructure' | 'poi' | 'aid' | 'green';
+// 'event' covers a pin created alongside a "Create an event" hub_posts EVENT
+// row (see web's eventPostId) — it replaced a separate standalone
+// event-marker layer there, so it's a real category value the server can
+// send, not an edge case.
+export type AtlasPinCategory = 'meetup' | 'safety' | 'avoid' | 'infrastructure' | 'poi' | 'aid' | 'green' | 'event';
+
+// A file attached to a pin beyond its single cover photo (image_file_name) —
+// up to 10 per pin server-side. Points into the same hub_files/Files feature
+// as everything else in this app, so a mobile viewer can hand one straight
+// to app/files/[id].tsx (by file_id) for preview/download/share instead of
+// this screen needing its own copy of that logic.
+export type AtlasPinAttachment = {
+  file_id: string;
+  file_name: string;
+  mime_type: string | null;
+  size: number;
+};
 
 // Matches the server's real SELECT list exactly (GET/POST/PATCH /api/atlas/pins)
-// — note there's no author_id in the response, only author_username, so
-// "is this my pin" client-side checks compare against session.username. The
-// server itself is still the real authority (PATCH/DELETE check author_id
-// server-side); this is only a UI convenience for showing edit/delete controls.
+// — note author_id IS present here (unlike an earlier version of this type),
+// so "is this my pin" checks can compare ids directly; author_username stays
+// for display. The server itself is still the real authority (PATCH checks
+// author_id, DELETE allows author OR admin) — client-side checks are only a
+// convenience for showing edit/delete controls, never the actual gate.
 export type AtlasPin = {
   id: string;
   latitude: number;
@@ -415,7 +458,30 @@ export type AtlasPin = {
   category: AtlasPinCategory;
   image_file_name: string | null;
   created_at: string;
+  author_id: string | null;
   author_username: string | null;
+  // Set only for a pin created alongside a "Create an event" hub_posts EVENT
+  // row — lets the pin detail view offer a real, shared RSVP against that
+  // post (via the existing getPost/toggleRsvp) instead of just showing this
+  // as a plain pin.
+  event_post_id: string | null;
+  reply_count: number;
+  attachments: AtlasPinAttachment[];
+};
+
+// A comment on a pin, or a threaded reply to one — same flat shape
+// (reply_to_reply_id as the parent pointer) as HubPostReply, just scoped to
+// a pin (GET/POST /api/atlas/pins/:id/replies) instead of a hub_posts row.
+export type AtlasPinReply = {
+  id: string;
+  pin_id: string;
+  body: string;
+  created_at: string;
+  author_id: string | null;
+  author_username: string | null;
+  reply_to_reply_id: string | null;
+  reply_to_user_id: string | null;
+  reply_to_username: string | null;
 };
 
 // GET /api/posts/:id/rsvp's real SELECT (hub_event_rsvps joined with hub_users).
@@ -822,16 +888,18 @@ export type InitiativeActivityEntry = {
 // Matches GET /api/notifications/unread's real SELECT (hub_notifications
 // joined to hub_users for actor_username) — confirmed against api/server.js,
 // not guessed. `id` is a plain SERIAL (int4), not the bigint/COUNT string
-// footgun noted elsewhere in this file for space member_count — safe as a
+// footgun noted elsewhere in this file for club member_count — safe as a
 // real number here.
 //
 // Only 6 types are ever actually inserted anywhere in the server (every
 // notifyUser(...) call site) — kept as a union rather than widened to
 // `string`, since a 7th appearing would mean a real server change worth
-// knowing about at compile time, not something to quietly swallow:
+// knowing about at compile time, not something to quietly swallow. Still
+// literally 'space_invite' — that's the server's own real value, unrenamed
+// (see the ── Clubs ── block further up):
 //   - message: ref_id = conversation id
 //   - reply: ref_id = post id
-//   - space_invite: ref_id = the space's SLUG, not its id
+//   - space_invite: ref_id = the club's SLUG, not its id
 //   - initiative_invite: ref_id = initiative id
 //   - join_request: ref_id = the requesting user's own id (an admin-facing
 //     notice, not something the requester sees)

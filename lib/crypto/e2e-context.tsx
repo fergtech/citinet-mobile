@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { useSession } from '@/lib/session/session-context';
 import { decryptEnvelope, encryptEnvelope, isEncryptedBody } from './aesgcm';
 import { deriveConversationKey } from './ecdh';
+import { decryptFileBuffer, encryptFileBuffer, isFileEncrypted } from './files';
 import * as keyManager from './keyManager';
 import type { HubContext } from './keyManager';
 import { decryptNoteBody, encryptNoteBody, type NoteBody } from './notes';
@@ -32,6 +33,24 @@ type E2EContextValue = {
   encryptNote: (body: NoteBody) => Promise<{ body_plain: string; body_rich: null }>;
   /** Returns null if the body can't be decrypted with this device's keys (or none exist yet). */
   decryptNote: (bodyPlain: string) => Promise<NoteBody | null>;
+  /**
+   * Encrypts a private file's raw bytes with the account's content key (same
+   * key notes use — see lib/crypto/files.ts for the wire format, which
+   * matches citinet-web's own encryptFileBuffer byte-for-byte). Returns null
+   * if this device has no keys yet — callers should fall back to uploading
+   * the file unencrypted in that case, same silent fallback citinet-web's
+   * own uploadFiles() takes.
+   */
+  encryptFile: (data: Uint8Array) => Promise<Uint8Array | null>;
+  /**
+   * Decrypts a private file's bytes. Returns the input unchanged if it isn't
+   * actually encrypted (no magic header — a public/hub file, or a private
+   * file uploaded before this existed). Returns null if it IS encrypted but
+   * this device can't decrypt it (no keys yet, or the wrong key) — callers
+   * must treat that as "can't preview," never render/save it as-is (it's
+   * ciphertext, not the real file).
+   */
+  decryptFile: (data: Uint8Array) => Promise<Uint8Array | null>;
 };
 
 const E2EKeysContext = createContext<E2EContextValue | null>(null);
@@ -198,6 +217,35 @@ export function E2EKeysProvider({ children }: { children: ReactNode }) {
     [session]
   );
 
+  const encryptFile = useCallback(
+    async (data: Uint8Array): Promise<Uint8Array | null> => {
+      if (!session) return null;
+      const myKeys = await keyManager.getMyLocalKeys(session.hub.slug, session.userId);
+      if (!myKeys) return null;
+      try {
+        return await encryptFileBuffer(myKeys.contentKey, data);
+      } catch {
+        return null;
+      }
+    },
+    [session]
+  );
+
+  const decryptFile = useCallback(
+    async (data: Uint8Array): Promise<Uint8Array | null> => {
+      if (!isFileEncrypted(data)) return data;
+      if (!session) return null;
+      const myKeys = await keyManager.getMyLocalKeys(session.hub.slug, session.userId);
+      if (!myKeys) return null;
+      try {
+        return await decryptFileBuffer(myKeys.contentKey, data);
+      } catch {
+        return null;
+      }
+    },
+    [session]
+  );
+
   const attention: E2EAttention =
     status === 'needs-recovery' ? 'unlock' : status === 'needs-setup' || (status === 'ready' && !!recoveryPhrase) ? 'setup' : null;
 
@@ -214,6 +262,8 @@ export function E2EKeysProvider({ children }: { children: ReactNode }) {
       encryptForConversation,
       encryptNote,
       decryptNote,
+      encryptFile,
+      decryptFile,
     }),
     [
       status,
@@ -227,6 +277,8 @@ export function E2EKeysProvider({ children }: { children: ReactNode }) {
       encryptForConversation,
       encryptNote,
       decryptNote,
+      encryptFile,
+      decryptFile,
     ]
   );
 

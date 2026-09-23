@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -11,13 +12,31 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { createAtlasPin, getMediaUrl, listAtlasPins, updateAtlasPin, uploadFile } from '@/lib/api/hubService';
-import { AtlasPinCategory } from '@/lib/api/types';
-import { ATLAS_CATEGORIES, ATLAS_CATEGORY_ORDER } from '@/lib/atlas/categories';
+import {
+  createAtlasPin,
+  getMediaUrl,
+  listAtlasPins,
+  updateAtlasPin,
+  uploadFile,
+  uploadFilesWithProgress,
+  type UploadedFile,
+} from '@/lib/api/hubService';
+import { AtlasPinAttachment, AtlasPinCategory } from '@/lib/api/types';
+import { ATLAS_CATEGORIES, ATLAS_CATEGORY_ORDER, suggestCategory } from '@/lib/atlas/categories';
 import { useHubCenter } from '@/lib/atlas/hub-center';
+import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
+import { guessMimeType } from '@/lib/files/mime';
 import { useSession } from '@/lib/session/session-context';
 
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
+// Matches web's own pin-attachment cap (AtlasScreen.tsx) — a product
+// decision, not a server-enforced limit (setPinAttachments itself accepts
+// any count), so this stays a client-side guard to keep the list usable.
+const MAX_PIN_ATTACHMENTS = 10;
+
+function toAttachment(u: UploadedFile): AtlasPinAttachment {
+  return { file_id: u.file_id, file_name: u.file_name, mime_type: u.mime_type, size: u.size_bytes };
+}
 
 export default function PinEditorScreen() {
   const colorScheme = useColorScheme() ?? 'light';
@@ -65,6 +84,13 @@ export default function PinEditorScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageFileName, setImageFileName] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [attachments, setAttachments] = useState<AtlasPinAttachment[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  // Suppresses the "Suggested: X" chip once the user has made an explicit
+  // category choice (a tap on any chip, or editing an existing pin, whose
+  // category was already deliberately set) — never fights a real choice.
+  const [categoryTouched, setCategoryTouched] = useState(isEdit);
+  const suggestion = useMemo(() => (categoryTouched ? null : suggestCategory(title)), [categoryTouched, title]);
 
   // Editing: load the existing pin (no single-pin GET route — same
   // list-and-find approach as app/atlas/[id].tsx). Coordinates aren't
@@ -84,6 +110,7 @@ export default function PinEditorScreen() {
         setDescription(found.description ?? '');
         setCategory(found.category);
         setCoords([found.latitude, found.longitude]);
+        setAttachments(found.attachments);
         if (found.image_file_name) {
           setImageFileName(found.image_file_name);
           getMediaUrl(session.hub.tunnelUrl, session.token, found.image_file_name)
@@ -125,7 +152,9 @@ export default function PinEditorScreen() {
       const uploaded = await uploadFile(session.hub.tunnelUrl, session.token, {
         uri: asset.uri,
         name: asset.fileName ?? `pin-photo-${Date.now()}.jpg`,
-        type: asset.mimeType ?? 'image/jpeg',
+        // `|| ` not `??` — some Android pickers return mimeType as '' (falsy
+        // but not nullish), which would otherwise slip past a ?? fallback.
+        type: asset.mimeType || 'image/jpeg',
       });
       setImageFileName(uploaded.file_name);
     } catch (err) {
@@ -161,6 +190,43 @@ export default function PinEditorScreen() {
     setImageFileName(null);
   }
 
+  // Files beyond the single cover photo above — any type, up to
+  // MAX_PIN_ATTACHMENTS, uploaded through the same generic Files route
+  // (app/files/upload.tsx's uploadFilesWithProgress) and linked to the pin
+  // by id on save, same as web's attachment_ids.
+  async function handleAddAttachments() {
+    if (!session) return;
+    if (attachments.length >= MAX_PIN_ATTACHMENTS) {
+      setError(`You can attach up to ${MAX_PIN_ATTACHMENTS} files.`);
+      return;
+    }
+    const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+    if (result.canceled) return;
+    const picked = result.assets.slice(0, MAX_PIN_ATTACHMENTS - attachments.length);
+    setUploadingAttachments(true);
+    setError(null);
+    try {
+      const uploaded = await uploadFilesWithProgress(
+        session.hub.tunnelUrl,
+        session.token,
+        picked.map((a) => ({ uri: a.uri, name: a.name, type: guessMimeType(a.name, a.mimeType), size: a.size })),
+        false,
+        () => {}
+      );
+      setAttachments((prev) => [...prev, ...uploaded.map(toAttachment)]);
+    } catch (err) {
+      const partial = (err as { uploaded?: UploadedFile[] }).uploaded;
+      if (partial?.length) setAttachments((prev) => [...prev, ...partial.map(toAttachment)]);
+      setError(err instanceof Error ? err.message : "Couldn't attach those files.");
+    } finally {
+      setUploadingAttachments(false);
+    }
+  }
+
+  function handleRemoveAttachment(fileId: string) {
+    setAttachments((prev) => prev.filter((a) => a.file_id !== fileId));
+  }
+
   async function handleSave() {
     if (!session || !title.trim()) return;
     if (!isEdit && !coords) {
@@ -170,12 +236,14 @@ export default function PinEditorScreen() {
     setSaving(true);
     setError(null);
     try {
+      const attachmentIds = attachments.map((a) => a.file_id);
       if (isEdit && id) {
         await updateAtlasPin(session.hub.tunnelUrl, session.token, id, {
           title: title.trim(),
           description: description.trim() || undefined,
           category,
           image_file_name: imageFileName,
+          attachment_ids: attachmentIds,
         });
       } else if (coords) {
         const created = await createAtlasPin(session.hub.tunnelUrl, session.token, {
@@ -185,6 +253,7 @@ export default function PinEditorScreen() {
           title: title.trim(),
           description: description.trim() || undefined,
           category,
+          attachment_ids: attachmentIds,
         });
         if (fromComposeLauncher) {
           // Pop both this editor and app/modal.tsx's launcher in one go,
@@ -307,6 +376,13 @@ export default function PinEditorScreen() {
             placeholderTextColor={Colors[colorScheme].icon}
             style={[styles.input, { color: Colors[colorScheme].text }]}
           />
+          {suggestion && suggestion !== category && (
+            <Pressable onPress={() => { setCategory(suggestion); setCategoryTouched(true); }} style={styles.suggestionChip}>
+              <ThemedText style={[styles.suggestionChipLabel, { color: Brand }]}>
+                Suggested: {ATLAS_CATEGORIES[suggestion].label}
+              </ThemedText>
+            </Pressable>
+          )}
 
           <ThemedText style={styles.sectionLabel}>Category</ThemedText>
           <View style={styles.categoryGrid}>
@@ -314,7 +390,10 @@ export default function PinEditorScreen() {
               const meta = ATLAS_CATEGORIES[cat];
               const active = category === cat;
               return (
-                <Pressable key={cat} onPress={() => setCategory(cat)} style={[styles.categoryChip, active && { backgroundColor: meta.color }]}>
+                <Pressable
+                  key={cat}
+                  onPress={() => { setCategory(cat); setCategoryTouched(true); }}
+                  style={[styles.categoryChip, active && { backgroundColor: meta.color }]}>
                   <IconSymbol name={meta.icon} size={13} color={active ? '#fff' : Colors[colorScheme].icon} />
                   <ThemedText style={styles.categoryLabel} lightColor={active ? '#fff' : undefined} darkColor={active ? '#fff' : undefined}>
                     {meta.label}
@@ -334,6 +413,38 @@ export default function PinEditorScreen() {
             textAlignVertical="top"
             style={[styles.textarea, { color: Colors[colorScheme].text }]}
           />
+
+          <ThemedText style={styles.sectionLabel}>Attachments</ThemedText>
+          {attachments.map((att) => {
+            const kind = fileKind(att.file_name, att.mime_type);
+            const kindMeta = FILE_KIND_META[kind];
+            return (
+              <View key={att.file_id} style={styles.attachmentRow}>
+                <View style={[styles.attachmentIcon, { backgroundColor: kindMeta.color }]}>
+                  <IconSymbol name={kindMeta.icon} size={16} color="#fff" />
+                </View>
+                <View style={styles.attachmentText}>
+                  <ThemedText numberOfLines={1} style={styles.attachmentName}>
+                    {att.file_name}
+                  </ThemedText>
+                  <ThemedText style={styles.locationHint}>{formatBytes(att.size)}</ThemedText>
+                </View>
+                <Pressable onPress={() => handleRemoveAttachment(att.file_id)} hitSlop={10} accessibilityLabel={`Remove ${att.file_name}`}>
+                  <IconSymbol name="xmark.circle.fill" size={20} color={Colors[colorScheme].icon} />
+                </Pressable>
+              </View>
+            );
+          })}
+          {attachments.length < MAX_PIN_ATTACHMENTS && (
+            <Pressable onPress={handleAddAttachments} disabled={uploadingAttachments} style={styles.addAttachmentButton}>
+              {uploadingAttachments ? (
+                <ActivityIndicator size="small" color={Colors[colorScheme].icon} />
+              ) : (
+                <IconSymbol name="paperclip" size={16} color={Colors[colorScheme].icon} />
+              )}
+              <ThemedText style={styles.photoButtonLabel}>Add files</ThemedText>
+            </Pressable>
+          )}
         </ScrollView>
       )}
     </ThemedView>
@@ -466,6 +577,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
+  suggestionChip: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+  },
+  suggestionChipLabel: {
+    fontSize: 12.5,
+    fontWeight: '600',
+  },
   categoryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -492,5 +611,37 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 8,
+  },
+  attachmentIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentText: {
+    flex: 1,
+    gap: 1,
+  },
+  attachmentName: {
+    fontSize: 14,
+  },
+  addAttachmentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#8884',
+    borderStyle: 'dashed',
+    marginTop: 4,
   },
 });

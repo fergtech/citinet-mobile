@@ -36,7 +36,7 @@ type Props = {
   onVotePoll: (post: HubPost, optionIndex: number) => void;
   onToggleRsvp: (post: HubPost) => void;
   // Fires right before the push to post/[id] — optional, so the other
-  // PostRow call sites (Home's single-post preview, spaces, events) are
+  // PostRow call sites (Home's single-post preview, clubs, events) are
   // unaffected. app/(tabs)/feed.tsx uses it to count a tap-through as an
   // immediate "consumed" interaction (see lib/ui/post-dwell-tracking.ts).
   onOpen?: (post: HubPost) => void;

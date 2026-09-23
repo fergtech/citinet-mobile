@@ -5,14 +5,14 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ActionSheet } from '@/components/action-sheet';
 import { HubAvatar } from '@/components/hub-avatar';
 import { ReportSheet } from '@/components/report-sheet';
-import { SpaceAvatar } from '@/components/space-avatar';
+import { ClubAvatar } from '@/components/club-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand } from '@/constants/theme';
-import { blockMember, createConversation, getMember, listBlockedMembers, listSharedSpaces, unblockMember } from '@/lib/api/hubService';
-import { HubMember, Space } from '@/lib/api/types';
+import { blockMember, createConversation, getMember, listBlockedMembers, listSharedClubs, unblockMember } from '@/lib/api/hubService';
+import { HubMember, Club } from '@/lib/api/types';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useSession } from '@/lib/session/session-context';
 
@@ -20,7 +20,7 @@ import { useSession } from '@/lib/session/session-context';
 // (back-chevron header, not a tab), reached by tapping any avatar/username
 // anywhere in the app (see lib/ui/navigate-to-profile.ts). No Settings
 // section (that's account-only) — identity, a way to message them, and a
-// "Shared spaces" strip (mutual active memberships with the viewer).
+// "Shared clubs" strip (mutual active memberships with the viewer).
 export default function MemberProfileScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const { session } = useSession();
@@ -32,7 +32,7 @@ export default function MemberProfileScreen() {
   const [blocked, setBlocked] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [showReport, setShowReport] = useState(false);
-  const [sharedSpaces, setSharedSpaces] = useState<Space[]>([]);
+  const [sharedClubs, setSharedClubs] = useState<Club[]>([]);
 
   useEffect(() => {
     if (!session) return;
@@ -52,8 +52,8 @@ export default function MemberProfileScreen() {
 
   useEffect(() => {
     if (!session || userId === session.userId) return;
-    listSharedSpaces(session.hub.tunnelUrl, session.token, userId)
-      .then(setSharedSpaces)
+    listSharedClubs(session.hub.tunnelUrl, session.token, userId)
+      .then(setSharedClubs)
       .catch(() => {});
   }, [session, userId]);
 
@@ -145,18 +145,18 @@ export default function MemberProfileScreen() {
         </View>
       )}
 
-      {sharedSpaces.length > 0 && (
-        <View style={styles.sharedSpacesSection}>
-          <ThemedText style={styles.sharedSpacesLabel}>Shared spaces</ThemedText>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.spacesStrip}>
-            {sharedSpaces.map((space) => (
+      {sharedClubs.length > 0 && (
+        <View style={styles.sharedClubsSection}>
+          <ThemedText style={styles.sharedClubsLabel}>Shared clubs</ThemedText>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.clubsStrip}>
+            {sharedClubs.map((club) => (
               <Pressable
-                key={space.id}
-                onPress={() => router.push({ pathname: '/spaces/[slug]', params: { slug: space.slug } })}
-                style={styles.spaceItem}>
-                <SpaceAvatar space={space} size={38} />
-                <ThemedText style={styles.spaceItemLabel} numberOfLines={1}>
-                  {space.name}
+                key={club.id}
+                onPress={() => router.push({ pathname: '/clubs/[slug]', params: { slug: club.slug } })}
+                style={styles.clubItem}>
+                <ClubAvatar club={club} size={38} />
+                <ThemedText style={styles.clubItemLabel} numberOfLines={1}>
+                  {club.name}
                 </ThemedText>
               </Pressable>
             ))}
@@ -278,10 +278,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     opacity: 0.6,
   },
-  sharedSpacesSection: {
+  sharedClubsSection: {
     marginTop: 32,
   },
-  sharedSpacesLabel: {
+  sharedClubsLabel: {
     fontSize: 12,
     fontWeight: '600',
     opacity: 0.6,
@@ -289,16 +289,16 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 20,
   },
-  spacesStrip: {
+  clubsStrip: {
     paddingHorizontal: 20,
     gap: 16,
   },
-  spaceItem: {
+  clubItem: {
     alignItems: 'center',
     width: 64,
     gap: 6,
   },
-  spaceItemLabel: {
+  clubItemLabel: {
     fontSize: 11.5,
     textAlign: 'center',
   },
