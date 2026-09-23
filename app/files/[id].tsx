@@ -17,6 +17,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { deleteFile, getMediaUrl, getMember, listFiles, setFileVisibility } from '@/lib/api/hubService';
 import { FileVisibility, HubFile, HubMember } from '@/lib/api/types';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
+import { ENCRYPTION_SIZE_LIMIT } from '@/lib/crypto/files';
 import { FILE_KIND_META, fileKind, formatBytes, isPreviewable } from '@/lib/files/kind';
 import { saveFileToDevice } from '@/lib/files/save-to-device';
 import { useSession } from '@/lib/session/session-context';
@@ -36,6 +37,19 @@ function visibilityOf(file: HubFile): FileVisibility {
   if (file.web_public) return 'web';
   if (file.is_public) return 'hub';
   return 'private';
+}
+
+// A private file is only actually ciphertext server-side if it was under
+// ENCRYPTION_SIZE_LIMIT at upload time (see app/files/upload.tsx's
+// toUploadPart) — above that, upload silently skips client-side encryption,
+// matching citinet-web's own identical size cap. Gating decrypt-buffering
+// purely on visibility (ignoring size) meant a large private file — plaintext
+// on the server, "private" only in name — still got fully buffered into
+// memory for a decrypt check that was always going to be a no-op. Confirmed
+// on a real device: a 288 MB private-but-unencrypted video crashed with
+// "RangeError: String length exceeds limit" doing exactly that.
+function needsDecrypt(file: HubFile): boolean {
+  return visibilityOf(file) === 'private' && file.size_bytes <= ENCRYPTION_SIZE_LIMIT;
 }
 
 function formatSeconds(seconds: number): string {
@@ -202,7 +216,7 @@ export default function FileDetailScreen() {
     let cancelled = false;
     setPreviewError(null);
     setPreviewProgress(null);
-    const isPrivate = visibilityOf(file) === 'private';
+    const isPrivate = needsDecrypt(file);
     getMediaUrl(session.hub.tunnelUrl, session.token, file.file_name)
       .then(async (url) => {
         if (cancelled) return;
@@ -268,6 +282,16 @@ export default function FileDetailScreen() {
   // than trusting the video track's unreliable metadata.
   useEffect(() => {
     if (kind !== 'video' || !previewUrl) return;
+    // Skip this for a remote (network) previewUrl — it opens its own
+    // independent AVURLAsset against the same URL the player itself is
+    // streaming, and over a slow connection that's a second fetch racing the
+    // actual playback for the same limited bandwidth. Confirmed on a real
+    // device: a 275 MB video over this hub's ~1 MB/s Funnel connection sat
+    // stuck at 0:00 for several seconds after pressing play, competing with
+    // this. previewUrl is only ever local (file://) for a private file under
+    // the decrypt-buffering size cap — see needsDecrypt() — where this read
+    // is free (already-local bytes), so this still fires for those.
+    if (!previewUrl.startsWith('file://')) return;
     let cancelled = false;
     VideoThumbnails.getThumbnailAsync(previewUrl, { time: 0 })
       .then(({ width, height }) => {
@@ -291,7 +315,7 @@ export default function FileDetailScreen() {
     setError(null);
     setSavedMessage(null);
     try {
-      const isPrivate = visibilityOf(file) === 'private';
+      const isPrivate = needsDecrypt(file);
       // previewUrl is already a local file:// uri holding the decrypted
       // bytes once a private file's preview has resolved — reuse it instead
       // of re-fetching and re-decrypting the same file over again.

@@ -13,17 +13,11 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { setFileVisibility, uploadFilesWithProgress, type UploadedFile } from '@/lib/api/hubService';
 import { FileVisibility } from '@/lib/api/types';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
+import { ENCRYPTION_SIZE_LIMIT } from '@/lib/crypto/files';
 import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
 import { guessMimeType } from '@/lib/files/mime';
 import { useSession } from '@/lib/session/session-context';
 import { goBack } from '@/lib/ui/go-back';
-
-// Same cap citinet-web's own uploadFiles() uses before it skips client-side
-// encryption — reading/encrypting a file this size fully into memory on a
-// phone isn't worth it. Above this, a private upload goes up unencrypted
-// rather than failing outright (same silent fallback web takes when it has
-// no content key yet either).
-const ENCRYPTION_SIZE_LIMIT = 100 * 1024 * 1024;
 
 type UploadPart = { uri: string; name: string; type: string; size?: number };
 

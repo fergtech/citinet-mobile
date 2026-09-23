@@ -14,6 +14,18 @@ import QuickCrypto from 'react-native-quick-crypto';
 
 const FILE_ENC_MAGIC = new Uint8Array([0xc1, 0x7e, 0xe7, 0x01]); // "citinet-enc v1"
 
+// Matches citinet-web's own BLOB_LIMIT in FilesScreen.tsx exactly — files
+// above this never get encrypted client-side in the first place (upload
+// skips it, see app/files/upload.tsx's toUploadPart), so a private file this
+// large is always plaintext server-side despite its visibility tier saying
+// "private." Any caller deciding whether to buffer-and-decrypt a private
+// file (rather than treat it like a public one and stream/download it
+// directly) must gate on this too, not just on visibility — confirmed on a
+// real device: buffering a 288 MB private-but-unencrypted video into memory
+// for a decrypt check that was always going to be a no-op crashed with
+// "RangeError: String length exceeds limit."
+export const ENCRYPTION_SIZE_LIMIT = 100 * 1024 * 1024;
+
 export function isFileEncrypted(data: Uint8Array): boolean {
   return (
     data.length >= 4 + 12 + 16 &&
