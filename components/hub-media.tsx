@@ -1,13 +1,12 @@
 import { useIsFocused } from '@react-navigation/native';
 import { Image, ImageContentPosition, ImageStyle } from 'expo-image';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { StyleProp, StyleSheet, View } from 'react-native';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { MediaSkeleton } from '@/components/ui/media-skeleton';
-import { getMediaUrl, getPublicFileUrl } from '@/lib/api/hubService';
-import { acquirePlaybackSlot, releasePlaybackSlot } from '@/lib/media/video-playback-slots';
+import { getMediaSource, getPublicFileUrl } from '@/lib/api/hubService';
+import { acquirePlaybackSlot, releasePlaybackSlot, useIsLightboxOpen } from '@/lib/media/video-playback-slots';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm'];
 
@@ -35,12 +34,10 @@ type Props = {
   contentPosition?: ImageContentPosition;
   // Set by callers that know this file is unconditionally public — post/reply
   // attachments (post-row.tsx, post-grid-card.tsx, post detail), which the
-  // server always stores with is_public=true. Skips the token round-trip
-  // entirely in favor of getPublicFileUrl's direct, properly-cached public
-  // URL — see that function's own comment for why the token/download route
-  // this otherwise falls back to (getMediaUrl) is actively bad for inline
-  // feed images (private, no-store; built for explicit downloads, not
-  // display). Leave unset for anything that could be a private Files-section
+  // server always stores with is_public=true. Uses getPublicFileUrl's direct,
+  // properly-cached public URL instead of the authenticated one below — see
+  // that function's own comment for why (real cache headers; no auth needed
+  // at all). Leave unset for anything that could be a private Files-section
   // upload — that still needs the authenticated fallback below.
   isPublic?: boolean;
   // Default 'cover' crops to fill `style`'s box (every existing thumbnail
@@ -55,33 +52,66 @@ type Props = {
   // passes false explicitly so a tap always opens MediaLightbox instead of
   // being ambiguous with the native play/pause/scrub overlay's own tap.
   nativeControls?: boolean;
+  // Fires once the file has actually started rendering/playing — an image's
+  // onLoad, or a video player's first `readyToPlay` status. media-lightbox.tsx
+  // is the only caller that uses this (to know when to stop showing its own
+  // spinner); every other caller ignores it.
+  onLoad?: () => void;
+  // Fires once, the first time this file fails to load — a bad URL, a
+  // dropped connection mid-fetch, or (video) the player itself reporting a
+  // decode/format error. Every existing caller ignores it and gets the same
+  // silent placeholder/blank-null it always did; media-lightbox.tsx is the
+  // one caller that needs to know, so it can show an error+retry state
+  // instead of leaving the screen blank with nothing to explain why
+  // (previously true even for video, which had no error reporting of any
+  // kind — a stuck native play button forever).
+  onError?: () => void;
+  // Bypasses getMediaSource/getPublicFileUrl entirely and uses this local
+  // file:// uri as-is (no auth headers needed — it's already on disk). Set
+  // by media-lightbox.tsx, which downloads the file itself first — see
+  // lib/media/download-to-cache.ts for why: a confirmed bug where handing
+  // <VideoView>/<Image> a *remote* {uri, headers} source at this component's
+  // full-screen render size never fires onLoad or onError at all, despite
+  // the identical request succeeding fine as a small thumbnail (this prop)
+  // or via a plain fetch() (download-to-cache.ts's own fix).
+  localUri?: string;
+  // True only for the single HubMedia instance that IS an open
+  // MediaLightbox's video — see setLightboxOpen's own comment in
+  // video-playback-slots.ts for why every *other* instance needs to know to
+  // stand down while one of these is open.
+  isLightbox?: boolean;
 };
 
-export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic, contentFit = 'cover', muted = true, nativeControls }: Props) {
-  const [tokenUrl, setTokenUrl] = useState<string | null>(null);
+export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic, contentFit = 'cover', muted = true, nativeControls, onLoad, onError, localUri, isLightbox }: Props) {
   const [failed, setFailed] = useState(false);
   const video = isVideo(fileName);
 
+  // A different file reusing this same component instance (rare, but not
+  // impossible) should get a fresh chance rather than staying stuck on a
+  // previous file's failure.
   useEffect(() => {
-    if (isPublic) return;
-    let cancelled = false;
-    setTokenUrl(null);
     setFailed(false);
-    getMediaUrl(tunnelUrl, token, fileName)
-      .then((resolved) => {
-        if (!cancelled) setTokenUrl(resolved);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isPublic, tunnelUrl, token, fileName]);
+  }, [fileName, tunnelUrl, token, isPublic]);
 
-  // Synchronous for the public path — no loading gap, no placeholder flash,
-  // unlike the token round-trip the fallback still needs.
-  const url = isPublic ? getPublicFileUrl(tunnelUrl, fileName) : tokenUrl;
+  // One authenticated GET, not two — same endpoint + Bearer-header pattern
+  // citinet-web's own inline preview (AuthMedia/fetchFileBlob) uses, instead
+  // of getMediaUrl's "POST for a one-time token, then GET with it in the
+  // query string" dance built for native browser/device downloads (see
+  // getMediaSource's own comment in hubService.ts). Synchronous — no more
+  // loading gap before the image/video request even starts, and one less
+  // thing (a separate token-issuance call) that can fail on its own.
+  // Memoized: getMediaSource builds a fresh object (with a fresh nested
+  // `headers` object) on every call — passed inline, a parent re-render for
+  // any unrelated reason hands <Image>/<VideoView> a new-by-reference source
+  // every time, and both can read that as "the source changed" and cancel +
+  // restart an in-flight load. A large file on a slow connection could keep
+  // restarting forever, never once finishing before the next re-render — a
+  // real candidate for "this stays stuck loading" with no error and no
+  // upper bound on how long it takes.
+  const source = useMemo(
+    () => (localUri ? { uri: localUri } : isPublic ? { uri: getPublicFileUrl(tunnelUrl, fileName) } : getMediaSource(tunnelUrl, token, fileName)),
+    [localUri, isPublic, tunnelUrl, fileName, token]
+  );
 
   // Gates whether this instance is actually allowed to load/decode a video
   // right now — see lib/media/video-playback-slots.ts. Only a bounded number
@@ -101,9 +131,16 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
   // via hasSlot below, drops the player's source entirely — a stronger stop
   // than just pausing); regaining focus tries to reacquire one.
   const isFocused = useIsFocused();
+  // Every background preview stands down for as long as any lightbox is
+  // open — none of them are visible while it covers the screen, and the
+  // lightbox's own instance (isLightbox: true) is exempt so it isn't blocked
+  // by its own open state. See setLightboxOpen's comment in
+  // video-playback-slots.ts for the exact bug this fixes.
+  const lightboxOpen = useIsLightboxOpen();
+  const shouldHoldSlot = isFocused && (isLightbox || !lightboxOpen);
   useEffect(() => {
     if (!video) return;
-    if (isFocused) {
+    if (shouldHoldSlot) {
       if (!heldSlotRef.current && acquirePlaybackSlot()) {
         heldSlotRef.current = true;
         setHasSlot(true);
@@ -119,21 +156,40 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
         heldSlotRef.current = false;
       }
     };
-  }, [video, isFocused]);
+  }, [video, shouldHoldSlot]);
 
-  // Must call this hook unconditionally; pass null until the URL resolves
-  // OR this instance doesn't currently hold a playback slot — no slot means
-  // no source at all, not just "loaded but paused," so it isn't also
-  // holding decoder buffers for a video nothing is actually showing.
+  // Must call this hook unconditionally; pass null when this instance
+  // doesn't currently hold a playback slot — no slot means no source at
+  // all, not just "loaded but paused," so it isn't also holding decoder
+  // buffers for a video nothing is actually showing.
   // Autoplay muted: browsers block unmuted autoplay outright, and it's the
   // standard feed convention anyway — native controls (post-detail only, see
   // below) let the viewer unmute there.
-  const player = useVideoPlayer(video && hasSlot ? url : null, (p) => {
+  const player = useVideoPlayer(video && hasSlot ? source : null, (p) => {
     p.loop = true;
     p.muted = muted;
     if (previewSeconds) p.timeUpdateEventInterval = 0.25;
     p.play();
   });
+
+  // Video had no failure signal at all before this — an expired token, a
+  // format the device's decoder rejects, or the hub going unreachable
+  // mid-load all left the player silently stuck in its native "not started"
+  // state (a bare play button that does nothing when tapped) with nothing
+  // in the JS layer able to tell the difference from "still buffering."
+  useEffect(() => {
+    if (!video || !hasSlot) return;
+    const subscription = player.addListener('statusChange', ({ status }) => {
+      if (status === 'error') {
+        setFailed(true);
+        onError?.();
+      } else if (status === 'readyToPlay') {
+        onLoad?.();
+      }
+    });
+    return () => subscription.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onLoad/onError are passed fresh each render by callers; including them would tear down/re-add this listener every render.
+  }, [video, hasSlot, player]);
 
   // Loops just the first `previewSeconds` rather than the whole video —
   // `p.loop` above only covers reaching the actual end, so a long video
@@ -149,10 +205,6 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
   }, [video, previewSeconds, player]);
 
   if (failed) return null;
-
-  if (!url) {
-    return <MediaSkeleton style={[styles.placeholder, style]} />;
-  }
 
   if (video) {
     // Didn't win a playback slot (see lib/media/video-playback-slots.ts) —
@@ -184,26 +236,22 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
 
   return (
     <Image
-      source={{ uri: url }}
+      source={source}
       style={[styles.media, style]}
       contentFit={contentFit}
       contentPosition={contentPosition}
       cachePolicy="memory-disk"
       transition={200}
-      onError={() => setFailed(true)}
+      onLoad={() => onLoad?.()}
+      onError={() => {
+        setFailed(true);
+        onError?.();
+      }}
     />
   );
 }
 
 const styles = StyleSheet.create({
-  placeholder: {
-    width: '100%',
-    aspectRatio: 4 / 5,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#8882',
-  },
   media: {
     width: '100%',
     aspectRatio: 4 / 5,

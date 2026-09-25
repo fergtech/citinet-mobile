@@ -6,7 +6,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { listUnreadNotifications, markNotificationRead } from '@/lib/api/hubService';
+import { listUnreadNotifications, markNotificationRead, markNotificationsForRef } from '@/lib/api/hubService';
 import { HubNotification } from '@/lib/api/types';
 import { notificationCopy, notificationHref, notificationIcon } from '@/lib/notifications/meta';
 import { useRecentlyReadNotifications } from '@/lib/notifications/read-retention';
@@ -51,16 +51,58 @@ export default function NotificationsScreen() {
   // it from rendering twice (once "read", once "unread") until the server
   // catches up.
   const recentlyReadIds = new Set(recentlyRead.map((r) => r.notification.id));
-  const rows = [
+  const merged = [
     ...notifications.filter((n) => !recentlyReadIds.has(n.id)).map((n) => ({ ...n, isRead: false })),
     ...recentlyRead.map((r) => ({ ...r.notification, isRead: true })),
   ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-  function handlePress(n: HubNotification) {
+  // Several notifications pointing at the same underlying thing — a burst of
+  // messages in one conversation, a handful of replies on one post — collapse
+  // into a single row with a count instead of a flat list where reading one
+  // conversation still means individually dismissing every message it sent.
+  // Only groups by (type, ref_id) when there's a real ref_id to group by;
+  // everything else (account_approved, and anything this app doesn't
+  // recognize yet) is one-off by nature and gets its own row same as before.
+  type Row = HubNotification & { isRead: boolean };
+  const groups = new Map<string, Row[]>();
+  const groupOrder: string[] = [];
+  for (const n of merged) {
+    const key = n.ref_id ? `${n.type}:${n.ref_id}` : `single:${n.id}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+      groupOrder.push(key);
+    }
+    group.push(n);
+  }
+  // merged is already newest-first, so each group's own first push is its
+  // newest member and groupOrder reflects the newest-first order across groups.
+  const rows = groupOrder.map((key) => groups.get(key)!);
+
+  function handlePress(group: Row[]) {
     if (!session) return;
-    markRead(n);
-    markNotificationRead(session.hub.tunnelUrl, session.token, n.id).catch(() => {});
-    const href = notificationHref(n);
+    group.forEach(markRead);
+    const [newest] = group;
+    // One call clears the whole group server-side when they share a real
+    // ref_id (message/reply) — same bulk endpoint conversation screens use
+    // on open (see hubService.ts's own note on markNotificationsForRef).
+    // Anything without a ref_id is always a single-item group (see above),
+    // so the per-id fallback below only ever fires once.
+    //
+    // Scoped to `newest.type` — groups are already keyed by (type, ref_id),
+    // so every item here already shares one type, but an *unscoped* clear
+    // would also sweep up a different type sharing the same ref_id (a
+    // conversation's 'message_reaction' notifications alongside its
+    // 'message' ones, or an initiative's 'note_reply'/'update_comment'/
+    // 'initiative_invite' sharing one ref_id) — those are meant to be
+    // dismissed independently, not just because they point at the same place.
+    if (newest.ref_id) {
+      markNotificationsForRef(session.hub.tunnelUrl, session.token, newest.ref_id, newest.type).catch(() => {});
+    } else {
+      group.forEach((n) => markNotificationRead(session.hub.tunnelUrl, session.token, n.id).catch(() => {}));
+    }
+    const href = notificationHref(newest);
     if (href) router.push(href);
   }
 
@@ -83,11 +125,21 @@ export default function NotificationsScreen() {
           </View>
         )}
 
-        {rows.map((n) => {
-          const { title, subtitle } = notificationCopy(n, session.hub.name);
-          const { icon, color } = notificationIcon(n.type);
+        {rows.map((group) => {
+          const [newest] = group;
+          // Not group.length — a group can hold a mix of genuinely-unread
+          // items and older ones still lingering on-screen from the
+          // "recently read" grace period (see this file's own top-of-file
+          // note), and the count/badge should reflect what's actually
+          // unseen right now, not that historical total. allRead is false
+          // exactly when unreadCount > 0, so the fallback below never fires.
+          const unreadCount = group.filter((n) => !n.isRead).length;
+          const allRead = unreadCount === 0;
+          const count = allRead ? group.length : unreadCount;
+          const { title, subtitle } = notificationCopy(newest, session.hub.name, count);
+          const { icon, color } = notificationIcon(newest.type);
           return (
-            <Pressable key={n.id} onPress={() => handlePress(n)} style={[styles.row, n.isRead && styles.rowRead]}>
+            <Pressable key={newest.id} onPress={() => handlePress(group)} style={[styles.row, allRead && styles.rowRead]}>
               <View style={[styles.iconTile, { backgroundColor: color }]}>
                 <IconSymbol name={icon} size={18} color="#fff" />
               </View>
@@ -100,9 +152,15 @@ export default function NotificationsScreen() {
                     {subtitle}
                   </ThemedText>
                 )}
-                <ThemedText style={styles.rowTime}>{timeAgo(n.created_at)}</ThemedText>
+                <ThemedText style={styles.rowTime}>{timeAgo(newest.created_at)}</ThemedText>
               </View>
-              {!n.isRead && <View style={styles.unreadDot} />}
+              {!allRead && (count > 1 ? (
+                <View style={styles.countBadge}>
+                  <ThemedText style={styles.countBadgeText}>{count > 9 ? '9+' : count}</ThemedText>
+                </View>
+              ) : (
+                <View style={styles.unreadDot} />
+              ))}
             </Pressable>
           );
         })}
@@ -182,5 +240,22 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#d1465f',
     flexShrink: 0,
+  },
+  // Same red as unreadDot, just bigger — a grouped row's "N unread things
+  // here" replacement for the plain dot.
+  countBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: '#d1465f',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  countBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#fff',
   },
 });

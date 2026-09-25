@@ -7,7 +7,8 @@ import { ZoomableImage } from '@/components/atlas/zoomable-image';
 import { HubMedia } from '@/components/hub-media';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
-import { getMediaUrl } from '@/lib/api/hubService';
+import { downloadMediaToCache } from '@/lib/media/download-to-cache';
+import { setLightboxOpen } from '@/lib/media/video-playback-slots';
 
 type Props = {
   visible: boolean;
@@ -18,6 +19,12 @@ type Props = {
   token: string;
 };
 
+// Confirmed via on-device diagnostic logging: a plain fetch() of this same
+// authenticated URL reliably completes in 1-3 seconds, even for a 6+ MB
+// file. 20s leaves real margin for a large file on a slow connection without
+// leaving a truly stuck download spinning forever.
+const DOWNLOAD_TIMEOUT_MS = 20_000;
+
 // Full-screen tap target for a chat image/video attachment. Bubbles show
 // media cropped to a small square (HubMedia's default "cover" thumbnail) —
 // this shows the same file "contain"-fit instead, at its own original size
@@ -25,38 +32,73 @@ type Props = {
 // pinch/pan via ZoomableImage (same component atlas's photo viewer uses);
 // video gets native playback controls, unmuted (the inline bubble preview
 // stays silent — see hub-media.tsx's own note on that).
+//
+// Downloads the file itself first (downloadMediaToCache) rather than handing
+// <Image>/<VideoView> the remote {uri, headers} source directly the way
+// hub-media.tsx's own thumbnail does — see that function's own comment for
+// why. (The bug that surfaced while chasing this down — a photo going blank
+// with no error, no matter the source — actually turned out to be this
+// screen's own container using alignItems: 'center', which collapsed
+// ZoomableImage's <Image> to zero width; see the container style below.)
 export function MediaLightbox({ visible, onClose, fileName, kind, tunnelUrl, token }: Props) {
   const insets = useSafeAreaInsets();
-  // Only needed for the image path — ZoomableImage takes a plain resolved
-  // uri, unlike HubMedia (used below for video) which resolves its own.
-  // getMediaUrl caches by fileName, so this is normally an instant hit: the
-  // bubble's own HubMedia thumbnail already resolved the same file.
-  const [uri, setUri] = useState<string | null>(null);
+  const [localUri, setLocalUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Bumping this re-runs the effect below without waiting on any props to
-  // change — the only way to retry a getMediaUrl() call that already failed
-  // once (a plain re-render wouldn't re-fire a useEffect with the same deps).
   const [retryCount, setRetryCount] = useState(0);
 
+  // Every other HubMedia instance in the app (chat bubbles, feed previews)
+  // releases its own video playback slot for as long as this is true, since
+  // none of them are visible while this covers the screen — see
+  // setLightboxOpen's own comment in video-playback-slots.ts for the exact
+  // bug this fixes (this screen's own video otherwise finding both slots
+  // already held by backgrounded previews, including its own file's bubble
+  // still mounted right underneath it).
   useEffect(() => {
-    if (!visible || kind !== 'image') return;
+    setLightboxOpen(visible);
+    return () => setLightboxOpen(false);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
-    setUri(null);
+    setLocalUri(null);
     setError(null);
-    getMediaUrl(tunnelUrl, token, fileName)
-      .then((resolved) => {
-        if (!cancelled) setUri(resolved);
+
+    const timeout = setTimeout(() => {
+      cancelled = true;
+      setError(kind === 'video' ? 'This video is taking too long to load.' : 'This photo is taking too long to load.');
+    }, DOWNLOAD_TIMEOUT_MS);
+
+    downloadMediaToCache(tunnelUrl, token, fileName)
+      .then((uri) => {
+        if (cancelled) return;
+        clearTimeout(timeout);
+        setLocalUri(uri);
       })
-      .catch((err) => {
-        // This was missing entirely before — a rejected fetch (expired
-        // token, dropped connection, the hub's Funnel lapsing) left uri
-        // permanently null with nothing on screen to explain why, forever.
-        if (!cancelled) setError(err instanceof Error ? err.message : "Couldn't load this photo.");
+      .catch(() => {
+        if (cancelled) return;
+        clearTimeout(timeout);
+        setError(kind === 'video' ? "Couldn't load this video." : "Couldn't load this photo.");
       });
+
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
     };
   }, [visible, kind, tunnelUrl, token, fileName, retryCount]);
+
+  const errorBlock = error && (
+    <View style={styles.errorBlock}>
+      <ThemedText style={styles.errorText} lightColor="#fff" darkColor="#fff">
+        {error}
+      </ThemedText>
+      <Pressable onPress={() => setRetryCount((n) => n + 1)} style={styles.retryButton}>
+        <ThemedText style={styles.retryLabel} lightColor="#fff" darkColor="#fff">
+          Try again
+        </ThemedText>
+      </Pressable>
+    </View>
+  );
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -67,25 +109,29 @@ export function MediaLightbox({ visible, onClose, fileName, kind, tunnelUrl, tok
           never renders at all (a silent failure: no crash, no error, just
           this screen staying blank forever). */}
       <GestureHandlerRootView style={styles.container}>
-        {kind === 'image' ? (
-          error ? (
-            <View style={styles.errorBlock}>
-              <ThemedText style={styles.errorText} lightColor="#fff" darkColor="#fff">
-                {error}
-              </ThemedText>
-              <Pressable onPress={() => setRetryCount((n) => n + 1)} style={styles.retryButton}>
-                <ThemedText style={styles.retryLabel} lightColor="#fff" darkColor="#fff">
-                  Try again
-                </ThemedText>
-              </Pressable>
-            </View>
-          ) : uri ? (
-            <ZoomableImage uri={uri} />
-          ) : (
-            <ActivityIndicator color="#fff" />
-          )
+        {errorBlock ? (
+          errorBlock
+        ) : !localUri ? (
+          <ActivityIndicator color="#fff" />
+        ) : kind === 'image' ? (
+          <ZoomableImage uri={localUri} onError={() => setError("Couldn't load this photo.")} />
         ) : (
-          <HubMedia fileName={fileName} tunnelUrl={tunnelUrl} token={token} style={styles.video} contentFit="contain" muted={false} />
+          // isLightbox: exempts this instance from the "stand down while a
+          // lightbox is open" rule above — it IS the lightbox. localUri: the
+          // file already downloaded above, so this only has to decode/play
+          // it, not fetch it over the network itself.
+          <HubMedia
+            key={retryCount}
+            fileName={fileName}
+            tunnelUrl={tunnelUrl}
+            token={token}
+            localUri={localUri}
+            isLightbox
+            style={styles.video}
+            contentFit="contain"
+            muted={false}
+            onError={() => setError("Couldn't load this video.")}
+          />
         )}
 
         <Pressable
@@ -105,7 +151,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
-    alignItems: 'center',
+    // NOT alignItems: 'center' — that governs the cross axis, and a plain
+    // `flex: 1` child (ZoomableImage's <Image>, which has no explicit width)
+    // only grows along the *main* axis. With 'center' instead of the
+    // default 'stretch', it collapsed to zero width and never got a chance
+    // to render anything — which looked exactly like a silent load failure
+    // (no onLoad, no onError, just blank) since <Image> had nothing to
+    // actually decode into. Confirmed real bug: the video branch has an
+    // explicit width: '100%' below and was never affected; the *other* place
+    // ZoomableImage is used (app/atlas/panoramax-view.tsx) has never set
+    // alignItems on its own container and has always worked fine.
     justifyContent: 'center',
   },
   video: {

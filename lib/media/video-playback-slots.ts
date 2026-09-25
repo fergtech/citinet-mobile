@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 // Caps how many HubMedia video previews can actively decode at once.
 // Each concurrently-playing ExoPlayer instance holds real decoder buffers —
 // a dashboard/feed mounting several video rows together (files grid,
@@ -24,4 +26,46 @@ export function acquirePlaybackSlot(): boolean {
 
 export function releasePlaybackSlot(): void {
   activeCount = Math.max(0, activeCount - 1);
+}
+
+// Confirmed real bug this fixes: open MediaLightbox for a video whose own
+// chat-bubble preview is still mounted underneath it (Modal doesn't unmount
+// what's behind it, and expo-router doesn't unmount other still-focused
+// content either) — that bubble is still holding one of only 2 slots for a
+// video the modal now fully covers, and any other video previews mounted
+// elsewhere in the same still-"focused" screen (FlatList windowing keeps a
+// few rows mounted just off-screen) can easily hold the other one, leaving
+// the lightbox's own instance with zero — it never even attempts to load,
+// forever showing the plain "no slot" icon with nothing to tap.
+//
+// Background previews (every HubMedia except the one instance that IS the
+// open lightbox) release their slot for as long as any lightbox is open,
+// since none of them are actually visible to the user while it covers the
+// screen anyway — freeing both slots for the lightbox's own video the
+// moment it needs one. A plain module-level flag + subscriber list because
+// this needs to reactively re-run each background HubMedia's slot effect,
+// not just be read once.
+let lightboxOpen = false;
+const lightboxListeners = new Set<() => void>();
+
+export function setLightboxOpen(open: boolean): void {
+  if (lightboxOpen === open) return;
+  lightboxOpen = open;
+  lightboxListeners.forEach((listener) => listener());
+}
+
+export function useIsLightboxOpen(): boolean {
+  const [value, setValue] = useState(lightboxOpen);
+  useEffect(() => {
+    const listener = () => setValue(lightboxOpen);
+    lightboxListeners.add(listener);
+    // The flag can flip between this hook's initial render and the effect
+    // above subscribing to it (e.g. a lightbox opens in that gap) — re-sync
+    // once subscribed rather than trusting the value captured at render time.
+    setValue(lightboxOpen);
+    return () => {
+      lightboxListeners.delete(listener);
+    };
+  }, []);
+  return value;
 }

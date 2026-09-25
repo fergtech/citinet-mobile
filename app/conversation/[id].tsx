@@ -18,7 +18,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { blockMember, getMediaUrl, getMessages, listCallEvents, listConversations, sendMessage, toggleMessageReaction, uploadFilesWithProgress } from '@/lib/api/hubService';
+import { blockMember, getMediaUrl, getMessages, listCallEvents, listConversations, markNotificationsForRef, sendMessage, toggleMessageReaction, uploadFilesWithProgress } from '@/lib/api/hubService';
 import { CallEvent, CallMode, HubMessage, MessageAttachment, MessageReaction } from '@/lib/api/types';
 import { useCall } from '@/lib/comms/call-context';
 import { formatCallDuration, useElapsedSeconds } from '@/lib/comms/use-elapsed';
@@ -272,6 +272,26 @@ export default function ConversationScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Opening a conversation and seeing its latest message means every message
+  // notification that led up to it has effectively already been seen too —
+  // clears them all in one call rather than leaving the notifications screen
+  // as the only place that can dismiss them, one tap per message. Fire-and-
+  // forget, same as the read-receipt update GET .../messages already does
+  // server-side for the "· Read" indicator (a separate mechanism — that one
+  // tracks hub_conversation_members.last_read_at, this one hub_notifications).
+  //
+  // Scoped to 'message' specifically — a conversation can also carry
+  // 'message_reaction' notifications sharing this same ref_id, and those are
+  // tracked independently on purpose (see markNotificationsForRef's own
+  // comment): just opening the thread to read new messages shouldn't also
+  // silently dismiss a reaction notification nobody's actually acknowledged
+  // yet. The one place that *can* clear a reaction notification is tapping
+  // it directly on the notifications screen.
+  useEffect(() => {
+    if (!session) return;
+    markNotificationsForRef(session.hub.tunnelUrl, session.token, id, 'message').catch(() => {});
+  }, [session, id]);
 
   const loadCallEvents = useCallback(() => {
     if (!session) return;

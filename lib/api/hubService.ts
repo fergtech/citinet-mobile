@@ -1,7 +1,7 @@
 import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { createUploadTask, FileSystemUploadType } from 'expo-file-system/legacy';
 
-import { AnswerResponse, AtlasPin, AtlasPinCategory, AtlasPinReply, BlockedMember, CallEvent, CallMode, ChecklistItem, Club, ClubFile, ClubMember, ClubVisibility, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, InitiativeUpdateComment, InitiativeUpdateEntry, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
+import { AnswerResponse, AtlasPin, AtlasPinCategory, AtlasPinReply, BlockedMember, CallEvent, CallMode, ChecklistItem, Club, ClubFile, ClubMember, ClubVisibility, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, InitiativeUpdateComment, InitiativeUpdateEntry, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, NotificationType, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
 async function readErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -1325,20 +1325,42 @@ export function getAvatarUrl(tunnelUrl: string, userId: string): string {
 // GET /api/public/files/:filename — same "public, no-auth, safe to use
 // directly as an <Image>/<Video> uri" shape as getAvatarUrl above, for any
 // file the server has is_public=true (post/reply attachments always are —
-// see the create/update-post handlers in api/server.js). Unlike
-// getMediaUrl() below, this needs no token round-trip and — critically —
-// the server sends real caching headers on this route (`public,
-// max-age=86400, immutable`) instead of the token/download route's
-// `private, no-store` (that route is for explicit "save this file to my
-// device" downloads, not inline display, hence no-store). Only use this for
-// media you know is unconditionally public; anything that could be a
-// private Files-section upload must keep going through getMediaUrl().
+// see the create/update-post handlers in api/server.js). The server sends
+// real caching headers on this route (`public, max-age=86400, immutable`)
+// instead of the private-file route's `private, no-store` (that route is
+// for explicit "save this file to my device" downloads, not inline
+// display, hence no-store). Only use this for media you know is
+// unconditionally public; anything that could be a private Files-section
+// upload needs getMediaSource() below instead.
 export function getPublicFileUrl(tunnelUrl: string, fileName: string): string {
   return `${tunnelUrl}/api/public/files/${encodeURIComponent(fileName)}`;
 }
 
+// GET /api/files/:filename with a Bearer header — one authenticated request,
+// same endpoint + auth pattern citinet-web's own inline preview (AuthMedia/
+// fetchFileBlob in its MessagesScreen/hubService) uses to show a private
+// file's content, and the same shape every other authenticated GET in this
+// file already uses to load a message's own text. Unlike getMediaUrl()
+// below, there's no separate "ask for a one-time token first" round trip —
+// half the requests, and one less thing (token issuance) that can fail on
+// its own. RN's <Image>/<VideoView> can attach a real Authorization header
+// directly (unlike a plain web <img>/<video> tag), so unlike the web client
+// there's no need to fetch-and-convert-to-a-blob-URL either — this is
+// usable as a source as-is. Use this for inline display (thumbnails,
+// MediaLightbox); keep using getMediaUrl() for an explicit device download,
+// which needs a plain headerless URL a native share sheet/browser can fetch
+// on its own.
+export function getMediaSource(tunnelUrl: string, token: string, fileName: string): { uri: string; headers: Record<string, string> } {
+  return {
+    uri: `${tunnelUrl}/api/files/${encodeURIComponent(fileName)}`,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
 // fileName -> in-flight/resolved download URL, so simultaneous requests for the
 // same file (e.g. shown in both the feed and post detail) share one token request.
+// Only used for explicit device downloads now (saveFileToDevice, the "download
+// this file" chip) — see getMediaSource() above for inline display.
 const mediaUrlCache = new Map<string, Promise<string>>();
 
 export function getMediaUrl(tunnelUrl: string, token: string, fileName: string): Promise<string> {
@@ -2583,6 +2605,35 @@ export async function markNotificationRead(tunnelUrl: string, token: string, id:
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't dismiss that notification."));
+  }
+}
+
+// POST /api/notifications/mark-read-by-ref — clears every unread
+// notification pointing at one ref_id (a conversation id for 'message', a
+// post id for 'reply') in a single call, not just one row at a time. Used by
+// app/conversation/[id].tsx: opening a conversation and seeing its latest
+// message should clear every 'message' notification that led up to it too,
+// the same way reading a thread on any other messaging app doesn't leave you
+// dismissing one notification per message it already showed you.
+//
+// `type` scopes the clear to just that one notification type. Pass it
+// whenever more than one type can share the same ref_id (a conversation id
+// carries both 'message' and 'message_reaction'; an initiative id carries
+// 'note_reply', 'update_comment', and 'initiative_invite') — those are
+// tracked independently on purpose, e.g. opening a conversation to read new
+// messages shouldn't also silently dismiss a reaction notification for that
+// same conversation nobody's actually looked at (there's nowhere else in
+// the app a reaction notification gets acknowledged, unlike a message,
+// which the thread itself already shows). Omit it only when there's
+// genuinely just one type to clear.
+export async function markNotificationsForRef(tunnelUrl: string, token: string, refId: string, type?: NotificationType): Promise<void> {
+  const res = await fetch(`${tunnelUrl}/api/notifications/mark-read-by-ref`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(type ? { ref_id: refId, type } : { ref_id: refId }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't clear those notifications."));
   }
 }
 

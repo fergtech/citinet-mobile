@@ -893,23 +893,46 @@ export type InitiativeActivityEntry = {
 //
 // Only 6 types are ever actually inserted anywhere in the server (every
 // notifyUser(...) call site) — kept as a union rather than widened to
-// `string`, since a 7th appearing would mean a real server change worth
+// `string`, since a new one appearing would mean a real server change worth
 // knowing about at compile time, not something to quietly swallow. Still
 // literally 'space_invite' — that's the server's own real value, unrenamed
 // (see the ── Clubs ── block further up):
 //   - message: ref_id = conversation id
+//   - message_reaction: ref_id = conversation id too (not the message's own
+//     id — same reasoning as note_reply below) — a distinct type from
+//     'message' so it groups as its own row rather than merging with actual
+//     messages from that conversation. Fires on a fresh reaction only, never
+//     on removing one, never for reacting to your own message.
 //   - reply: ref_id = post id
+//   - like: ref_id = post id (fires on a fresh like only, never on unlike,
+//     never for liking your own post)
+//   - pin_reply: ref_id = the Atlas pin's id
+//   - note_reply: ref_id = initiative id (not the note's own id — no mobile
+//     route takes just a note/task id, so this lands on the project
+//     overview, same precision as initiative_invite below)
+//   - update_comment: ref_id = initiative id, same reasoning as note_reply
 //   - space_invite: ref_id = the club's SLUG, not its id
 //   - initiative_invite: ref_id = initiative id
 //   - join_request: ref_id = the requesting user's own id (an admin-facing
 //     notice, not something the requester sees)
 //   - account_approved: ref_id is always null — there's no single "item" to
 //     deep-link to, see lib/notifications/meta.ts's own handling of this.
-// citinet-web's own FEATURE_TYPES only wires 3 of these 6 into a per-icon
-// badge dot (feed/messages/hub_management) — the other 3 are otherwise only
-// ever surfaced by email. The mobile notifications screen is what actually
-// surfaces all 6 in one place.
-export type NotificationType = 'message' | 'reply' | 'space_invite' | 'initiative_invite' | 'account_approved' | 'join_request';
+// citinet-web's own FEATURE_TYPES only wires a handful of these into a
+// per-icon badge dot (feed/messages/hub_management) — the rest are otherwise
+// only ever surfaced by email. The mobile notifications screen is what
+// actually surfaces all of them in one place.
+export type NotificationType =
+  | 'message'
+  | 'message_reaction'
+  | 'reply'
+  | 'like'
+  | 'pin_reply'
+  | 'note_reply'
+  | 'update_comment'
+  | 'space_invite'
+  | 'initiative_invite'
+  | 'account_approved'
+  | 'join_request';
 
 export type HubNotification = {
   id: number;
