@@ -10,6 +10,7 @@ import { ActionSheet } from '@/components/action-sheet';
 import { EmojiPickerSheet } from '@/components/emoji-picker';
 import { HubMedia } from '@/components/hub-media';
 import { LinkPreviewCard } from '@/components/link-preview-card';
+import { MediaLightbox } from '@/components/media-lightbox';
 import { ReportSheet } from '@/components/report-sheet';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ScreenHeader } from '@/components/screen-header';
@@ -106,18 +107,27 @@ function MessageAttachmentView({
   tunnelUrl,
   token,
   own,
+  onOpenMedia,
 }: {
   attachment: MessageAttachment;
   tunnelUrl: string;
   token: string;
   own: boolean;
+  onOpenMedia: (fileName: string, kind: 'image' | 'video') => void;
 }) {
   const colorScheme = useColorScheme() ?? 'light';
   const kind = fileKind(attachment.file_name, attachment.mime_type);
   const [saving, setSaving] = useState(false);
 
   if (kind === 'image' || kind === 'video') {
-    return <HubMedia fileName={attachment.file_name} tunnelUrl={tunnelUrl} token={token} style={styles.attachmentMedia} />;
+    return (
+      // nativeControls={false}: without it, a tap on a video thumbnail would
+      // be ambiguous between "toggle the inline play/pause overlay" and
+      // "open the lightbox" — this makes tap always mean the latter.
+      <Pressable onPress={() => onOpenMedia(attachment.file_name, kind)} accessibilityLabel={kind === 'video' ? 'Open video' : 'Open photo'} accessibilityRole="button">
+        <HubMedia fileName={attachment.file_name} tunnelUrl={tunnelUrl} token={token} style={styles.attachmentMedia} nativeControls={false} />
+      </Pressable>
+    );
   }
 
   const meta = FILE_KIND_META[kind];
@@ -209,6 +219,9 @@ export default function ConversationScreen() {
   // the reaction row now owns that gesture, with Report demoted to a row
   // inside the same sheet (see the sheet's own render below).
   const [reactionSheetMessageId, setReactionSheetMessageId] = useState<string | null>(null);
+  // Tap on an image/video attachment bubble (see MessageAttachmentView) —
+  // opens MediaLightbox full-screen instead of the cropped inline preview.
+  const [lightboxMedia, setLightboxMedia] = useState<{ fileName: string; kind: 'image' | 'video' } | null>(null);
 
   // A conversation reached via Messages carries the peer id already; a
   // hypothetical deep link that skips that screen falls back to deriving it
@@ -561,7 +574,14 @@ export default function ConversationScreen() {
                     {hasAttachments && (
                       <View style={[styles.attachmentsWrap, !!cleanText && styles.attachmentsWrapWithText]}>
                         {item.attachments.map((att) => (
-                          <MessageAttachmentView key={att.file_id} attachment={att} tunnelUrl={session.hub.tunnelUrl} token={session.token} own={own} />
+                          <MessageAttachmentView
+                            key={att.file_id}
+                            attachment={att}
+                            tunnelUrl={session.hub.tunnelUrl}
+                            token={session.token}
+                            own={own}
+                            onOpenMedia={(fileName, kind) => setLightboxMedia({ fileName, kind })}
+                          />
                         ))}
                       </View>
                     )}
@@ -730,6 +750,17 @@ export default function ConversationScreen() {
             token={session.token}
             targetType="message"
             targetId={reportMessageId}
+          />
+        )}
+
+        {lightboxMedia && (
+          <MediaLightbox
+            visible={!!lightboxMedia}
+            onClose={() => setLightboxMedia(null)}
+            fileName={lightboxMedia.fileName}
+            kind={lightboxMedia.kind}
+            tunnelUrl={session.hub.tunnelUrl}
+            token={session.token}
           />
         )}
 

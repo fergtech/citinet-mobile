@@ -43,9 +43,21 @@ type Props = {
   // display). Leave unset for anything that could be a private Files-section
   // upload — that still needs the authenticated fallback below.
   isPublic?: boolean;
+  // Default 'cover' crops to fill `style`'s box (every existing thumbnail
+  // caller). MediaLightbox passes 'contain' so a full-screen view shows the
+  // whole frame at its own aspect ratio instead of cropping it.
+  contentFit?: 'cover' | 'contain';
+  // Every preview (feed, chat bubble, post detail) autoplays muted — default
+  // true keeps that. MediaLightbox passes false: once someone's deliberately
+  // opened a video to watch it full-screen, it should have sound.
+  muted?: boolean;
+  // Defaults to `!previewSeconds` (unchanged). A chat attachment thumbnail
+  // passes false explicitly so a tap always opens MediaLightbox instead of
+  // being ambiguous with the native play/pause/scrub overlay's own tap.
+  nativeControls?: boolean;
 };
 
-export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic }: Props) {
+export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic, contentFit = 'cover', muted = true, nativeControls }: Props) {
   const [tokenUrl, setTokenUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const video = isVideo(fileName);
@@ -118,7 +130,7 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
   // below) let the viewer unmute there.
   const player = useVideoPlayer(video && hasSlot ? url : null, (p) => {
     p.loop = true;
-    p.muted = true;
+    p.muted = muted;
     if (previewSeconds) p.timeUpdateEventInterval = 0.25;
     p.play();
   });
@@ -164,8 +176,8 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
       <VideoView
         player={player}
         style={[styles.media, style]}
-        nativeControls={!previewSeconds}
-        contentFit="cover"
+        nativeControls={nativeControls ?? !previewSeconds}
+        contentFit={contentFit}
       />
     );
   }
@@ -174,7 +186,7 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
     <Image
       source={{ uri: url }}
       style={[styles.media, style]}
-      contentFit="cover"
+      contentFit={contentFit}
       contentPosition={contentPosition}
       cachePolicy="memory-disk"
       transition={200}

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Track } from 'livekit-client';
@@ -53,6 +54,48 @@ function RoomContent() {
   const remoteTrackRef = cameraTracks.find((t) => !t.participant.isLocal);
   const elapsed = useElapsedSeconds(call.startedAt);
 
+  // Toggle buttons flip CallContext's flag optimistically (see each
+  // handler below) so the icon responds instantly, but the real change
+  // happens on the LiveKit connection and can fail silently over a bad
+  // link (hub1's Funnel lapsing is the known recurring cause — see
+  // memory). Without this, a failed setMicrophoneEnabled/setCameraEnabled
+  // left the icon showing muted/off while the actual track kept
+  // streaming, indistinguishable from "the button doesn't work."
+  const [controlError, setControlError] = useState<string | null>(null);
+  const controlErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (controlErrorTimer.current) clearTimeout(controlErrorTimer.current);
+  }, []);
+  function showControlError(message: string) {
+    setControlError(message);
+    if (controlErrorTimer.current) clearTimeout(controlErrorTimer.current);
+    controlErrorTimer.current = setTimeout(() => setControlError(null), 3500);
+  }
+
+  // hub1's Funnel lapsing (or any other transient link hiccup) shows up
+  // here as a single failed RTC signaling round-trip, not a sustained
+  // outage — retrying a beat later usually lands once the connection
+  // recovers, so this is worth trying before punishing the user with a
+  // reverted button and an error banner.
+  async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    const delaysMs = [300, 900];
+    let lastErr: unknown;
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+    }
+    for (const delay of delaysMs) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr;
+  }
+
   // Nothing to navigate here — this overlay isn't a pushed screen, it just
   // stops rendering the moment call.phase leaves 'connected' (see
   // InCallOverlay's own guard). end() alone is enough; the thread screen
@@ -64,22 +107,41 @@ function RoomContent() {
   function handleFlip() {
     const next = call.facingMode === 'user' ? 'environment' : 'user';
     toggleFacingMode();
-    localParticipant.setCameraEnabled(true, { facingMode: next }).catch((err) => console.warn('[call] flip camera failed', err));
+    withRetry(() => localParticipant.setCameraEnabled(true, { facingMode: next })).catch((err) => {
+      console.warn('[call] flip camera failed', err);
+      toggleFacingMode();
+      showControlError("Couldn't flip camera — check your connection");
+    });
   }
 
   function handleToggleMic() {
+    const next = !isMicrophoneEnabled;
     toggleMic();
-    localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled).catch((err) => console.warn('[call] toggle mic failed', err));
+    withRetry(() => localParticipant.setMicrophoneEnabled(next)).catch((err) => {
+      console.warn('[call] toggle mic failed', err);
+      toggleMic();
+      showControlError(next ? "Couldn't turn mic on — check your connection" : "Couldn't mute — check your connection");
+    });
   }
 
   function handleToggleCam() {
+    const next = !isCameraEnabled;
     toggleCam();
-    localParticipant.setCameraEnabled(!isCameraEnabled).catch((err) => console.warn('[call] toggle camera failed', err));
+    withRetry(() => localParticipant.setCameraEnabled(next)).catch((err) => {
+      console.warn('[call] toggle camera failed', err);
+      toggleCam();
+      showControlError(next ? "Couldn't turn camera on — check your connection" : "Couldn't turn camera off — check your connection");
+    });
   }
 
   function handleToggleShare() {
+    const next = !isScreenShareEnabled;
     toggleSharing();
-    localParticipant.setScreenShareEnabled(!isScreenShareEnabled).catch((err) => console.warn('[call] toggle screen share failed', err));
+    withRetry(() => localParticipant.setScreenShareEnabled(next)).catch((err) => {
+      console.warn('[call] toggle screen share failed', err);
+      toggleSharing();
+      showControlError("Couldn't share screen — check your connection");
+    });
   }
 
   // toggleSpeaker() alone only flips CallContext's own `speakerOn` flag —
@@ -93,7 +155,11 @@ function RoomContent() {
     const next = !call.speakerOn;
     toggleSpeaker();
     const deviceId = Platform.OS === 'ios' ? (next ? 'force_speaker' : 'default') : next ? 'speaker' : 'earpiece';
-    AudioSession.selectAudioOutput(deviceId).catch((err) => console.warn('[call] toggle speaker failed', err));
+    withRetry(() => AudioSession.selectAudioOutput(deviceId)).catch((err) => {
+      console.warn('[call] toggle speaker failed', err);
+      toggleSpeaker();
+      showControlError("Couldn't switch audio output — check your connection");
+    });
   }
 
   // Real state, not the spec prototype's fixed "~2.2s" demo timing — this
@@ -187,6 +253,14 @@ function RoomContent() {
       </LinearGradient>
 
       <View style={styles.controlsWrap}>
+        {controlError && (
+          <View style={styles.controlErrorPill}>
+            <IconSymbol name="exclamationmark.triangle.fill" size={13} color="#fff" />
+            <ThemedText style={styles.controlErrorText} lightColor="#fff" darkColor="#fff">
+              {controlError}
+            </ThemedText>
+          </View>
+        )}
         <View style={styles.controlsPill}>
           <ControlButton icon={isMicrophoneEnabled ? 'mic.fill' : 'mic.slash.fill'} active={!isMicrophoneEnabled} label={isMicrophoneEnabled ? 'Mic on' : 'Muted'} onPress={handleToggleMic} />
           {call.mode === 'video' ? (
@@ -412,6 +486,19 @@ const styles = StyleSheet.create({
     bottom: 24,
     alignItems: 'center',
     gap: 16,
+  },
+  controlErrorPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(220,43,43,0.9)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  controlErrorText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   controlsPill: {
     flexDirection: 'row',
