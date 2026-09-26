@@ -622,7 +622,13 @@ export default function ConversationScreen() {
                           r.reacted_by_me && { backgroundColor: Brand + '22', borderColor: Brand },
                         ]}>
                         <ThemedText style={styles.reactionPillText}>
-                          {r.emoji} {r.count}
+                          {/* A 1:1 DM only ever has one person's reaction on
+                              a given emoji, so "❤️ 1" is just noise — the
+                              count earns its place once a group chat member
+                              stacks onto the same emoji (2+), same as it
+                              already did before this. */}
+                          {r.emoji}
+                          {r.count > 1 ? ` ${r.count}` : ''}
                         </ThemedText>
                       </Pressable>
                     ))}

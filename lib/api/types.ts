@@ -941,6 +941,18 @@ export type HubNotification = {
   actor_username: string | null;
   ref_id: string | null;
   created_at: string;
+  // The referenced content's own category — populated server-side via a
+  // conditional JOIN (see GET /api/notifications/unread), never a client-side
+  // fetch. Only ever one of these is non-null on a given row, matching
+  // whichever type ref_id actually points at:
+  //   - post_category: 'reply'/'like' rows — a hub_posts.category value
+  //     ('DISCUSSION', 'EVENT', 'PROJECT', 'REQUEST', 'EVENT', 'POLL')
+  //   - pin_category: 'pin_reply' rows — a hub_atlas_pins.category value
+  //     (see AtlasPinCategory)
+  // Both are undefined/null for every other type, including on older rows
+  // fetched before this existed.
+  post_category?: string | null;
+  pin_category?: string | null;
 };
 
 // ── Trust & safety ──────────────────────────────────────────────────

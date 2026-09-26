@@ -2,7 +2,25 @@ import type { Href } from 'expo-router';
 
 import type { IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
-import { HubNotification, NotificationType } from '@/lib/api/types';
+import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
+import { AtlasPinCategory, HubNotification, NotificationType } from '@/lib/api/types';
+
+// hub_posts.category comes back as 'DISCUSSION'/'EVENT'/etc — lowercased,
+// these already read naturally as a noun ("replied to your event"). Falls
+// back to the generic noun for anything missing (older rows fetched before
+// GET /api/notifications/unread started joining this in) or unrecognized.
+function postCategoryNoun(category: string | null | undefined): string {
+  return category ? category.toLowerCase() : 'post';
+}
+
+// Same idea for an Atlas pin, but hub_atlas_pins.category is already a short
+// lowercase code ('poi', 'safety', ...) that isn't a great noun on its own —
+// reuse the same human labels the Atlas UI itself shows (ATLAS_CATEGORIES),
+// just lowercased to fit mid-sentence ("commented on your safety alert pin").
+function pinCategoryNoun(category: string | null | undefined): string {
+  const entry = category ? ATLAS_CATEGORIES[category as AtlasPinCategory] : undefined;
+  return entry ? `${entry.label.toLowerCase()} pin` : 'pin';
+}
 
 // Same icon-tile-with-colored-background convention as every other list row
 // in this app (Home's atlasLatestIcon, Discover's hubIcon, etc.) — colors
@@ -45,16 +63,22 @@ export function notificationCopy(n: HubNotification, hubName: string, count = 1)
       return { title: count > 1 ? `${actor} sent you ${count} messages` : `${actor} sent you a message` };
     case 'message_reaction':
       return { title: count > 1 ? `${actor} reacted to ${count} of your messages` : `${actor} reacted to your message` };
-    case 'reply':
-      return { title: count > 1 ? `${actor} replied to your post ${count} times` : `${actor} replied to your post` };
-    case 'like':
+    case 'reply': {
+      const noun = postCategoryNoun(n.post_category);
+      return { title: count > 1 ? `${actor} replied to your ${noun} ${count} times` : `${actor} replied to your ${noun}` };
+    }
+    case 'like': {
       // Unlike message/reply groups (almost always the same person, just
       // several times), a like group is one row per *post*, so its members
       // are typically several different people — "X and N others," not
       // "X liked it N times."
-      return { title: count > 1 ? `${actor} and ${count - 1} other${count - 1 === 1 ? '' : 's'} liked your post` : `${actor} liked your post` };
-    case 'pin_reply':
-      return { title: count > 1 ? `${actor} commented on your pin ${count} times` : `${actor} commented on your pin` };
+      const noun = postCategoryNoun(n.post_category);
+      return { title: count > 1 ? `${actor} and ${count - 1} other${count - 1 === 1 ? '' : 's'} liked your ${noun}` : `${actor} liked your ${noun}` };
+    }
+    case 'pin_reply': {
+      const noun = pinCategoryNoun(n.pin_category);
+      return { title: count > 1 ? `${actor} commented on your ${noun} ${count} times` : `${actor} commented on your ${noun}` };
+    }
     case 'note_reply':
       return { title: count > 1 ? `${actor} replied to your note ${count} times` : `${actor} replied to your note` };
     case 'update_comment':
