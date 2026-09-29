@@ -12,7 +12,7 @@ import {
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
-import { HubAvatar } from '@/components/hub-avatar';
+import { EditableAvatar } from '@/components/editable-avatar';
 import { ClubAvatar } from '@/components/club-avatar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
@@ -26,6 +26,7 @@ import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 import { useThemePreference } from '@/lib/ui/theme-preference';
 import { isMod } from '@/lib/session/is-mod';
 import { useSession } from '@/lib/session/session-context';
+import { useChangeAvatar } from '@/lib/session/use-change-avatar';
 
 // The Profile tab's own full screen — identity up top, then a Settings
 // section. See app/profile/[userId].tsx for the other-member equivalent
@@ -33,6 +34,7 @@ import { useSession } from '@/lib/session/session-context';
 export default function ProfileScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, signOut } = useSession();
+  const { changePhoto, uploading: avatarUploading, error: avatarError } = useChangeAvatar();
   const { setPreference } = useThemePreference();
   const isDark = colorScheme === 'dark';
   const tabBarHeight = useBottomTabBarHeight();
@@ -104,7 +106,15 @@ export default function ProfileScreen() {
         onScroll={handleScroll}
         scrollEventThrottle={16}>
         <View style={styles.header}>
-          <HubAvatar userId={session.userId} displayName={session.displayName} tunnelUrl={session.hub.tunnelUrl} size={76} />
+          <EditableAvatar
+            userId={session.userId}
+            displayName={session.displayName}
+            tunnelUrl={session.hub.tunnelUrl}
+            size={76}
+            uploading={avatarUploading}
+            onPress={changePhoto}
+          />
+          {avatarError && <ThemedText style={styles.avatarError}>{avatarError}</ThemedText>}
           <View style={styles.nameRow}>
             <ThemedText type="title" style={styles.name}>
               {session.displayName}
@@ -224,6 +234,12 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  avatarError: {
+    color: '#b0392f',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 6,
   },
   header: {
     alignItems: 'center',

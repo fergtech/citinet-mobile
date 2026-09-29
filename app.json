@@ -29,6 +29,7 @@
     },
     "android": {
       "package": "com.fergtech.citinetmobile",
+      "versionCode": 100,
       "adaptiveIcon": {
         "backgroundImage": "./assets/images/icon-adaptive-background.png",
         "foregroundImage": "./assets/images/icon-adaptive-foreground.png",
@@ -55,7 +56,8 @@
         "android.permission.INTERNET",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WAKE_LOCK",
-        "android.permission.BLUETOOTH"
+        "android.permission.BLUETOOTH",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ]
     },
     "web": {

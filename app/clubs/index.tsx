@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 
 import { ScreenHeader } from '@/components/screen-header';
+import { CustomIcon } from '@/components/ui/custom-icon';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -220,7 +221,7 @@ export default function ClubsScreen() {
           !loading ? (
             <View style={styles.empty}>
               <View style={styles.emptyIcon}>
-                <IconSymbol name="square.grid.2x2" size={22} color={Colors[colorScheme].icon} />
+                <CustomIcon name="spacesGlyph" size={22} color={Colors[colorScheme].icon} />
               </View>
               <ThemedText type="defaultSemiBold" style={styles.emptyTitle}>
                 {showAll ? 'No clubs on this hub yet' : 'No clubs joined yet'}

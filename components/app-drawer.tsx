@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { router, type Href } from 'expo-router';
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { Easing, interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,7 +40,7 @@ const SETTLE_DURATION_MS = 240;
 function CitinetWordmark() {
   return (
     <ColorCycleText style={styles.logoLabel} accessibilityRole="header">
-      citinet
+      CITINET
     </ColorCycleText>
   );
 }
@@ -212,7 +212,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
             only `/clubs/index`; same situation initiatives/index.tsx notes
             for its own not-yet-typed push. Drop the cast once the dev
             server's next typegen pass resolves it. */}
-        <DrawerRow icon={<IconSymbol name="square.grid.2x2" size={26} color={rowColor} />} label="Clubs" onPress={() => go('/clubs' as Href)} />
+        <DrawerRow icon={<CustomIcon name="spacesGlyph" size={26} color={rowColor} />} label="Clubs" onPress={() => go('/clubs' as Href)} />
         <View style={styles.divider} />
         <DrawerRow
           icon={<IconSymbol name="info.circle" size={26} color={rowColor} />}
@@ -222,6 +222,28 @@ export function AppDrawer({ children }: { children: ReactNode }) {
             setShowAbout(true);
           }}
         />
+        {/* Same destination the Home footer link used to point at — this
+            app's actual public issue tracker (same as web Dashboard.tsx's). */}
+        <DrawerRow
+          icon={<IconSymbol name="hand.raised.fill" size={26} color={rowColor} />}
+          label="Help shape Citinet"
+          onPress={() => {
+            close();
+            Linking.openURL('https://github.com/fergtech/citinet/issues/new/choose');
+          }}
+        />
+        <ThemedText style={styles.copyright}>© {new Date().getFullYear()} Citinet. All rights reserved.</ThemedText>
+        <Pressable
+          onPress={() => {
+            close();
+            Linking.openURL(PRIVACY_POLICY_URL);
+          }}
+          hitSlop={8}
+          accessibilityRole="link"
+          accessibilityLabel="Privacy Policy"
+          style={styles.privacyLink}>
+          <ThemedText style={styles.privacyLinkLabel}>Privacy Policy</ThemedText>
+        </Pressable>
       </Animated.View>
 
       <Animated.View style={[styles.flex, contentStyle]}>
@@ -251,6 +273,8 @@ function DrawerRow({ icon, label, onPress }: { icon: ReactNode; label: string; o
     </Pressable>
   );
 }
+
+const PRIVACY_POLICY_URL = 'https://info.citinet.cloud/blog/2b15e046-190b-44f5-874b-1e89aa8b813e';
 
 const styles = StyleSheet.create({
   root: {
@@ -296,6 +320,22 @@ const styles = StyleSheet.create({
   rowLabel: {
     fontSize: 19,
     fontWeight: '600',
+  },
+  copyright: {
+    marginTop: 8,
+    marginLeft: 12,
+    fontSize: 12,
+    opacity: 0.5,
+  },
+  privacyLink: {
+    marginTop: 4,
+    marginLeft: 12,
+    alignSelf: 'flex-start',
+  },
+  privacyLinkLabel: {
+    fontSize: 12,
+    opacity: 0.7,
+    textDecorationLine: 'underline',
   },
   overlay: {
     backgroundColor: '#000',

@@ -6,6 +6,7 @@ import Svg, { Path } from 'react-native-svg';
 import { BrandGradient } from '@/components/brand-gradient';
 import { AvatarIconColor } from '@/constants/theme';
 import { getAvatarUrl } from '@/lib/api/hubService';
+import { useAvatarVersion } from '@/lib/session/avatar-version';
 
 // Lifted verbatim from the source icon set's Android vector-drawable XML
 // (H:\Apps\custom-icons\user-android\res\drawable\user_24.xml) — same
@@ -33,7 +34,11 @@ type Props = {
 };
 
 export function HubAvatar({ userId, displayName, tunnelUrl, size = 36 }: Props) {
-  const [failed, setFailed] = useState(false);
+  // Keyed to the avatar version, not a plain boolean: a 404 ("no photo yet")
+  // must not stick after the user uploads one — the version bump clears it.
+  const version = useAvatarVersion(userId);
+  const [failedVersion, setFailedVersion] = useState<number | null>(null);
+  const failed = failedVersion === version;
 
   const dimensionStyle = { width: size, height: size, borderRadius: size / 2 };
 
@@ -51,11 +56,11 @@ export function HubAvatar({ userId, displayName, tunnelUrl, size = 36 }: Props) 
 
   return (
     <Image
-      source={{ uri: getAvatarUrl(tunnelUrl, userId) }}
+      source={{ uri: getAvatarUrl(tunnelUrl, userId, version) }}
       style={dimensionStyle}
       cachePolicy="memory-disk"
       transition={200}
-      onError={() => setFailed(true)}
+      onError={() => setFailedVersion(version)}
     />
   );
 }

@@ -1,25 +1,34 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandGradient } from '@/components/brand-gradient';
+import { EditableAvatar } from '@/components/editable-avatar';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { changePassword, deleteAccount, getMember, updateProfile } from '@/lib/api/hubService';
+import { setAlertPref, useAlertPrefs } from '@/lib/notifications/alert-prefs';
 import { confirmDestructive } from '@/lib/ui/confirm';
 import { useSession } from '@/lib/session/session-context';
+import { useChangeAvatar } from '@/lib/session/use-change-avatar';
 
 // Profile field editing + password change + account deletion, all real
 // endpoints (PATCH /api/auth/profile, POST /api/auth/change-password,
 // DELETE /api/auth/account) mirroring citinet web's AccountScreen — trimmed
-// to what mobile actually needs (no avatar/banner upload, no tags editor,
+// to what mobile actually needs (profile photo upload but no banner upload, no tags editor,
 // no appearance/background customization; this app's styling is fixed
 // StyleSheet + light/dark, not user-customizable per [[project scope]]).
 export default function AccountSettingsScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, signOut } = useSession();
+  const alertPrefs = useAlertPrefs();
+  const insets = useSafeAreaInsets();
+  const [bioOpen, setBioOpen] = useState(false);
+  const { changePhoto, uploading: avatarUploading, error: avatarError } = useChangeAvatar();
 
   const [displayName, setDisplayName] = useState('');
   const [headline, setHeadline] = useState('');
@@ -132,6 +141,20 @@ export default function AccountSettingsScreen() {
           contentInsetAdjustmentBehavior="automatic">
           <ThemedText style={styles.sectionLabel}>Profile</ThemedText>
           <View style={styles.section}>
+            <View style={styles.avatarBlock}>
+              <EditableAvatar
+                userId={session.userId}
+                displayName={session.displayName}
+                tunnelUrl={session.hub.tunnelUrl}
+                size={96}
+                uploading={avatarUploading}
+                onPress={changePhoto}
+              />
+              <Pressable onPress={changePhoto} disabled={avatarUploading} hitSlop={8}>
+                <ThemedText style={styles.avatarLink}>{avatarUploading ? 'Uploading…' : 'Change photo'}</ThemedText>
+              </Pressable>
+              {avatarError && <ThemedText style={styles.error}>{avatarError}</ThemedText>}
+            </View>
             <ThemedText style={styles.fieldLabel}>Display name</ThemedText>
             <TextInput
               value={displayName}
@@ -148,14 +171,19 @@ export default function AccountSettingsScreen() {
               style={[styles.input, { color: Colors[colorScheme].text }]}
             />
             <ThemedText style={styles.fieldLabel}>Bio</ThemedText>
-            <TextInput
-              value={bio}
-              onChangeText={setBio}
-              multiline
-              placeholder="Tell your neighbors about yourself"
-              placeholderTextColor={Colors[colorScheme].icon}
-              style={[styles.input, styles.textArea, { color: Colors[colorScheme].text }]}
-            />
+            {/* Read-only preview — the full editor lives in the overlay below,
+                so a long bio never turns this form into a wall of text. */}
+            <Pressable
+              onPress={() => setBioOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Edit bio"
+              style={styles.input}>
+              <ThemedText
+                numberOfLines={3}
+                style={[styles.bioPreview, !bio && { color: Colors[colorScheme].icon }]}>
+                {bio || 'Tell your neighbors about yourself'}
+              </ThemedText>
+            </Pressable>
             <ThemedText style={styles.fieldLabel}>Website</ThemedText>
             <TextInput
               value={website}
@@ -175,6 +203,19 @@ export default function AccountSettingsScreen() {
                 </ThemedText>
               </BrandGradient>
             </Pressable>
+          </View>
+
+          <ThemedText style={styles.sectionLabel}>Notification alerts</ThemedText>
+          <View style={styles.section}>
+            <View style={styles.switchRow}>
+              <ThemedText style={styles.switchLabel}>Sound</ThemedText>
+              <Switch value={alertPrefs.sound} onValueChange={(v) => setAlertPref('sound', v)} />
+            </View>
+            <View style={styles.switchRow}>
+              <ThemedText style={styles.switchLabel}>Vibration</ThemedText>
+              <Switch value={alertPrefs.haptics} onValueChange={(v) => setAlertPref('haptics', v)} />
+            </View>
+            <ThemedText style={styles.rowMeta}>Plays while the app is open when something new arrives. Applies to this device only.</ThemedText>
           </View>
 
           <ThemedText style={styles.sectionLabel}>Password</ThemedText>
@@ -245,6 +286,27 @@ export default function AccountSettingsScreen() {
           </View>
         </ScrollView>
       )}
+
+      <Modal visible={bioOpen} animationType="slide" onRequestClose={() => setBioOpen(false)}>
+        <ThemedView style={styles.flex}>
+          <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <View style={[styles.bioHeader, { paddingTop: insets.top + 8 }]}>
+              <Pressable onPress={() => setBioOpen(false)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
+                <IconSymbol name="xmark" size={22} color={Colors[colorScheme].icon} />
+              </Pressable>
+            </View>
+            <TextInput
+              value={bio}
+              onChangeText={setBio}
+              multiline
+              autoFocus
+              placeholder="Tell your neighbors about yourself"
+              placeholderTextColor={Colors[colorScheme].icon}
+              style={[styles.bioEditor, { color: Colors[colorScheme].text, paddingBottom: insets.bottom + 16 }]}
+            />
+          </KeyboardAvoidingView>
+        </ThemedView>
+      </Modal>
     </ThemedView>
   );
 }
@@ -292,6 +354,34 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 15,
   },
+  avatarBlock: {
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  avatarLink: {
+    fontSize: 14,
+    fontWeight: '600',
+    opacity: 0.8,
+  },
+  bioPreview: {
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  bioHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  bioEditor: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    fontSize: 17,
+    lineHeight: 25,
+    textAlignVertical: 'top',
+  },
   textArea: {
     minHeight: 80,
     textAlignVertical: 'top',
@@ -322,6 +412,14 @@ const styles = StyleSheet.create({
   outlineButtonLabel: {
     fontSize: 15,
     fontWeight: '600',
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  switchLabel: {
+    fontSize: 15,
   },
   rowMeta: {
     opacity: 0.6,

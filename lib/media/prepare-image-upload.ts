@@ -25,3 +25,19 @@ export async function prepareImageForUpload(
   const result = await rendered.saveAsync({ compress: JPEG_QUALITY, format: SaveFormat.JPEG });
   return { uri: result.uri, width: result.width, height: result.height };
 }
+
+// Avatars are only ever drawn a few dozen to ~100 px wide, so 512px square is
+// plenty (and 2x-3x headroom for the largest profile placements) — a
+// full-resolution photo would just be slow to send over a relayed tunnel and
+// slow to load in every list that shows this person. Always re-encodes to
+// JPEG so the hub sees a consistent, small file whatever the picker returned.
+const AVATAR_SIZE = 512;
+
+export async function prepareAvatarForUpload(uri: string, width: number, height: number): Promise<string> {
+  const ctx = ImageManipulator.manipulate(uri);
+  const shortest = Math.min(width, height);
+  const resized = shortest > AVATAR_SIZE ? (width <= height ? ctx.resize({ width: AVATAR_SIZE }) : ctx.resize({ height: AVATAR_SIZE })) : ctx;
+  const rendered = await resized.renderAsync();
+  const result = await rendered.saveAsync({ compress: JPEG_QUALITY, format: SaveFormat.JPEG });
+  return result.uri;
+}

@@ -4,7 +4,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Linking,
   Platform,
   Pressable,
   RefreshControl,
@@ -77,6 +76,10 @@ const HOME_CACHE_KEY = 'home-dashboard';
 // was reached via the launcher and should dismiss(2) (itself + the
 // launcher) on success — going through it here would pop one screen too
 // many, past Home.
+// Hidden for now — the Create button in the tab bar covers the same ground.
+// Flip to true to bring the pill row back; the actions themselves are intact.
+const SHOW_QUICK_ACTIONS = false;
+
 const QUICK_ACTIONS: { key: string; icon: IconSymbolName; label: string; href: Href }[] = [
   { key: 'post', icon: 'pencil', label: 'Post', href: '/compose-post' as Href },
   { key: 'event', icon: 'calendar', label: 'Event', href: '/event-editor' as Href },
@@ -113,6 +116,9 @@ type HomeCacheData = {
 // One card in the "Featured" grid — see the featuredCards memo below.
 type FeaturedCard = {
   key: string;
+  // The ActivityRow key of the item this card shows, so the "More Activity"
+  // list below can leave it out instead of repeating it.
+  activityKey: string;
   label: string;
   icon: IconSymbolName;
   title: string;
@@ -506,8 +512,9 @@ export default function HomeScreen() {
   // disconnected from what a given member actually cares about, where "here's
   // what's freshest in each part of the hub" stays neutral and in the
   // logged-in member's own frame (product ask, 2026-09-20). Fixed pin/post/
-  // event/file order, same as web — no cross-category ranking, each bucket
-  // just shows its own single freshest item or is skipped if empty.
+  // event/file — each bucket contributes its own single freshest item (or
+  // is skipped if empty), and the resulting cards are then ordered by
+  // recency across buckets (see the sort at the end of this memo).
   const featuredCards = useMemo<FeaturedCard[]>(() => {
     const cards: FeaturedCard[] = [];
 
@@ -515,6 +522,7 @@ export default function HomeScreen() {
     if (latestPin) {
       cards.push({
         key: 'pin',
+        activityKey: `pin-${latestPin.id}`,
         label: 'Latest Atlas Pin',
         icon: 'mappin.and.ellipse',
         title: latestPin.title,
@@ -533,6 +541,7 @@ export default function HomeScreen() {
     if (latestPost) {
       cards.push({
         key: 'post',
+        activityKey: `post-${latestPost.id}`,
         label: 'Newest Community Post',
         icon: 'newspaper.fill',
         title: latestPost.title || latestPost.body?.slice(0, 60) || 'Untitled',
@@ -554,6 +563,7 @@ export default function HomeScreen() {
     if (latestEvent) {
       cards.push({
         key: 'event',
+        activityKey: `post-${latestEvent.id}`,
         label: 'Recent Event',
         icon: 'calendar',
         title: latestEvent.title ?? 'Event',
@@ -571,6 +581,7 @@ export default function HomeScreen() {
       const kind = fileKind(latestFile.file_name, latestFile.mime_type);
       cards.push({
         key: 'file',
+        activityKey: `file-${latestFile.file_id}`,
         label: 'Newly Shared File',
         icon: 'doc.text.fill',
         title: latestFile.file_name,
@@ -585,7 +596,10 @@ export default function HomeScreen() {
       });
     }
 
-    return cards;
+    // Freshest first, whichever area it came from — the row reads as "what
+    // just happened", so its order follows the data, not a fixed
+    // pin/post/event/file sequence.
+    return cards.sort((a, b) => b.timestamp - a.timestamp);
   }, [atlasPins, posts, events, files]);
 
   // One flat, merged, recency-sorted list — the mobile match for web
@@ -677,9 +691,16 @@ export default function HomeScreen() {
       });
     }
 
-    rows.sort((a, b) => b.timestamp - a.timestamp);
-    return rows.slice(0, RECENT_ACTIVITY_LIMIT);
-  }, [posts, events, atlasPins, files, listings, initiativeUpdates, members]);
+    // "More Activity" continues where the featured row above leaves off:
+    // anything already shown there is dropped BEFORE the cap, so this list
+    // is the next RECENT_ACTIVITY_LIMIT most recent items, not the top ones
+    // minus a few duplicates.
+    const featuredKeys = new Set(featuredCards.map((card) => card.activityKey));
+    return rows
+      .filter((row) => !featuredKeys.has(row.key))
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, RECENT_ACTIVITY_LIMIT);
+  }, [posts, events, atlasPins, files, listings, initiativeUpdates, members, featuredCards]);
 
   if (!session) return null;
 
@@ -785,17 +806,19 @@ export default function HomeScreen() {
           </ThemedText>
         </Pressable>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.quickActionsRow}>
-          {QUICK_ACTIONS.map((action) => (
-            <Pressable key={action.key} style={styles.quickActionPill} onPress={() => router.push(action.href)}>
-              <IconSymbol name={action.icon} size={15} color={Colors[colorScheme].text} />
-              <ThemedText style={styles.quickActionLabel}>{action.label}</ThemedText>
-            </Pressable>
-          ))}
-        </ScrollView>
+        {SHOW_QUICK_ACTIONS && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.quickActionsRow}>
+            {QUICK_ACTIONS.map((action) => (
+              <Pressable key={action.key} style={styles.quickActionPill} onPress={() => router.push(action.href)}>
+                <IconSymbol name={action.icon} size={15} color={Colors[colorScheme].text} />
+                <ThemedText style={styles.quickActionLabel}>{action.label}</ThemedText>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
 
         {error && <ThemedText style={styles.error}>{error}</ThemedText>}
 
@@ -812,6 +835,7 @@ export default function HomeScreen() {
           <>
             {featuredCards.length > 0 && (
               <View style={styles.section}>
+                <ThemedText style={styles.sectionLabel}>Recent Activity</ThemedText>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -868,7 +892,7 @@ export default function HomeScreen() {
             )}
 
             <View style={styles.section}>
-              <ThemedText style={styles.sectionLabel}>Recent Activity</ThemedText>
+              <ThemedText style={styles.sectionLabel}>More Activity</ThemedText>
               {activityRows.length === 0 ? (
                 !loading && <ThemedText style={styles.rowMeta}>No activity yet.</ThemedText>
               ) : (
@@ -879,14 +903,14 @@ export default function HomeScreen() {
                     onPress={row.onPress}>
                     {row.icon ? (
                       <View style={[styles.activityIconBadge, { backgroundColor: (row.iconColor ?? Brand) + '22' }]}>
-                        <IconSymbol name={row.icon} size={16} color={row.iconColor ?? Brand} />
+                        <IconSymbol name={row.icon} size={14} color={row.iconColor ?? Brand} />
                       </View>
                     ) : (
                       <HubAvatar
                         userId={row.avatarUserId ?? null}
                         displayName={row.avatarName ?? '?'}
                         tunnelUrl={session.hub.tunnelUrl}
-                        size={36}
+                        size={28}
                       />
                     )}
                     <ThemedText numberOfLines={2} style={styles.activityText}>
@@ -897,15 +921,6 @@ export default function HomeScreen() {
                 ))
               )}
             </View>
-
-            {/* Same footer link as web Dashboard.tsx, same destination — this
-                app's actual public issue tracker, not a placeholder. */}
-            <Pressable
-              style={styles.feedbackLink}
-              onPress={() => Linking.openURL('https://github.com/fergtech/citinet/issues/new/choose')}>
-              <ThemedText style={styles.feedbackLinkText}>Help shape Citinet</ThemedText>
-              <IconSymbol name="chevron.right" size={13} color={Brand} />
-            </Pressable>
           </>
         )}
       </ScrollView>
@@ -1119,8 +1134,8 @@ const styles = StyleSheet.create({
   activityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 10,
+    gap: 10,
+    paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: '#8884',
   },
@@ -1128,9 +1143,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
   activityIconBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1144,18 +1159,5 @@ const styles = StyleSheet.create({
   },
   activityTime: {
     opacity: 0.6,
-  },
-  feedbackLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-start',
-    marginHorizontal: 20,
-    marginTop: 4,
-  },
-  feedbackLinkText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Brand,
   },
 });

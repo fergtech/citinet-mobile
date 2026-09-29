@@ -1,11 +1,34 @@
 import { File, Paths } from 'expo-file-system';
+import { getContentUriAsync } from 'expo-file-system/legacy';
+import { startActivityAsync } from 'expo-intent-launcher';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
 import * as Sharing from 'expo-sharing';
 
 import type { FileKind } from '@/lib/api/types';
+import { downloadResumable } from '@/lib/files/resumable-download';
 
-export type SaveDestination = 'photos' | 'shared';
+export type SaveDestination = 'photos' | 'shared' | 'installer';
+
+const APK_MIME = 'application/vnd.android.package-archive';
+const FLAG_GRANT_READ_URI_PERMISSION = 1;
+
+// A downloaded .apk on Android goes straight to the system package installer instead of the
+// share sheet, so an app update is one tap (Android itself asks once to allow installs from
+// this app, and shows its own "Update" confirmation). The installer needs a content:// uri
+// (a raw file:// uri throws FileUriExposedException on modern Android) plus a read grant.
+function isAndroidApk(fileName: string): boolean {
+  return Platform.OS === 'android' && fileName.toLowerCase().endsWith('.apk');
+}
+
+async function openInInstaller(fileUri: string): Promise<void> {
+  const contentUri = await getContentUriAsync(fileUri);
+  await startActivityAsync('android.intent.action.VIEW', {
+    data: contentUri,
+    flags: FLAG_GRANT_READ_URI_PERMISSION,
+    type: APK_MIME,
+  });
+}
 
 // Real on-device save, not a browser-tab download — a plain
 // `Linking.openURL()` on the token URL just opened a browser tab pointed at
@@ -55,6 +78,10 @@ export async function saveFileToDevice(
       await MediaLibrary.saveToLibraryAsync(downloaded.uri);
       return 'photos';
     }
+    if (isAndroidApk(fileName)) {
+      await openInInstaller(downloaded.uri);
+      return 'installer';
+    }
     const canShare = await Sharing.isAvailableAsync();
     if (!canShare) {
       throw new Error("Saving files isn't supported on this device.");
@@ -98,7 +125,9 @@ export async function saveFileToDevice(
   // extension at all. That's what made MediaLibrary.saveToLibraryAsync below fail with
   // "Unknown error" — it can't tell what kind of asset an extension-less file is.
   const destination = new File(Paths.cache, fileName);
-  const downloaded = await File.downloadFileAsync(url, destination, { idempotent: true });
+  // Chunked + retried, so a dropped connection mid-way (a 116 MB APK over a flaky link)
+  // resumes from the last good byte instead of failing the whole download.
+  const downloaded = await downloadResumable(url, destination);
 
   // A private file downloads as ciphertext (see decrypt's doc comment above)
   // — decrypt it in place before it ever reaches Photos or the share sheet,
@@ -119,6 +148,11 @@ export async function saveFileToDevice(
     }
     await MediaLibrary.saveToLibraryAsync(downloaded.uri);
     return 'photos';
+  }
+
+  if (isAndroidApk(fileName)) {
+    await openInInstaller(downloaded.uri);
+    return 'installer';
   }
 
   const canShare = await Sharing.isAvailableAsync();

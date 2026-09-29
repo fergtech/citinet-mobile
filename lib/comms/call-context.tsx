@@ -4,6 +4,7 @@ import { answerCall, declineCall, endCall, ringCall } from '@/lib/api/hubService
 import { CallMode, CallOutcome } from '@/lib/api/types';
 import { useSession } from '@/lib/session/session-context';
 
+import { emitNotificationPing } from '@/lib/notifications/ping';
 import { useCommsSocket } from './socket';
 
 export type CallPhase = 'idle' | 'outgoing' | 'incoming' | 'connected' | 'ended';

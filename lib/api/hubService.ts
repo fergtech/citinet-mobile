@@ -1,5 +1,6 @@
 import { Directory, File as ExpoFile, Paths } from 'expo-file-system';
 import { createUploadTask, FileSystemUploadType } from 'expo-file-system/legacy';
+import { playUploadCompleteSound } from '@/lib/notifications/alert';
 
 import { AnswerResponse, AtlasPin, AtlasPinCategory, AtlasPinReply, BlockedMember, CallEvent, CallMode, ChecklistItem, Club, ClubFile, ClubMember, ClubVisibility, EventAttendee, FeaturedItem, FileVisibility, HubConversation, HubFile, HubFolder, HubIconFields, HubMember, HubMessage, HubNotification, HubNote, HubPost, HubPostReply, Initiative, InitiativeActivityEntry, InitiativeResource, InitiativeRole, InitiativeTaskSummary, InitiativeTeamMember, InitiativeUpdateComment, InitiativeUpdateEntry, ListingPriceType, LiveCommsItem, LoginResponse, MarketplaceBannerConfig, MarketplaceListing, MarketplaceVendor, MemberRole, MessageReaction, ModLogEntry, NotificationType, PendingUser, ReportEntry, ReportReason, ReportTargetType, RingResponse, SearchResults, TaskMeta, TaskNote, TaskNoteReply } from './types';
 
@@ -1108,6 +1109,7 @@ export async function uploadFile(
     throw new Error(await readErrorMessage(res, "Couldn't upload that photo."));
   }
   const uploaded = await res.json();
+  playUploadCompleteSound();
   // size_bytes comes back as a string (Postgres BIGINT) — see listFiles()'s
   // comment for why this needs normalizing rather than trusted as a number.
   return { ...uploaded, size_bytes: Number(uploaded.size_bytes) || 0 };
@@ -1314,12 +1316,38 @@ export async function uploadFilesWithProgress(
     throw error;
   }
 
+  // Whole batch is on the server (100%) — one confirmation sound, not one per file.
+  if (uploaded.length > 0) playUploadCompleteSound();
   return uploaded;
 }
 
 // Public endpoint, no auth header needed — safe to use directly as an <Image> uri.
-export function getAvatarUrl(tunnelUrl: string, userId: string): string {
-  return `${tunnelUrl}/api/auth/avatar/${encodeURIComponent(userId)}`;
+export function getAvatarUrl(tunnelUrl: string, userId: string, version = 0): string {
+  const base = `${tunnelUrl}/api/auth/avatar/${encodeURIComponent(userId)}`;
+  return version ? `${base}?v=${version}` : base;
+}
+
+// POST /api/auth/avatar — multipart field "avatar", replaces the caller's own
+// photo (the route has no user id param; it always targets the token's user).
+// The hub converts HEIC itself, but the picker hands back a JPEG anyway.
+// There's deliberately no "remove photo" here: the hub has no DELETE route
+// for avatars, so that can't be built client-side alone.
+export async function uploadAvatar(
+  tunnelUrl: string,
+  token: string,
+  file: { uri: string; name: string; type: string }
+): Promise<void> {
+  const form = new FormData();
+  form.append('avatar', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
+  const res = await fetch(`${tunnelUrl}/api/auth/avatar`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Couldn't upload that photo."));
+  }
+  playUploadCompleteSound();
 }
 
 // GET /api/public/files/:filename — same "public, no-auth, safe to use
@@ -1840,6 +1868,7 @@ export async function uploadInitiativeBanner(
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Couldn't upload that cover image."));
   }
+  playUploadCompleteSound();
   return res.json();
 }
 

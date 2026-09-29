@@ -18,6 +18,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { setActiveConversation } from '@/lib/notifications/active-conversation';
 import { blockMember, getMediaUrl, getMessages, listCallEvents, listConversations, markNotificationsForRef, sendMessage, toggleMessageReaction, uploadFilesWithProgress } from '@/lib/api/hubService';
 import { CallEvent, CallMode, HubMessage, MessageAttachment, MessageReaction } from '@/lib/api/types';
 import { useCall } from '@/lib/comms/call-context';
@@ -292,6 +293,14 @@ export default function ConversationScreen() {
     if (!session) return;
     markNotificationsForRef(session.hub.tunnelUrl, session.token, id, 'message').catch(() => {});
   }, [session, id]);
+
+  // Tell the notification chime which thread is on screen (see
+  // lib/notifications/active-conversation.ts) so messages arriving in it
+  // don't sound like brand-new notifications.
+  useEffect(() => {
+    setActiveConversation(id);
+    return () => setActiveConversation(null);
+  }, [id]);
 
   const loadCallEvents = useCallback(() => {
     if (!session) return;

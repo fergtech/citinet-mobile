@@ -1,5 +1,5 @@
-import { Tabs, router, useFocusEffect } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import { Tabs, router } from 'expo-router';
+import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -12,7 +12,7 @@ import { CustomIcon } from '@/components/ui/custom-icon';
 import { TabBarBackground } from '@/components/ui/tab-bar-background';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { listUnreadNotifications } from '@/lib/api/hubService';
+import { useNotificationAlerts } from '@/lib/notifications/use-notification-alerts';
 import { useSession } from '@/lib/session/session-context';
 import { getTabBarStyle } from '@/lib/ui/tab-bar-style';
 import { TabBarVisibilityProvider } from '@/lib/ui/tab-bar-visibility';
@@ -30,15 +30,7 @@ export default function TabLayout() {
   // regains focus like any other screen when the pushed /notifications
   // screen is popped — same useFocusEffect re-check convention as
   // everywhere else in this app that can go stale from a screen on top of it.
-  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
-  useFocusEffect(
-    useCallback(() => {
-      if (!session) return;
-      listUnreadNotifications(session.hub.tunnelUrl, session.token)
-        .then((list) => setHasUnreadNotifications(list.length > 0))
-        .catch(() => {});
-    }, [session])
-  );
+  const hasUnreadNotifications = useNotificationAlerts(session?.hub.tunnelUrl, session?.token);
 
   return (
     <AppDrawer>

@@ -10,7 +10,17 @@
 // Measured on a real device: the previous pure-JS implementation
 // (@noble/ciphers) took ~29 seconds to decrypt a 27 MB file — about
 // 0.97 MB/s, squarely "software AES with no hardware acceleration" territory.
-import QuickCrypto from 'react-native-quick-crypto';
+import { Platform } from 'react-native';
+
+// react-native-quick-crypto is a JSI/TurboModule — importing it on web throws
+// "Cannot read properties of undefined (reading 'getEnforcing')" and breaks
+// the whole bundle. The browser's own WebCrypto is the same API, so use it there.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const QuickCrypto: any =
+  Platform.OS === 'web'
+    ? globalThis.crypto
+    : // eslint-disable-next-line @typescript-eslint/no-require-imports
+      (require('react-native-quick-crypto').default);
 
 const FILE_ENC_MAGIC = new Uint8Array([0xc1, 0x7e, 0xe7, 0x01]); // "citinet-enc v1"
 
