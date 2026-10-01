@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 
@@ -10,6 +10,7 @@ import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { createNote, getNote, updateNote } from '@/lib/api/hubService';
 import { useE2EKeys } from '@/lib/crypto/e2e-context';
+import { hasFormattingOrMedia } from '@/lib/notes/rich';
 import { useSession } from '@/lib/session/session-context';
 
 type Visibility = 'private' | 'hub' | 'public';
@@ -78,6 +79,15 @@ export default function NoteEditorScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // The web editor stores formatting/media in a separate rich document that this
+  // plain-text editor can't edit. Keep it so a save here writes it back untouched
+  // instead of replacing it with null (which silently stripped formatting, images
+  // and videos from any note edited on the phone).
+  const [loadedRich, setLoadedRich] = useState<object | null>(null);
+  // 'formatted': body is view-only (title/visibility still editable). 'unreadable':
+  // this device can't decrypt the note, so saving anything would overwrite it with
+  // an empty body — nothing is safe to save.
+  const [lock, setLock] = useState<'formatted' | 'unreadable' | null>(null);
 
   // citinet's real frontend route for a public note — a central portal
   // deployment (not this hub's own tunnel URL), parametrized by hub slug so
@@ -107,6 +117,8 @@ export default function NoteEditorScreen() {
         if (cancelled) return;
         setTitle(note.title);
         setBody(decrypted?.plain ?? '');
+        setLoadedRich(decrypted?.rich ?? null);
+        setLock(!decrypted ? 'unreadable' : hasFormattingOrMedia(decrypted.rich) ? 'formatted' : null);
         setVisibility(noteVisibility(note.is_public, note.is_web_public));
         setBlogPublished(note.is_blog_published);
       } catch (err) {
@@ -127,12 +139,30 @@ export default function NoteEditorScreen() {
     setVisibility(next);
   }
 
+  function handleConvertToPlain() {
+    Alert.alert(
+      'Convert to plain text?',
+      'Formatting, images and videos in this note will be removed when you save. The text stays. You cannot undo this from the phone.',
+      [
+        { text: 'Keep as is', style: 'cancel' },
+        {
+          text: 'Convert',
+          style: 'destructive',
+          onPress: () => {
+            setLoadedRich(null);
+            setLock(null);
+          },
+        },
+      ]
+    );
+  }
+
   async function handleDone() {
-    if (!session) return;
+    if (!session || lock === 'unreadable') return;
     setSaving(true);
     setError(null);
     try {
-      const enc = await encryptNote({ rich: null, plain: body });
+      const enc = await encryptNote({ rich: loadedRich, plain: body });
       const finalTitle = title.trim() || 'Untitled';
       const isPublic = visibility !== 'private';
       const isWebPublic = visibility === 'public';
@@ -140,7 +170,7 @@ export default function NoteEditorScreen() {
       // citinet web's own gating) — force it off if that's not the case,
       // regardless of what the now-hidden toggle was last left at.
       const finalBlogPublished = isWebPublic && session.isAdmin && blogPublished;
-      const webFields = isWebPublic ? { web_body_plain: body, web_body_rich: null } : {};
+      const webFields = isWebPublic ? { web_body_plain: body, web_body_rich: loadedRich } : {};
 
       if (isNew) {
         const created = await createNote(session.hub.tunnelUrl, session.token, {
@@ -201,7 +231,7 @@ export default function NoteEditorScreen() {
           <IconSymbol name={vis.icon} size={13} color={Colors[colorScheme].icon} />
           <ThemedText style={styles.visPillLabel}>{vis.label}</ThemedText>
         </Pressable>
-        <Pressable onPress={handleDone} disabled={loading || saving} style={[styles.doneButton, { opacity: loading || saving ? 0.5 : 1 }]}>
+        <Pressable onPress={handleDone} disabled={loading || saving || lock === 'unreadable'} style={[styles.doneButton, { opacity: loading || saving || lock === 'unreadable' ? 0.5 : 1 }]}>
           {saving ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
@@ -263,9 +293,30 @@ export default function NoteEditorScreen() {
               placeholderTextColor={Colors[colorScheme].icon}
               style={[styles.titleInput, { color: Colors[colorScheme].text }]}
             />
+            {lock && (
+              <View style={styles.lockBanner}>
+                <IconSymbol name="lock.fill" size={15} color={Colors[colorScheme].icon} />
+                <View style={styles.lockBannerText}>
+                  <ThemedText style={styles.lockBannerTitle}>
+                    {lock === 'formatted' ? 'View-only here to keep it intact' : "Can't open this note on this device"}
+                  </ThemedText>
+                  <ThemedText style={styles.lockBannerMeta}>
+                    {lock === 'formatted'
+                      ? 'This note has formatting or media the phone editor would remove. Edit it on the web — you can still rename it or change who can see it.'
+                      : 'Its encryption key is not on this device. Restore your key in Settings to read and edit it. Nothing here will be changed.'}
+                  </ThemedText>
+                  {lock === 'formatted' && (
+                    <Pressable onPress={handleConvertToPlain} hitSlop={8} accessibilityRole="button">
+                      <ThemedText style={[styles.lockBannerAction, { color: Brand }]}>Convert to plain text and edit</ThemedText>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            )}
             <TextInput
               value={body}
               onChangeText={setBody}
+              editable={!lock}
               placeholder="Start writing…"
               placeholderTextColor={Colors[colorScheme].icon}
               multiline
@@ -402,6 +453,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 10,
     padding: 0,
+  },
+  lockBanner: {
+    flexDirection: 'row',
+    gap: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderRadius: 10,
+    backgroundColor: '#8881',
+  },
+  lockBannerText: {
+    flex: 1,
+    gap: 3,
+  },
+  lockBannerTitle: {
+    fontSize: 13.5,
+    fontWeight: '600',
+  },
+  lockBannerMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+    opacity: 0.6,
+  },
+  lockBannerAction: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    marginTop: 4,
   },
   bodyInput: {
     flex: 1,

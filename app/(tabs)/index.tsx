@@ -1,7 +1,6 @@
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useScrollToTop } from '@react-navigation/native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { router, useFocusEffect, type Href } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Platform,
@@ -15,10 +14,8 @@ import {
 } from 'react-native';
 
 import { useAppDrawer } from '@/components/app-drawer';
-import { BrandGradient } from '@/components/brand-gradient';
-import { HubAvatar } from '@/components/hub-avatar';
 import { HubInfoModal } from '@/components/hub-info-modal';
-import { HubMedia } from '@/components/hub-media';
+import { HomeActivityCard, type HomeActivityCardData } from '@/components/home-activity-card';
 import { type InitiativeUpdateRow } from '@/components/initiative-update-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -26,7 +23,7 @@ import { ColorCycleText } from '@/components/ui/color-cycle-text';
 import { CustomIcon } from '@/components/ui/custom-icon';
 import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
 import { DashboardSkeleton } from '@/components/ui/list-skeleton';
-import { Brand, Colors } from '@/constants/theme';
+import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { readCache, writeCache } from '@/lib/api/dataCache';
 import {
@@ -35,27 +32,25 @@ import {
   getPosts,
   getUpcomingEvents,
   listAtlasPins,
-  listFiles,
   listInitiativeResources,
   listInitiatives,
+  getMyVendor,
   listMarketplaceListings,
   listMembers,
 } from '@/lib/api/hubService';
 import {
   AtlasPin,
-  HubFile,
-  HubMember,
   HubPost,
   InitiativeResource,
   InitiativeTaskSummary,
   MarketplaceListing,
 } from '@/lib/api/types';
 import { flushWriteQueue } from '@/lib/api/write-queue';
-import { fileKind } from '@/lib/files/kind';
+import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
+import { categoryMeta } from '@/lib/marketplace/categories';
 import { useSession } from '@/lib/session/session-context';
 import { isLocalConnection } from '@/lib/ui/is-local-connection';
 import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
-import { timeAgo } from '@/lib/ui/time-ago';
 
 // InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
 // even though the card itself no longer renders on Home (see the unified
@@ -107,57 +102,13 @@ type HomeCacheData = {
   posts: HubPost[];
   events: HubPost[];
   atlasPins: AtlasPin[];
-  files: HubFile[];
   listings: MarketplaceListing[];
   initiativeUpdates: InitiativeUpdateRow[];
-  members: HubMember[];
+  // Optional: caches written before the engagement/ownership rules landed
+  // don't have them.
+  memberCount?: number;
+  myVendorId?: string | null;
 };
-
-// One card in the "Featured" grid — see the featuredCards memo below.
-type FeaturedCard = {
-  key: string;
-  // The ActivityRow key of the item this card shows, so the "More Activity"
-  // list below can leave it out instead of repeating it.
-  activityKey: string;
-  label: string;
-  icon: IconSymbolName;
-  title: string;
-  timestamp: number;
-  onPress: () => void;
-  // Set when the source item actually carries an uploaded image/video —
-  // that file, not a synthesized fallback (no Atlas Panoramax/map lookup
-  // here, unlike the old dedicated Atlas preview row), rendered as the
-  // card's cover instead of the plain icon-badge layout. mediaIsPublic
-  // mirrors HubMedia's own isPublic prop — true for pin/post media (always
-  // public server-side, same as any post attachment) and file cards,
-  // false-only-possible for a file that's neither is_public nor web_public
-  // (excluded before a card is ever built — see featuredCards below).
-  mediaFileName?: string | null;
-  mediaIsPublic?: boolean;
-};
-
-// A row of the unified "Recent Activity" list — see the activityRows memo
-// below. Either avatarUserId or icon is set, never both: a real per-user
-// avatar when the source item has a resolvable actor, an icon badge when it
-// doesn't (marketplace listings, initiative updates).
-type ActivityRow = {
-  key: string;
-  timestamp: number;
-  onPress: () => void;
-  actorLabel: string;
-  summary: string;
-  avatarUserId?: string | null;
-  avatarName?: string;
-  icon?: IconSymbolName;
-  iconColor?: string;
-};
-
-// web's own Recent Activity slices to 5 (see useActivityFeed.ts) — mobile
-// folds in two more source types (marketplace, initiatives) that web's
-// dashboard doesn't surface at all, so a slightly larger cap keeps all five
-// source types realistically able to show up rather than being crowded out
-// by whichever type happens to post most often.
-const RECENT_ACTIVITY_LIMIT = 8;
 
 // There's no hub-wide "recent activity across all initiatives" endpoint —
 // GET /api/initiatives/:id/activity is per-initiative (see hubService's
@@ -296,10 +247,10 @@ export default function HomeScreen() {
   const [posts, setPosts] = useState<HubPost[]>([]);
   const [events, setEvents] = useState<HubPost[]>([]);
   const [atlasPins, setAtlasPins] = useState<AtlasPin[]>([]);
-  const [files, setFiles] = useState<HubFile[]>([]);
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [initiativeUpdates, setInitiativeUpdates] = useState<InitiativeUpdateRow[]>([]);
-  const [members, setMembers] = useState<Map<string, HubMember>>(new Map());
+  const [memberCount, setMemberCount] = useState(0);
+  const [myVendorId, setMyVendorId] = useState<string | null>(null);
   const [showHubInfo, setShowHubInfo] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -330,10 +281,10 @@ export default function HomeScreen() {
       setPosts(cached.posts);
       setEvents(cached.events);
       setAtlasPins(cached.atlasPins);
-      setFiles(cached.files);
       setListings(cached.listings);
       setInitiativeUpdates(cached.initiativeUpdates);
-      setMembers(new Map(cached.members.map((m) => [m.user_id, m])));
+      setMemberCount(cached.memberCount ?? 0);
+      setMyVendorId(cached.myVendorId ?? null);
       hasContentRef.current = true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -363,35 +314,33 @@ export default function HomeScreen() {
         getPosts(session.hub.tunnelUrl, session.token),
         getUpcomingEvents(session.hub.tunnelUrl, session.token),
         listAtlasPins(session.hub.tunnelUrl, session.token).catch(() => []),
-        listFiles(session.hub.tunnelUrl, session.token).catch(() => []),
         // GET /api/marketplace/listings already returns newest-first (see
         // Discover's own recentListings comment), so the first entry is the
         // latest item added — no extra sort needed here.
         listMarketplaceListings(session.hub.tunnelUrl, session.token).catch(() => []),
-        // Only needed to resolve the "Latest upload" row's uploader username —
-        // catches the same way listAtlasPins/listFiles do, so a hub without
-        // (or briefly unable to serve) a member list still loads everything
-        // else instead of failing Home entirely.
-        listMembers(session.hub.tunnelUrl, session.token).catch(() => []),
         fetchInitiativeUpdates(session.hub.tunnelUrl, session.token),
+        // Only the count (hub size for the engagement threshold) and whether
+        // the caller owns a vendor page (to skip their own listings).
+        listMembers(session.hub.tunnelUrl, session.token).catch(() => []),
+        getMyVendor(session.hub.tunnelUrl, session.token).catch(() => null),
       ])
-        .then(([postsPage, nextEvents, nextPins, nextFiles, nextListings, nextMembers, nextInitiativeUpdates]) => {
+        .then(([postsPage, nextEvents, nextPins, nextListings, nextInitiativeUpdates, nextMembers, nextMyVendor]) => {
           setPosts(postsPage.posts);
           setEvents(nextEvents);
           setAtlasPins(nextPins);
-          setFiles(nextFiles);
           setListings(nextListings);
-          setMembers(new Map(nextMembers.map((m) => [m.user_id, m])));
           setInitiativeUpdates(nextInitiativeUpdates);
+          setMemberCount(nextMembers.length);
+          setMyVendorId(nextMyVendor?.id ?? null);
           hasContentRef.current = true;
           writeCache(session.hub.slug, HOME_CACHE_KEY, {
             posts: postsPage.posts,
             events: nextEvents,
             atlasPins: nextPins,
-            files: nextFiles,
             listings: nextListings,
             initiativeUpdates: nextInitiativeUpdates,
-            members: nextMembers,
+            memberCount: nextMembers.length,
+            myVendorId: nextMyVendor?.id ?? null,
           } satisfies HomeCacheData);
         })
         .catch((err) => {
@@ -444,6 +393,17 @@ export default function HomeScreen() {
   // Re-tapping the Home tab while already on it scrolls back to the top.
   const scrollRef = useRef<ScrollView>(null);
   useScrollToTop(scrollRef);
+
+  // The drawer's Citinet wordmark navigates here with a fresh `refresh`
+  // timestamp: back to the top, and refetch even if Home was already focused
+  // (useFocusEffect above only fires on a focus change).
+  const { refresh } = useLocalSearchParams<{ refresh?: string }>();
+  useEffect(() => {
+    if (!refresh) return;
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new refresh stamp should re-run this.
+  }, [refresh]);
 
   // Hides the floating tab bar (app/(tabs)/_layout.tsx, rendered via
   // components/animated-tab-bar.tsx) on scroll-down, brings it back on
@@ -503,204 +463,160 @@ export default function HomeScreen() {
   const tabBarHeight = useBottomTabBarHeight();
   const extraBottomInset = Platform.OS === 'ios' ? tabBarHeight : 0;
 
-  // One card per feature area (Atlas/Posts/Events/Files), each showing
-  // whatever's freshest in that category — the same computed-not-curated
-  // "Featured cards" web Dashboard.tsx builds from its activity feed
-  // (freshest of pin_added / discussion|announcement|project|request /
-  // event / file_shared), not the old admin-curated hub_featured carousel
-  // this replaced. Deliberate: an admin's picks read as top-down and
-  // disconnected from what a given member actually cares about, where "here's
-  // what's freshest in each part of the hub" stays neutral and in the
-  // logged-in member's own frame (product ask, 2026-09-20). Fixed pin/post/
-  // event/file — each bucket contributes its own single freshest item (or
-  // is skipped if empty), and the resulting cards are then ordered by
-  // recency across buckets (see the sort at the end of this memo).
-  const featuredCards = useMemo<FeaturedCard[]>(() => {
-    const cards: FeaturedCard[] = [];
+  // One card per common feature area (Feed posts, Events, Atlas, Marketplace,
+  // Initiatives). Files and Notes are deliberately left out (product ask,
+  // 2026-10-01). Selection rules, per card:
+  //  1. Nothing the signed-in user made themselves.
+  //  2. Default: the latest item in that area.
+  //  3. Exception: for items that can take likes/comments, any with
+  //     likes >= 5% of the hub's member count, OR comments >= that, take
+  //     precedence over "latest" — and among those, the latest wins.
+  //     (Atlas pins only have comments; listings/initiative updates have
+  //     neither, so they're always just the latest.)
+  // A bucket with nothing eligible is skipped; cards are ordered by recency
+  // across buckets. Card look: see components/home-activity-card.tsx.
+  const latestCards = useMemo(() => {
+    const me = session?.userId;
+    const myNames = [session?.username, session?.displayName].filter(Boolean).map((n) => n!.trim().toLowerCase());
+    // Min 1 so zero-engagement items never count as "popular" in a tiny hub.
+    const threshold = Math.max(1, Math.ceil(memberCount * 0.05));
 
-    const latestPin = [...atlasPins].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-    if (latestPin) {
+    const newest = <T,>(items: T[], at: (item: T) => string) =>
+      [...items].sort((a, b) => new Date(at(b)).getTime() - new Date(at(a)).getTime())[0];
+    // `engagement` omitted → item type can't take likes/comments.
+    const pick = <T,>(items: T[], at: (item: T) => string, engagement?: (item: T) => number[]) => {
+      const popular = engagement ? items.filter((item) => engagement(item).some((n) => n >= threshold)) : [];
+      return newest(popular.length > 0 ? popular : items, at);
+    };
+    const cards: { timestamp: number; card: HomeActivityCardData }[] = [];
+
+    const post = pick(
+      posts.filter((p) => p.category !== 'EVENT' && p.author_id !== me),
+      (p) => p.created_at,
+      (p) => [p.like_count, p.reply_count]
+    );
+    if (post) {
       cards.push({
-        key: 'pin',
-        activityKey: `pin-${latestPin.id}`,
-        label: 'Latest Atlas Pin',
-        icon: 'mappin.and.ellipse',
-        title: latestPin.title,
-        timestamp: new Date(latestPin.created_at).getTime(),
-        onPress: () => router.push({ pathname: '/atlas/[id]', params: { id: latestPin.id } }),
-        // Only an uploaded photo counts as cover — no Panoramax/map fallback
-        // lookup here, unlike the old dedicated Atlas preview row.
-        mediaFileName: latestPin.image_file_name,
-        mediaIsPublic: true,
-      });
-    }
-
-    const latestPost = [...posts]
-      .filter((post) => post.category !== 'EVENT')
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-    if (latestPost) {
-      cards.push({
-        key: 'post',
-        activityKey: `post-${latestPost.id}`,
-        label: 'Newest Community Post',
-        icon: 'newspaper.fill',
-        title: latestPost.title || latestPost.body?.slice(0, 60) || 'Untitled',
-        timestamp: new Date(latestPost.created_at).getTime(),
-        onPress: () => router.push({ pathname: '/post/[id]', params: { id: latestPost.id } }),
-        // Post attachments are always public server-side (see HubMedia's own
-        // isPublic comment) — same as any PostRow/FeaturedCarousel media.
-        mediaFileName: latestPost.media_file_name,
-        mediaIsPublic: true,
-      });
-    }
-
-    // Same union as activityRows below — `events` ∪ EVENT-category `posts`
-    // not already in `events`.
-    const eventIds = new Set(events.map((event) => event.id));
-    const latestEvent = [...events, ...posts.filter((post) => post.category === 'EVENT' && !eventIds.has(post.id))].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )[0];
-    if (latestEvent) {
-      cards.push({
-        key: 'event',
-        activityKey: `post-${latestEvent.id}`,
-        label: 'Recent Event',
-        icon: 'calendar',
-        title: latestEvent.title ?? 'Event',
-        timestamp: new Date(latestEvent.created_at).getTime(),
-        onPress: () => router.push({ pathname: '/post/[id]', params: { id: latestEvent.id } }),
-        mediaFileName: latestEvent.media_file_name,
-        mediaIsPublic: true,
-      });
-    }
-
-    const latestFile = [...files]
-      .filter((file) => file.is_public || file.web_public)
-      .sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime())[0];
-    if (latestFile) {
-      const kind = fileKind(latestFile.file_name, latestFile.mime_type);
-      cards.push({
-        key: 'file',
-        activityKey: `file-${latestFile.file_id}`,
-        label: 'Newly Shared File',
-        icon: 'doc.text.fill',
-        title: latestFile.file_name,
-        timestamp: new Date(latestFile.uploaded_at).getTime(),
-        onPress: () => router.push({ pathname: '/files/[id]', params: { id: latestFile.file_id } }),
-        // The file itself is the cover, but only when it's actually a
-        // renderable image/video — the same hasPreview gate the old
-        // FileHomeRow used, so a PDF/doc card still falls back to the icon
-        // badge instead of HubMedia failing to decode it as an image.
-        mediaFileName: kind === 'image' || kind === 'video' ? latestFile.file_name : null,
-        mediaIsPublic: latestFile.is_public || latestFile.web_public,
-      });
-    }
-
-    // Freshest first, whichever area it came from — the row reads as "what
-    // just happened", so its order follows the data, not a fixed
-    // pin/post/event/file sequence.
-    return cards.sort((a, b) => b.timestamp - a.timestamp);
-  }, [atlasPins, posts, events, files]);
-
-  // One flat, merged, recency-sorted list — the mobile match for web
-  // Dashboard.tsx's own "Recent Activity" (see useActivityFeed.ts there):
-  // every source Home already fetches, folded into the same shape and
-  // capped to RECENT_ACTIVITY_LIMIT, replacing what used to be five
-  // separately labeled/dividered sections below the carousel. Detail stays
-  // one tap away on each feature's own tab; this is a browse surface, not a
-  // duplicate of it.
-  const activityRows = useMemo<ActivityRow[]>(() => {
-    const rows: ActivityRow[] = [];
-
-    // Posts ∪ events, deduped by id — `events` (getUpcomingEvents) can
-    // include upcoming EVENT-category posts outside `posts`' own page, and
-    // `posts` can include EVENT-category posts (past, or beyond that
-    // upcoming set) that aren't in `events` — same union the old
-    // eventsLatestAt memo computed before this list replaced it.
-    const postsById = new Map<string, HubPost>();
-    for (const post of posts) postsById.set(post.id, post);
-    for (const event of events) if (!postsById.has(event.id)) postsById.set(event.id, event);
-
-    for (const post of postsById.values()) {
-      rows.push({
-        key: `post-${post.id}`,
         timestamp: new Date(post.created_at).getTime(),
-        onPress: () => router.push({ pathname: '/post/[id]', params: { id: post.id } }),
-        actorLabel: post.author_username ? `@${post.author_username}` : 'A neighbor',
-        summary: 'posted',
-        avatarUserId: post.author_id,
-        avatarName: post.author_username ?? '?',
+        card: {
+          key: `post-${post.id}`,
+          label: post.category,
+          title: post.title || post.body?.slice(0, 60) || 'Untitled',
+          caption: post.title ? post.body : null,
+          authorUsername: post.author_username,
+          authorId: post.author_id,
+          mediaFileName: post.media_file_name,
+          onPress: () => router.push({ pathname: '/post/[id]', params: { id: post.id } }),
+        },
       });
     }
 
-    for (const pin of atlasPins) {
-      rows.push({
-        key: `pin-${pin.id}`,
+    // `events` (upcoming) ∪ EVENT-category `posts` not already in it.
+    const eventIds = new Set(events.map((e) => e.id));
+    const event = pick(
+      [...events, ...posts.filter((p) => p.category === 'EVENT' && !eventIds.has(p.id))].filter((e) => e.author_id !== me),
+      (e) => e.created_at,
+      (e) => [e.like_count, e.reply_count]
+    );
+    if (event) {
+      cards.push({
+        timestamp: new Date(event.created_at).getTime(),
+        card: {
+          key: `event-${event.id}`,
+          label: 'Event',
+          title: event.title ?? 'Event',
+          caption: event.body,
+          authorUsername: event.author_username,
+          authorId: event.author_id,
+          mediaFileName: event.media_file_name,
+          // The pin a "Create an event" flow linked to this post, else one whose
+          // title matches the event's location text (same rule as
+          // components/event-atlas-link.tsx); otherwise the card geocodes it.
+          eventVisual: {
+            location: event.event_location,
+            pin:
+              atlasPins.find((p) => p.event_post_id === event.id) ??
+              (event.event_location
+                ? (atlasPins.find((p) => p.title.trim().toLowerCase() === event.event_location!.trim().toLowerCase()) ?? null)
+                : null),
+          },
+          onPress: () => router.push({ pathname: '/post/[id]', params: { id: event.id } }),
+        },
+      });
+    }
+
+    const pin = pick(
+      atlasPins.filter((p) => p.author_id !== me),
+      (p) => p.created_at,
+      (p) => [p.reply_count]
+    );
+    if (pin) {
+      cards.push({
         timestamp: new Date(pin.created_at).getTime(),
-        onPress: () => router.push({ pathname: '/atlas/[id]', params: { id: pin.id } }),
-        actorLabel: pin.author_username ? `@${pin.author_username}` : 'A neighbor',
-        summary: 'pinned to the Atlas',
-        avatarUserId: pin.author_id,
-        avatarName: pin.author_username ?? '?',
+        card: {
+          key: `pin-${pin.id}`,
+          label: ATLAS_CATEGORIES[pin.category]?.label ?? 'Atlas Pin',
+          title: pin.title,
+          caption: pin.description,
+          authorUsername: pin.author_username,
+          authorId: pin.author_id,
+          mediaFileName: pin.image_file_name,
+          atlasPin: pin,
+          onPress: () => router.push({ pathname: '/atlas/[id]', params: { id: pin.id } }),
+        },
       });
     }
 
-    // Same "everyone (or anyone with the link) can actually see it" scope as
-    // the old Files section — is_public (hub) or web_public (anyone with the
-    // link); listFiles() already scopes the response to "mine + is_public".
-    for (const file of files) {
-      if (!file.is_public && !file.web_public) continue;
-      const uploader = members.get(file.owner_id)?.username;
-      rows.push({
-        key: `file-${file.file_id}`,
-        timestamp: new Date(file.uploaded_at).getTime(),
-        onPress: () => router.push({ pathname: '/files/[id]', params: { id: file.file_id } }),
-        actorLabel: uploader ? `@${uploader}` : 'A neighbor',
-        summary: 'shared a file',
-        avatarUserId: file.owner_id,
-        avatarName: uploader ?? '?',
-      });
-    }
-
-    // Marketplace/initiatives have no single per-user actor the way a post,
-    // pin, or file upload does (a listing belongs to a vendor; an initiative
-    // activity row only carries a free-text actor_name, not a resolvable
-    // user id) — an icon badge stands in for the avatar on these two, same
-    // leading-visual slot, just no photo to put there.
-    for (const listing of listings) {
-      rows.push({
-        key: `listing-${listing.id}`,
+    const listing = pick(
+      listings.filter((l) => !myVendorId || l.vendor_id !== myVendorId),
+      (l) => l.created_at
+    );
+    if (listing) {
+      cards.push({
         timestamp: new Date(listing.created_at).getTime(),
-        onPress: () => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } }),
-        actorLabel: listing.vendor_name,
-        summary: 'listed an item',
-        icon: 'tag.fill',
-        iconColor: Brand,
+        card: {
+          key: `listing-${listing.id}`,
+          label: 'Marketplace',
+          title: listing.title,
+          caption: listing.description,
+          authorUsername: null,
+          mediaFileName: listing.image_file_name,
+          mediaIsPublic: false,
+          placeholder: categoryMeta(listing.category),
+          vendor: { id: listing.vendor_id, name: listing.vendor_name, logoFileName: listing.vendor_logo_file_name },
+          onPress: () => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } }),
+        },
       });
     }
 
-    for (const update of initiativeUpdates) {
-      rows.push({
-        key: `initiative-${update.entry.id}`,
+    // Initiative activity rows only carry a free-text actor_name (no user id),
+    // so "mine" is a best-effort match on username/display name.
+    const update = pick(
+      initiativeUpdates.filter((u) => !u.entry.actor_name || !myNames.includes(u.entry.actor_name.trim().toLowerCase())),
+      (u) => u.entry.created_at
+    );
+    if (update) {
+      cards.push({
         timestamp: new Date(update.entry.created_at).getTime(),
-        onPress: () => router.push(initiativeActivityHref(update.initiativeId, update.entry.kind, update.taskId)),
-        actorLabel: update.initiativeTitle,
-        summary: update.entry.text,
-        icon: 'target',
-        iconColor: Brand,
+        card: {
+          key: `initiative-${update.entry.id}`,
+          label: 'Initiative',
+          title: update.entry.text,
+          caption: update.initiativeTitle,
+          authorUsername: null,
+          initiativeVisual: {
+            id: update.initiativeId,
+            category: update.initiativeCategory,
+            colorName: update.initiativeColorName,
+            hasBannerImage: update.hasBannerImage,
+          },
+          onPress: () => router.push(initiativeActivityHref(update.initiativeId, update.entry.kind, update.taskId)),
+        },
       });
     }
 
-    // "More Activity" continues where the featured row above leaves off:
-    // anything already shown there is dropped BEFORE the cap, so this list
-    // is the next RECENT_ACTIVITY_LIMIT most recent items, not the top ones
-    // minus a few duplicates.
-    const featuredKeys = new Set(featuredCards.map((card) => card.activityKey));
-    return rows
-      .filter((row) => !featuredKeys.has(row.key))
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, RECENT_ACTIVITY_LIMIT);
-  }, [posts, events, atlasPins, files, listings, initiativeUpdates, members, featuredCards]);
+    return cards.sort((a, b) => b.timestamp - a.timestamp).map((c) => c.card);
+  }, [posts, events, atlasPins, listings, initiativeUpdates, memberCount, myVendorId, session?.userId, session?.username, session?.displayName]);
 
   if (!session) return null;
 
@@ -832,96 +748,19 @@ export default function HomeScreen() {
         {loading && !hasContentRef.current ? (
           <DashboardSkeleton />
         ) : (
-          <>
-            {featuredCards.length > 0 && (
-              <View style={styles.section}>
-                <ThemedText style={styles.sectionLabel}>Recent Activity</ThemedText>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={styles.featuredScroll}
-                  contentContainerStyle={styles.featuredGrid}>
-                  {featuredCards.map((card) =>
-                    card.mediaFileName ? (
-                      // Cover treatment — same idea as the old FeaturedCarousel's
-                      // media cards (full-bleed image/video, dark-scrim
-                      // overlay text), just applied per feature-area card
-                      // instead of an admin-curated one.
-                      <Pressable key={card.key} style={styles.featuredCard} onPress={card.onPress}>
-                        <HubMedia
-                          fileName={card.mediaFileName}
-                          tunnelUrl={session.hub.tunnelUrl}
-                          token={session.token}
-                          isPublic={card.mediaIsPublic}
-                          previewSeconds={4}
-                          style={styles.featuredCardMedia}
-                        />
-                        <LinearGradient
-                          colors={['transparent', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.85)']}
-                          locations={[0, 0.5, 1]}
-                          style={styles.featuredCardScrim}>
-                          <ThemedText style={[styles.featuredCardEyebrow, styles.featuredCardTextOnMedia]}>{card.label}</ThemedText>
-                          <ThemedText
-                            type="defaultSemiBold"
-                            numberOfLines={1}
-                            style={[styles.featuredCardTitle, styles.featuredCardTextOnMedia]}>
-                            {card.title}
-                          </ThemedText>
-                          <ThemedText numberOfLines={1} style={[styles.featuredCardMeta, styles.featuredCardTextOnMedia]}>
-                            {timeAgo(new Date(card.timestamp).toISOString())} · View →
-                          </ThemedText>
-                        </LinearGradient>
-                      </Pressable>
-                    ) : (
-                      <Pressable key={card.key} style={[styles.featuredCard, styles.featuredCardPlainCard]} onPress={card.onPress}>
-                        <BrandGradient style={styles.featuredCardIconBadge}>
-                          <IconSymbol name={card.icon} size={16} color="#fff" />
-                        </BrandGradient>
-                        <ThemedText style={styles.featuredCardEyebrow}>{card.label}</ThemedText>
-                        <ThemedText type="defaultSemiBold" style={styles.featuredCardTitle} numberOfLines={1}>
-                          {card.title}
-                        </ThemedText>
-                        <ThemedText style={styles.featuredCardMeta} numberOfLines={1}>
-                          {timeAgo(new Date(card.timestamp).toISOString())} · View →
-                        </ThemedText>
-                      </Pressable>
-                    )
-                  )}
-                </ScrollView>
-              </View>
-            )}
-
-            <View style={styles.section}>
-              <ThemedText style={styles.sectionLabel}>More Activity</ThemedText>
-              {activityRows.length === 0 ? (
-                !loading && <ThemedText style={styles.rowMeta}>No activity yet.</ThemedText>
-              ) : (
-                activityRows.map((row, index) => (
-                  <Pressable
-                    key={row.key}
-                    style={[styles.activityRow, index === activityRows.length - 1 && styles.activityRowLast]}
-                    onPress={row.onPress}>
-                    {row.icon ? (
-                      <View style={[styles.activityIconBadge, { backgroundColor: (row.iconColor ?? Brand) + '22' }]}>
-                        <IconSymbol name={row.icon} size={14} color={row.iconColor ?? Brand} />
-                      </View>
-                    ) : (
-                      <HubAvatar
-                        userId={row.avatarUserId ?? null}
-                        displayName={row.avatarName ?? '?'}
-                        tunnelUrl={session.hub.tunnelUrl}
-                        size={28}
-                      />
-                    )}
-                    <ThemedText numberOfLines={2} style={styles.activityText}>
-                      <ThemedText style={styles.activityActor}>{row.actorLabel} </ThemedText>
-                      {row.summary} <ThemedText style={styles.activityTime}>· {timeAgo(new Date(row.timestamp).toISOString())}</ThemedText>
-                    </ThemedText>
-                  </Pressable>
-                ))
-              )}
-            </View>
-          </>
+          <View style={styles.cardList}>
+            {latestCards.length === 0
+              ? !loading && <ThemedText style={styles.rowMeta}>No activity yet.</ThemedText>
+              : latestCards.map((card) => (
+                  <HomeActivityCard
+                    key={card.key}
+                    card={card}
+                    tunnelUrl={session.hub.tunnelUrl}
+                    token={session.token}
+                    currentUserId={session.userId}
+                  />
+                ))}
+          </View>
         )}
       </ScrollView>
     </ThemedView>
@@ -1030,134 +869,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  section: {
+  cardList: {
     paddingHorizontal: 20,
-    marginBottom: 24,
-  },
-  // Cancels `section`'s own 20px horizontal padding (same trick the old
-  // marketplace/initiative strips used) so cards start flush at the screen
-  // edge instead of inset like the section label above them.
-  featuredScroll: {
-    marginHorizontal: -20,
-  },
-  // Single horizontally-scrollable row, not a wrapped 2-column grid (product
-  // ask, 2026-09-20 — reads as one glanceable strip instead of a block that
-  // pushes the rest of Home down). Hairline-bordered, not web's blurred
-  // glass fill — same "soft border, no boxed chrome" idiom as searchBar/
-  // quickActionPill above.
-  featuredGrid: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 20,
-  },
-  // A fixed pixel height (not aspectRatio) on purpose — the media variant's
-  // only children (HubMedia, the gradient scrim) are both absolutely
-  // positioned, so the Pressable itself has no real intrinsic content size
-  // to size from. aspectRatio + all-absolute children is a genuinely
-  // fragile combination in RN's layout engine (observed directly: it
-  // produced a wildly oversized card with a large blank gap below it, not
-  // the intended 4:5 box) — an explicit height sidesteps that ambiguity
-  // entirely. Both card variants share this same width/height so the strip
-  // reads as one consistent row instead of mismatched card sizes.
-  featuredCard: {
-    width: 150,
-    height: 140,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#8884',
-    overflow: 'hidden',
-  },
-  featuredCardPlainCard: {
-    padding: 12,
-  },
-  featuredCardMedia: {
-    ...StyleSheet.absoluteFillObject,
-    width: undefined,
-    height: undefined,
-    aspectRatio: undefined,
-    borderRadius: 0,
-  },
-  featuredCardScrim: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-    padding: 10,
-  },
-  // White + text shadow so the label/title/meta stay legible over whatever
-  // photo/video the card happens to be covering — same treatment
-  // FeaturedCarousel's own overlayTitle/overlayCaption used.
-  featuredCardTextOnMedia: {
-    color: '#fff',
-    opacity: 1,
-    textShadowColor: 'rgba(0,0,0,0.9)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 5,
-  },
-  featuredCardIconBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  featuredCardEyebrow: {
-    fontSize: 10,
-    fontWeight: '700',
-    opacity: 0.55,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  featuredCardTitle: {
-    fontSize: 14,
-    marginTop: 2,
-  },
-  featuredCardMeta: {
-    fontSize: 11.5,
-    opacity: 0.55,
-    marginTop: 3,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    opacity: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 8,
+    gap: 14,
   },
   rowMeta: {
     opacity: 0.6,
     fontSize: 13,
-  },
-  // One flat row per activityRows entry, hairline divider between rows (not
-  // after the last one) — the merged-list version of the same "no boxed/
-  // tinted cards, full-bleed rows" convention the old per-category sections
-  // used, just one list instead of five.
-  activityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: '#8884',
-  },
-  activityRowLast: {
-    borderBottomWidth: 0,
-  },
-  activityIconBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  activityText: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 19,
-  },
-  activityActor: {
-    fontWeight: '600',
-  },
-  activityTime: {
-    opacity: 0.6,
   },
 });

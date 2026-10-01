@@ -428,11 +428,32 @@ export default function PinDetailScreen() {
                   {pin.title}
                 </ThemedText>
                 <ThemedText style={styles.subMeta}>
-                  {meta.label} · Added by {pin.author_username ?? 'someone'}
+                  {meta.label}
                   {meters !== null ? ` · ${formatDistanceMiles(meters)}` : ''}
+                  {` · pinned ${new Date(pin.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
                 </ThemedText>
 
                 {pin.description && <ThemedText style={styles.description}>{pin.description}</ThemedText>}
+
+                {/* Same "who added this" row as the web Atlas pin detail. */}
+                <Pressable
+                  style={styles.authorRow}
+                  disabled={!pin.author_id}
+                  onPress={() => pin.author_id && goToProfile(pin.author_id, session.userId)}
+                  accessibilityLabel={`Added by ${pin.author_username ?? 'someone'}`}>
+                  <HubAvatar
+                    userId={pin.author_id}
+                    displayName={pin.author_username ?? '?'}
+                    tunnelUrl={session.hub.tunnelUrl}
+                    size={36}
+                  />
+                  <View>
+                    <ThemedText type="defaultSemiBold" style={styles.authorName}>
+                      @{pin.author_username ?? 'someone'}
+                    </ThemedText>
+                    <ThemedText style={styles.rowMeta}>Added this pin</ThemedText>
+                  </View>
+                </Pressable>
 
                 {eventPost && (
                   <View style={styles.rsvpSection}>
@@ -624,7 +645,16 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 15,
     lineHeight: 22,
-    marginBottom: 24,
+    marginBottom: 16,
+  },
+  authorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 20,
+  },
+  authorName: {
+    fontSize: 14,
   },
   eventLine: {
     flexDirection: 'row',

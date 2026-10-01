@@ -80,9 +80,13 @@ type Props = {
   // video-playback-slots.ts for why every *other* instance needs to know to
   // stand down while one of these is open.
   isLightbox?: boolean;
+  // Reports the media's own pixel size once known (image onLoad, or a video's
+  // track size once ready) so a caller can lay the box out at the file's real
+  // aspect ratio instead of a fixed crop. Only home-activity-card.tsx uses it.
+  onSize?: (size: { width: number; height: number }) => void;
 };
 
-export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic, contentFit = 'cover', muted = true, nativeControls, onLoad, onError, localUri, isLightbox }: Props) {
+export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, contentPosition, isPublic, contentFit = 'cover', muted = true, nativeControls, onLoad, onError, localUri, isLightbox, onSize }: Props) {
   const [failed, setFailed] = useState(false);
   const video = isVideo(fileName);
 
@@ -184,10 +188,18 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
         setFailed(true);
         onError?.();
       } else if (status === 'readyToPlay') {
+        const track = player.videoTrack ?? player.availableVideoTracks[0];
+        if (track?.size) onSize?.(track.size);
         onLoad?.();
       }
     });
-    return () => subscription.remove();
+    const trackSubscription = player.addListener('videoTrackChange', ({ videoTrack }) => {
+      if (videoTrack?.size) onSize?.(videoTrack.size);
+    });
+    return () => {
+      subscription.remove();
+      trackSubscription.remove();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onLoad/onError are passed fresh each render by callers; including them would tear down/re-add this listener every render.
   }, [video, hasSlot, player]);
 
@@ -242,7 +254,10 @@ export function HubMedia({ fileName, tunnelUrl, token, style, previewSeconds, co
       contentPosition={contentPosition}
       cachePolicy="memory-disk"
       transition={200}
-      onLoad={() => onLoad?.()}
+      onLoad={(e) => {
+        onSize?.({ width: e.source.width, height: e.source.height });
+        onLoad?.();
+      }}
       onError={() => {
         setFailed(true);
         onError?.();

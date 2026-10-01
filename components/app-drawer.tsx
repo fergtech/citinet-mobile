@@ -127,6 +127,19 @@ export function AppDrawer({ children }: { children: ReactNode }) {
     else openDrawer();
   }
 
+  // The wordmark: close the drawer, unwind any pushed screens back to the tab
+  // root, land on Home, and tell Home to scroll to top and refetch (the
+  // `refresh` param is a fresh timestamp every tap, same trick Discover's
+  // `focus` param uses, so tapping while already on Home still registers).
+  // A soft reset — there's no expo-updates in this app, so a true JS-bundle
+  // reload isn't available outside dev.
+  function goHomeFresh() {
+    translateX.value = withTiming(0, { duration: 150 });
+    setOpen(false);
+    if (router.canDismiss()) router.dismissAll();
+    router.navigate({ pathname: '/(tabs)', params: { refresh: String(Date.now()) } });
+  }
+
   function go(href: Href) {
     // No refetch/remount hazard here the way a full tab-swap gesture had --
     // this is a plain stack push (see app/_layout.tsx), which plays its own
@@ -199,20 +212,21 @@ export function AppDrawer({ children }: { children: ReactNode }) {
           { paddingTop: insets.top + 24, backgroundColor: Colors[colorScheme].background },
           drawerStyle,
         ]}>
-        <View style={styles.logoRow}>
+        <Pressable onPress={goHomeFresh} style={styles.logoRow} accessibilityRole="button" accessibilityLabel="Citinet — back to a fresh Home">
           <CitinetWordmark />
-        </View>
+        </Pressable>
         <DrawerRow icon={<CustomIcon name="landLayerLocation" size={26} color={rowColor} />} label="Atlas" onPress={() => go('/atlas')} />
-        <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Initiatives" onPress={() => go('/initiatives')} />
         <DrawerRow icon={<IconSymbol name="calendar" size={26} color={rowColor} />} label="Events" onPress={() => go('/events')} />
-        <DrawerRow icon={<IconSymbol name="newspaper.fill" size={26} color={rowColor} />} label="Feed" onPress={() => go('/feed')} />
         <DrawerRow icon={<CustomIcon name="filesGlyph" size={26} color={rowColor} />} label="Files" onPress={() => go('/files')} />
+        <DrawerRow icon={<IconSymbol name="newspaper.fill" size={26} color={rowColor} />} label="Feed" onPress={() => go('/feed')} />
         {/* `as Href` — expo-router's generated route types (.expo/types)
             haven't picked up this new index route as the bare `/clubs` yet,
             only `/clubs/index`; same situation initiatives/index.tsx notes
             for its own not-yet-typed push. Drop the cast once the dev
             server's next typegen pass resolves it. */}
         <DrawerRow icon={<CustomIcon name="spacesGlyph" size={26} color={rowColor} />} label="Clubs" onPress={() => go('/clubs' as Href)} />
+        <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Initiatives" onPress={() => go('/initiatives')} />
+        <DrawerRow icon={<IconSymbol name="storefront.fill" size={26} color={rowColor} />} label="Marketplace" onPress={() => go('/marketplace')} />
         <View style={styles.divider} />
         <DrawerRow
           icon={<IconSymbol name="info.circle" size={26} color={rowColor} />}
@@ -225,7 +239,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
         {/* Same destination the Home footer link used to point at — this
             app's actual public issue tracker (same as web Dashboard.tsx's). */}
         <DrawerRow
-          icon={<IconSymbol name="hand.raised.fill" size={26} color={rowColor} />}
+          icon={<IconSymbol name="heart.circle.fill" size={26} color={rowColor} />}
           label="Help shape Citinet"
           onPress={() => {
             close();

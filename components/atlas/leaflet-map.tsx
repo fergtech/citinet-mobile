@@ -121,6 +121,7 @@ export function LeafletMap({
   pendingMarker = null,
   onMarkerPress,
   onMapPress,
+  onReady,
   style,
 }: {
   pins: AtlasPin[];
@@ -132,6 +133,10 @@ export function LeafletMap({
   pendingMarker?: [number, number] | null;
   onMarkerPress?: (pinId: string) => void;
   onMapPress?: (lat: number, lng: number) => void;
+  // Fires once Leaflet has actually loaded and initialized in the WebView —
+  // never fires if its script (fetched from unpkg) can't load, e.g. offline.
+  // Home's card mini-maps use that silence to fall back to a sticker.
+  onReady?: () => void;
   style?: StyleProp<ViewStyle>;
 }) {
   const webviewRef = useRef<WebView>(null);
@@ -210,6 +215,7 @@ export function LeafletMap({
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === 'ready') {
         readyRef.current = true;
+        onReady?.();
         inject(`window.setPins(${JSON.stringify(markerData)})`);
         if (fitToPins) {
           inject(`window.fitToPins(${JSON.stringify(markerData)}, ${center[0]}, ${center[1]}, ${zoom})`);

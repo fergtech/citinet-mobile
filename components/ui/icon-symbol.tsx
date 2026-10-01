@@ -66,6 +66,9 @@ const MAPPING = {
   'building.2.fill': 'apartment',
   'star.fill': 'star',
   'hand.raised.fill': 'volunteer-activism',
+  // iOS: a heart (SF Symbols has no hand-with-heart in this expo-symbols version);
+  // Android: the same hand-with-heart as hand.raised.fill.
+  'heart.circle.fill': 'volunteer-activism',
   'leaf.fill': 'eco',
   'bookmark.fill': 'bookmark',
   'bookmark': 'bookmark-border',

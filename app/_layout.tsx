@@ -2,10 +2,11 @@ import '@/lib/crypto/random-polyfill';
 import '@/lib/comms/livekit-init';
 
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { router, Stack } from 'expo-router';
+import { router, Stack, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
+import { GestureResponderEvent, Keyboard, TextInput, View, findNodeHandle } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
@@ -50,6 +51,13 @@ function RootNavigator() {
     }
     if (call.phase === 'idle') pushedForCallId.current = null;
   }, [call.phase, call.callId]);
+
+  // A screen change can leave the keyboard up for an input that's no longer
+  // on screen — always drop it on navigation.
+  const pathname = usePathname();
+  useEffect(() => {
+    Keyboard.dismiss();
+  }, [pathname]);
 
   if (status === 'loading') return null;
 
@@ -130,14 +138,45 @@ function RootNavigator() {
   );
 }
 
+// Tap-away-to-dismiss for every input in the app. Uses plain touch events
+// (which observe but never claim the responder), so buttons, scrolling and
+// gestures underneath behave exactly as before. Dismisses on touch *end* so a
+// tap on e.g. a chat Send button still registers before the layout shifts, and
+// only for taps (not drags/scrolls) that didn't start on the focused input.
+const TAP_SLOP = 10;
+
+function useTapAwayDismiss() {
+  const start = useRef<{ x: number; y: number; target: number } | null>(null);
+
+  return {
+    onTouchStart: (e: GestureResponderEvent) => {
+      const { pageX, pageY, target } = e.nativeEvent;
+      start.current = { x: pageX, y: pageY, target: Number(target) };
+    },
+    onTouchEnd: (e: GestureResponderEvent) => {
+      const s = start.current;
+      start.current = null;
+      if (!s || !Keyboard.isVisible()) return;
+      const { pageX, pageY } = e.nativeEvent;
+      if (Math.abs(pageX - s.x) > TAP_SLOP || Math.abs(pageY - s.y) > TAP_SLOP) return;
+      const focused = TextInput.State.currentlyFocusedInput?.();
+      const focusedTag = focused ? findNodeHandle(focused as unknown as number) : null;
+      if (focusedTag !== null && focusedTag === s.target) return;
+      Keyboard.dismiss();
+    },
+  };
+}
+
 function RootLayout() {
   const colorScheme = useColorScheme();
+  const tapAway = useTapAwayDismiss();
 
   return (
     // Required by react-native-gesture-handler for its Gesture API (pinch/pan
     // in ZoomableImage, see components/atlas/zoomable-image.tsx) to work at
     // all — expo-router doesn't wrap this automatically.
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={{ flex: 1 }} {...tapAway}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <SessionProvider>
           <E2EKeysProvider>
@@ -159,6 +198,7 @@ function RootLayout() {
         </SessionProvider>
         <StatusBar style="auto" />
       </ThemeProvider>
+      </View>
     </GestureHandlerRootView>
   );
 }
