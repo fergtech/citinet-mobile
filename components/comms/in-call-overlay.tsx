@@ -107,7 +107,14 @@ function RoomContent() {
   function handleFlip() {
     const next = call.facingMode === 'user' ? 'environment' : 'user';
     toggleFacingMode();
-    withRetry(() => localParticipant.setCameraEnabled(true, { facingMode: next })).catch((err) => {
+    // setCameraEnabled(true, …) is a no-op when the camera is already on —
+    // it only changed the mirror styling, never the actual device. The live
+    // track has to be restarted with the new facingMode to switch lenses.
+    const cameraTrack = localParticipant.getTrackPublication(Track.Source.Camera)?.videoTrack;
+    withRetry(async () => {
+      if (cameraTrack) await cameraTrack.restartTrack({ facingMode: next });
+      else await localParticipant.setCameraEnabled(true, { facingMode: next });
+    }).catch((err) => {
       console.warn('[call] flip camera failed', err);
       toggleFacingMode();
       showControlError("Couldn't flip camera — check your connection");
@@ -135,6 +142,14 @@ function RoomContent() {
   }
 
   function handleToggleShare() {
+    // iOS needs a Broadcast Upload Extension that doesn't exist yet (see
+    // docs/ios-screenshare-setup.md). Without it setScreenShareEnabled(true)
+    // never resolves and the whole call freezes until it's ended, so refuse
+    // up front instead of starting a capture that can't work.
+    if (Platform.OS === 'ios' && !isScreenShareEnabled) {
+      showControlError("Screen sharing isn't available on iPhone yet");
+      return;
+    }
     const next = !isScreenShareEnabled;
     toggleSharing();
     withRetry(() => localParticipant.setScreenShareEnabled(next)).catch((err) => {
