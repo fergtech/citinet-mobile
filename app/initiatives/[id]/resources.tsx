@@ -299,7 +299,7 @@ export default function InitiativeResourcesScreen() {
         {resources.length > 0 && (
           <View style={styles.footerNote}>
             <IconSymbol name="shield.fill" size={14} color={Colors[colorScheme].icon} />
-            <ThemedText style={styles.footerNoteText}>Pledges are visible to the initiative team</ThemedText>
+            <ThemedText style={styles.footerNoteText}>Pledges are visible to the project team</ThemedText>
           </View>
         )}
       </ScrollView>

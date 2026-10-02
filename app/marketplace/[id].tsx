@@ -14,6 +14,7 @@ import { Brand, Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { createConversation, deleteListing, getVendor, listMarketplaceListings } from '@/lib/api/hubService';
 import { MarketplaceListing, MarketplaceVendor } from '@/lib/api/types';
+import { markListingSeen } from '@/lib/marketplace/seen-listings';
 import { categoryMeta } from '@/lib/marketplace/categories';
 import { formatListingPrice } from '@/lib/marketplace/format';
 import { useSavedListings } from '@/lib/marketplace/saved-listings';
@@ -57,6 +58,7 @@ export default function ListingDetailScreen() {
           return;
         }
         setListing(found);
+        markListingSeen(found.id);
         return getVendor(session.hub.tunnelUrl, session.token, found.vendor_id).then(({ vendor: v, listings }) => {
           setVendor(v);
           setSellerListingCount(listings.length);

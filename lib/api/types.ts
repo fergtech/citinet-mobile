@@ -879,6 +879,9 @@ export type InitiativeActivityEntry = {
   id: string;
   initiative_id: string;
   kind: string;
+  // actor_id is cleared (ON DELETE SET NULL) if that account is later
+  // deleted, while actor_name — the username at the time — stays.
+  actor_id?: string | null;
   actor_name: string | null;
   text: string;
   created_at: string;

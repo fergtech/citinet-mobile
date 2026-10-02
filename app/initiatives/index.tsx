@@ -112,7 +112,7 @@ export default function InitiativesScreen() {
     setError(null);
     listInitiatives(session.hub.tunnelUrl, session.token)
       .then(setInitiatives)
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load initiatives."))
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load projects."))
       .finally(() => setLoading(false));
   }, [session]);
 
@@ -130,7 +130,7 @@ export default function InitiativesScreen() {
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title="Initiatives" />
+      <ScreenHeader title="Projects" />
 
       {loading && initiatives.length === 0 && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -151,7 +151,7 @@ export default function InitiativesScreen() {
               style={[styles.mineToggle, onlyMine && { backgroundColor: Brand }]}>
               <IconSymbol name="person.fill" size={13} color={onlyMine ? '#fff' : Colors[colorScheme].icon} />
               <ThemedText style={styles.chipLabel} lightColor={onlyMine ? '#fff' : undefined} darkColor={onlyMine ? '#fff' : undefined}>
-                My initiatives
+                My projects
               </ThemedText>
             </Pressable>
 
@@ -208,14 +208,14 @@ export default function InitiativesScreen() {
             </ScrollView>
 
             <ThemedText style={styles.count}>
-              {filtered.length} {filtered.length === 1 ? 'initiative' : 'initiatives'}
+              {filtered.length} {filtered.length === 1 ? 'project' : 'projects'}
             </ThemedText>
           </View>
         }
         ListEmptyComponent={
           !loading ? (
             <ThemedText style={styles.empty}>
-              {onlyMine ? "You haven't joined any initiatives that match these filters." : 'No initiatives match those filters yet.'}
+              {onlyMine ? "You haven't joined any projects that match these filters." : 'No projects match those filters yet.'}
             </ThemedText>
           ) : null
         }
@@ -223,7 +223,7 @@ export default function InitiativesScreen() {
           filtered.length > 0 ? (
             <View style={styles.footerNote}>
               <IconSymbol name="target" size={14} color={Colors[colorScheme].icon} />
-              <ThemedText style={styles.footerNoteText}>Anyone in the hub can start an initiative</ThemedText>
+              <ThemedText style={styles.footerNoteText}>Anyone in the hub can start a project</ThemedText>
             </View>
           ) : null
         }

@@ -72,7 +72,7 @@ const SECTIONS: ActionSection[] = [
         // editor screen anymore.
         onPress: () => router.push({ pathname: '/compose-post', params: { from: 'compose', mode: 'poll' } }),
       },
-      { key: 'initiative', icon: 'target', title: 'Start an initiative', onPress: () => router.push('/initiatives/create') },
+      { key: 'initiative', icon: 'target', title: 'Start a project', onPress: () => router.push('/initiatives/create') },
       { key: 'club', icon: 'building.2.fill', title: 'Create a club', onPress: () => router.push('/clubs/create') },
     ],
   },

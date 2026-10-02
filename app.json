@@ -94,8 +94,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Used to attach a photo or video to an Atlas pin, marketplace listing, initiative cover image, or file upload.",
-          "cameraPermission": "Used to take a photo for an Atlas pin, marketplace listing, or initiative cover image."
+          "photosPermission": "Used to attach a photo or video to an Atlas pin, marketplace listing, project cover image, or file upload.",
+          "cameraPermission": "Used to take a photo for an Atlas pin, marketplace listing, or project cover image."
         }
       ],
       "@react-native-community/datetimepicker",

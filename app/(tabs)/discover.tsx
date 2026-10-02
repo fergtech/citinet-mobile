@@ -31,6 +31,7 @@ import { formatListingPrice } from '@/lib/marketplace/format';
 import { useSession } from '@/lib/session/session-context';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
 import { timeAgo } from '@/lib/ui/time-ago';
+import { postCategoryLabel } from '@/lib/ui/post-category';
 
 type TabId = 'all' | 'posts' | 'events' | 'atlas' | 'marketplace' | 'initiatives' | 'files' | 'people' | 'hubs';
 
@@ -44,7 +45,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'events', label: 'Events' },
   { id: 'atlas', label: 'Atlas' },
   { id: 'marketplace', label: 'Marketplace' },
-  { id: 'initiatives', label: 'Initiatives' },
+  { id: 'initiatives', label: 'Projects' },
   { id: 'files', label: 'Files' },
   { id: 'people', label: 'People' },
   { id: 'hubs', label: 'Other hubs' },
@@ -209,7 +210,7 @@ function TrendingPostRow({ post }: { post: HubPost }) {
         </ThemedText>
       )}
       <ThemedText style={styles.postMeta}>
-        {post.category.charAt(0) + post.category.slice(1).toLowerCase()}
+        {postCategoryLabel(post.category)}
         {post.author_username ? ` · ${post.author_username}` : ''}
         {` · ${timeAgo(post.created_at)}`}
       </ThemedText>
@@ -746,7 +747,7 @@ export default function DiscoverScreen() {
                       {p.body}
                     </ThemedText>
                     <ThemedText style={styles.postMeta}>
-                      {p.category.charAt(0) + p.category.slice(1).toLowerCase()}
+                      {postCategoryLabel(p.category)}
                       {p.author_username ? ` · ${p.author_username}` : ''}
                     </ThemedText>
                   </Pressable>
@@ -926,13 +927,13 @@ export default function DiscoverScreen() {
 
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
-                <ThemedText style={styles.sectionLabel}>Initiatives</ThemedText>
+                <ThemedText style={styles.sectionLabel}>Projects</ThemedText>
                 {/* Hidden — superseded by the trailing "See all" row. */}
               </View>
               {recentInitiatives.map((initiative) => (
                 <InitiativeDiscoverRow key={initiative.id} initiative={initiative} />
               ))}
-              {!loading && initiatives.length === 0 && <ThemedText style={styles.rowMeta}>No initiatives yet — anyone in the hub can start one.</ThemedText>}
+              {!loading && initiatives.length === 0 && <ThemedText style={styles.rowMeta}>No projects yet — anyone in the hub can start one.</ThemedText>}
               {/* Unlike every sibling section's trailing row (only shown past
                   PREVIEW_COUNT, purely for pagination), this one is always
                   visible — the list screen is currently the only way to reach
@@ -944,7 +945,7 @@ export default function DiscoverScreen() {
                   <IconSymbol name="target" size={16} color={Brand} />
                 </View>
                 <ThemedText type="defaultSemiBold" style={[styles.seeAllRowLabel, { color: Brand }]}>
-                  See all initiatives
+                  See all projects
                 </ThemedText>
                 <IconSymbol name="chevron.right" size={16} color={Brand} />
               </Pressable>
@@ -1144,7 +1145,7 @@ export default function DiscoverScreen() {
               <InitiativeDiscoverRow key={initiative.id} initiative={initiative} />
             ))}
             {!loading && initiatives.length === 0 && (
-              <ThemedText style={styles.rowMeta}>No initiatives yet — anyone in the hub can start one.</ThemedText>
+              <ThemedText style={styles.rowMeta}>No projects yet — anyone in the hub can start one.</ThemedText>
             )}
           </View>
         ) : (

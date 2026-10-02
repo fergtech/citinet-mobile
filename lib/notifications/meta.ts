@@ -2,6 +2,7 @@ import type { Href } from 'expo-router';
 
 import type { IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
+import { postCategoryLabel } from '@/lib/ui/post-category';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
 import { AtlasPinCategory, HubNotification, NotificationType } from '@/lib/api/types';
 
@@ -10,7 +11,7 @@ import { AtlasPinCategory, HubNotification, NotificationType } from '@/lib/api/t
 // back to the generic noun for anything missing (older rows fetched before
 // GET /api/notifications/unread started joining this in) or unrecognized.
 function postCategoryNoun(category: string | null | undefined): string {
-  return category ? category.toLowerCase() : 'post';
+  return category ? postCategoryLabel(category).toLowerCase() : 'post';
 }
 
 // Same idea for an Atlas pin, but hub_atlas_pins.category is already a short

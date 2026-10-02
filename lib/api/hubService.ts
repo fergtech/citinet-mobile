@@ -1738,7 +1738,7 @@ export async function listInitiatives(tunnelUrl: string, token: string, clubId?:
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load initiatives."));
+    throw new Error(await readErrorMessage(res, "Couldn't load projects."));
   }
   const data = await res.json();
   return Array.isArray(data.initiatives) ? data.initiatives : [];
@@ -1761,7 +1761,7 @@ export async function createInitiative(
     body: JSON.stringify(data),
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't create that initiative."));
+    throw new Error(await readErrorMessage(res, "Couldn't create that project."));
   }
   return res.json();
 }
@@ -1771,7 +1771,7 @@ export async function getInitiative(tunnelUrl: string, token: string, initiative
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't load this initiative."));
+    throw new Error(await readErrorMessage(res, "Couldn't load this project."));
   }
   return res.json();
 }
@@ -1782,7 +1782,7 @@ export async function joinInitiative(tunnelUrl: string, token: string, initiativ
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't join this initiative."));
+    throw new Error(await readErrorMessage(res, "Couldn't join this project."));
   }
   return res.json();
 }
@@ -1797,7 +1797,7 @@ export async function leaveInitiative(tunnelUrl: string, token: string, initiati
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Couldn't leave this initiative."));
+    throw new Error(await readErrorMessage(res, "Couldn't leave this project."));
   }
 }
 

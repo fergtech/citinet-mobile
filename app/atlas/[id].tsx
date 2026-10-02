@@ -29,6 +29,7 @@ import { useHubCenter } from '@/lib/atlas/hub-center';
 import { findNearestPanoramaxImage, type PanoramaxImage } from '@/lib/atlas/panoramax';
 import { fetchPlacePhoto, type PlacePhoto } from '@/lib/atlas/place-photo';
 import { useSavedPins } from '@/lib/atlas/saved-pins';
+import { markPinSeen } from '@/lib/atlas/seen-pins';
 import { FILE_KIND_META, fileKind, formatBytes } from '@/lib/files/kind';
 import { useSession } from '@/lib/session/session-context';
 import { confirmDestructive } from '@/lib/ui/confirm';
@@ -182,6 +183,12 @@ export default function PinDetailScreen() {
       cancelled = true;
     };
   }, [session, id]);
+
+  // Opening the pin's own detail screen is what counts as "seen" — Home's
+  // Atlas card prefers pins that haven't been (see lib/atlas/seen-pins.ts).
+  useEffect(() => {
+    if (pin?.id) markPinSeen(pin.id);
+  }, [pin?.id]);
 
   useEffect(() => {
     if (!session || !pin?.image_file_name) return;

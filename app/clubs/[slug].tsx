@@ -54,7 +54,7 @@ type TabId = 'posts' | 'events' | 'initiatives' | 'files' | 'settings';
 const TABS: { id: TabId; label: string }[] = [
   { id: 'posts', label: 'Posts' },
   { id: 'events', label: 'Events' },
-  { id: 'initiatives', label: 'Initiatives' },
+  { id: 'initiatives', label: 'Projects' },
   { id: 'files', label: 'Files' },
 ];
 
@@ -693,7 +693,7 @@ export default function ClubScreen() {
                   <IconSymbol name="target" size={18} color={Brand} />
                 </View>
                 <ThemedText type="defaultSemiBold" style={styles.startInitiativeLabel}>
-                  Start an initiative here
+                  Start a project here
                 </ThemedText>
                 <IconSymbol name="chevron.right" size={16} color={Colors[colorScheme].icon} />
               </Pressable>
@@ -763,7 +763,7 @@ export default function ClubScreen() {
                     ))}
                   </View>
                 )}
-                {clubInitiatives.length === 0 && <ThemedText style={styles.emptyState}>No initiatives yet.</ThemedText>}
+                {clubInitiatives.length === 0 && <ThemedText style={styles.emptyState}>No projects yet.</ThemedText>}
               </>
             )}
 

@@ -34,6 +34,7 @@ import {
   listAtlasPins,
   listInitiativeResources,
   listInitiatives,
+  getHubStatus,
   getMyVendor,
   listMarketplaceListings,
   listMembers,
@@ -47,9 +48,13 @@ import {
 } from '@/lib/api/types';
 import { flushWriteQueue } from '@/lib/api/write-queue';
 import { ATLAS_CATEGORIES } from '@/lib/atlas/categories';
-import { categoryMeta } from '@/lib/marketplace/categories';
+import { useSeenPinIds } from '@/lib/atlas/seen-pins';
+import { useSeenInitiativeUpdateIds, markInitiativeUpdateSeen } from '@/lib/initiatives/seen-updates';
+import { useSeenListingIds } from '@/lib/marketplace/seen-listings';
 import { useSession } from '@/lib/session/session-context';
 import { isLocalConnection } from '@/lib/ui/is-local-connection';
+import { usePostConsumption } from '@/lib/ui/post-consumption';
+import { postCategoryLabel } from '@/lib/ui/post-category';
 import { useTabBarVisibility } from '@/lib/ui/tab-bar-visibility';
 
 // InitiativeUpdateRow now lives in components/initiative-update-card.tsx,
@@ -239,10 +244,38 @@ function initiativeActivityHref(initiativeId: string, kind: string, taskId: stri
   return { pathname: '/initiatives/[id]', params: { id: initiativeId } } as unknown as Href;
 }
 
+// Top-right "who's around" indicator. online_now from /api/status counts
+// everyone with a heartbeat in the last 5 minutes — including the viewer (every
+// authed request they make is a heartbeat) — so "others online" is
+// online_now - 1. Others around → green dot + their count. Only you →
+// the hub's total member count instead, in a neutral style.
+function PresencePill({ status }: { status: { userCount: number; onlineNow: number } }) {
+  const colorScheme = useColorScheme() ?? 'light';
+  const othersOnline = Math.max(0, status.onlineNow - 1);
+  const label = othersOnline > 0 ? `${othersOnline} online` : `${status.userCount} ${status.userCount === 1 ? 'member' : 'members'}`;
+  return (
+    <View style={styles.presencePill} accessibilityLabel={othersOnline > 0 ? `${othersOnline} other members online` : label}>
+      {othersOnline > 0 ? (
+        <View style={styles.presenceDot} />
+      ) : (
+        <IconSymbol name="person.2.fill" size={13} color={Colors[colorScheme].icon} />
+      )}
+      <ThemedText style={styles.presenceLabel} numberOfLines={1}>
+        {label}
+      </ThemedText>
+    </View>
+  );
+}
+
 export default function HomeScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const { session, otherSessions, switchToHub } = useSession();
   const appDrawer = useAppDrawer();
+  // Local, instant, persisted "seen" set — see the Feed card's seen rule below.
+  const { consumedIds } = usePostConsumption();
+  const seenPinIds = useSeenPinIds();
+  const seenListingIds = useSeenListingIds();
+  const seenUpdateIds = useSeenInitiativeUpdateIds();
 
   const [posts, setPosts] = useState<HubPost[]>([]);
   const [events, setEvents] = useState<HubPost[]>([]);
@@ -250,6 +283,10 @@ export default function HomeScreen() {
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [initiativeUpdates, setInitiativeUpdates] = useState<InitiativeUpdateRow[]>([]);
   const [memberCount, setMemberCount] = useState(0);
+  // Live hub presence for the header pill — GET /api/status (same numbers web's
+  // top bar shows). null until the first response; the pill stays hidden
+  // rather than showing a wrong 0.
+  const [hubStatus, setHubStatus] = useState<{ userCount: number; onlineNow: number } | null>(null);
   const [myVendorId, setMyVendorId] = useState<string | null>(null);
   const [showHubInfo, setShowHubInfo] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -390,6 +427,27 @@ export default function HomeScreen() {
     }, [load])
   );
 
+  // Presence is a heartbeat, not content — polled lightly while Home is the
+  // focused screen (and once on every focus), silent on failure.
+  useFocusEffect(
+    useCallback(() => {
+      if (!session) return;
+      let cancelled = false;
+      const poll = () =>
+        getHubStatus(session.hub.tunnelUrl)
+          .then((status) => {
+            if (!cancelled) setHubStatus({ userCount: status.user_count, onlineNow: status.online_now });
+          })
+          .catch(() => {});
+      poll();
+      const timer = setInterval(poll, 60_000);
+      return () => {
+        cancelled = true;
+        clearInterval(timer);
+      };
+    }, [session])
+  );
+
   // Re-tapping the Home tab while already on it scrolls back to the top.
   const scrollRef = useRef<ScrollView>(null);
   useScrollToTop(scrollRef);
@@ -468,6 +526,8 @@ export default function HomeScreen() {
   // 2026-10-01). Selection rules, per card:
   //  1. Nothing the signed-in user made themselves.
   //  2. Default: the latest item in that area.
+  //  2b. Unseen items first (every card); once everything is
+  //     seen, the seen rule is dropped entirely and the pool is everything.
   //  3. Exception: for items that can take likes/comments, any with
   //     likes >= 5% of the hub's member count, OR comments >= that, take
   //     precedence over "latest" — and among those, the latest wins.
@@ -484,23 +544,40 @@ export default function HomeScreen() {
     const newest = <T,>(items: T[], at: (item: T) => string) =>
       [...items].sort((a, b) => new Date(at(b)).getTime() - new Date(at(a)).getTime())[0];
     // `engagement` omitted → item type can't take likes/comments.
-    const pick = <T,>(items: T[], at: (item: T) => string, engagement?: (item: T) => number[]) => {
-      const popular = engagement ? items.filter((item) => engagement(item).some((n) => n >= threshold)) : [];
-      return newest(popular.length > 0 ? popular : items, at);
+    // `seen` omitted → this card doesn't use the seen rule (yet). When given:
+    // unseen items are preferred, but once EVERYTHING eligible has been seen
+    // the rule switches itself off and the whole pool is used again — so a
+    // card never goes empty just because the user is caught up.
+    const pick = <T,>(
+      items: T[],
+      at: (item: T) => string,
+      engagement?: (item: T) => number[],
+      seen?: (item: T) => boolean
+    ) => {
+      const unseen = seen ? items.filter((item) => !seen(item)) : items;
+      const pool = unseen.length > 0 ? unseen : items;
+      const popular = engagement ? pool.filter((item) => engagement(item).some((n) => n >= threshold)) : [];
+      return newest(popular.length > 0 ? popular : pool, at);
     };
     const cards: { timestamp: number; card: HomeActivityCardData }[] = [];
 
     const post = pick(
       posts.filter((p) => p.category !== 'EVENT' && p.author_id !== me),
       (p) => p.created_at,
-      (p) => [p.like_count, p.reply_count]
+      (p) => [p.like_count, p.reply_count],
+      // my_viewed comes from GET /api/posts (hub_post_views) — the same
+      // signal Feed itself sorts unseen-first by.
+      // Server flag OR the app's own record: Home refetches on focus, and a
+      // quick swipe back from post detail can outrun the view POST — the
+      // local set is already up to date by then.
+      (p) => !!p.my_viewed || consumedIds.has(p.id)
     );
     if (post) {
       cards.push({
         timestamp: new Date(post.created_at).getTime(),
         card: {
           key: `post-${post.id}`,
-          label: post.category,
+          label: postCategoryLabel(post.category),
           title: post.title || post.body?.slice(0, 60) || 'Untitled',
           caption: post.title ? post.body : null,
           authorUsername: post.author_username,
@@ -512,11 +589,16 @@ export default function HomeScreen() {
     }
 
     // `events` (upcoming) ∪ EVENT-category `posts` not already in it.
+    const postsById = new Map(posts.map((p) => [p.id, p]));
     const eventIds = new Set(events.map((e) => e.id));
     const event = pick(
       [...events, ...posts.filter((p) => p.category === 'EVENT' && !eventIds.has(p.id))].filter((e) => e.author_id !== me),
       (e) => e.created_at,
-      (e) => [e.like_count, e.reply_count]
+      (e) => [e.like_count, e.reply_count],
+      // The upcoming-events endpoint doesn't return my_viewed (only
+      // GET /api/posts does), so also look the event up among `posts` for the
+      // server's flag, plus the app's own local record of what's been opened.
+      (e) => !!e.my_viewed || !!postsById.get(e.id)?.my_viewed || consumedIds.has(e.id)
     );
     if (event) {
       cards.push({
@@ -546,9 +628,15 @@ export default function HomeScreen() {
     }
 
     const pin = pick(
-      atlasPins.filter((p) => p.author_id !== me),
+      // Pins made alongside an event ("Create an event" links a pin via
+      // event_post_id; the pin's category is 'event') are the Events card's
+      // own content — its map already comes from that pin — so they're left
+      // out here, otherwise the same event shows up twice.
+      atlasPins.filter((p) => p.author_id !== me && !p.event_post_id && p.category !== 'event'),
       (p) => p.created_at,
-      (p) => [p.reply_count]
+      (p) => [p.reply_count],
+      // Local-only (no server record for pins) — see lib/atlas/seen-pins.ts.
+      (p) => seenPinIds.has(p.id)
     );
     if (pin) {
       cards.push({
@@ -569,7 +657,9 @@ export default function HomeScreen() {
 
     const listing = pick(
       listings.filter((l) => !myVendorId || l.vendor_id !== myVendorId),
-      (l) => l.created_at
+      (l) => l.created_at,
+      undefined,
+      (l) => seenListingIds.has(l.id)
     );
     if (listing) {
       cards.push({
@@ -582,41 +672,48 @@ export default function HomeScreen() {
           authorUsername: null,
           mediaFileName: listing.image_file_name,
           mediaIsPublic: false,
-          placeholder: categoryMeta(listing.category),
+          // No vendor-uploaded image → the shopping-cart sticker.
+          fallbackSticker: require('@/assets/images/black-friday.png'),
           vendor: { id: listing.vendor_id, name: listing.vendor_name, logoFileName: listing.vendor_logo_file_name },
           onPress: () => router.push({ pathname: '/marketplace/[id]', params: { id: listing.id } }),
         },
       });
     }
 
-    // Initiative activity rows only carry a free-text actor_name (no user id),
-    // so "mine" is a best-effort match on username/display name.
+    // Every initiative activity row stores who caused it (actor_id + actor_name,
+    // the username). A deleted account's actor_id is cleared but the name
+    // stays, so those rows can't be "mine" — the name check is only a
+    // fallback for rows with no actor_id.
     const update = pick(
-      initiativeUpdates.filter((u) => !u.entry.actor_name || !myNames.includes(u.entry.actor_name.trim().toLowerCase())),
-      (u) => u.entry.created_at
+      initiativeUpdates.filter((u) =>
+        u.entry.actor_id ? u.entry.actor_id !== me : !u.entry.actor_name || !myNames.includes(u.entry.actor_name.trim().toLowerCase())
+      ),
+      (u) => u.entry.created_at,
+      undefined,
+      (u) => seenUpdateIds.has(u.entry.id)
     );
     if (update) {
       cards.push({
         timestamp: new Date(update.entry.created_at).getTime(),
         card: {
           key: `initiative-${update.entry.id}`,
-          label: 'Initiative',
+          label: 'Project',
           title: update.entry.text,
           caption: update.initiativeTitle,
-          authorUsername: null,
-          initiativeVisual: {
-            id: update.initiativeId,
-            category: update.initiativeCategory,
-            colorName: update.initiativeColorName,
-            hasBannerImage: update.hasBannerImage,
+          authorUsername: update.entry.actor_name,
+          authorId: update.entry.actor_id ?? null,
+          showAuthorAvatar: true,
+          initiativeVisual: { id: update.initiativeId, hasBannerImage: update.hasBannerImage },
+          onPress: () => {
+            markInitiativeUpdateSeen(update.entry.id);
+            router.push(initiativeActivityHref(update.initiativeId, update.entry.kind, update.taskId));
           },
-          onPress: () => router.push(initiativeActivityHref(update.initiativeId, update.entry.kind, update.taskId)),
         },
       });
     }
 
     return cards.sort((a, b) => b.timestamp - a.timestamp).map((c) => c.card);
-  }, [posts, events, atlasPins, listings, initiativeUpdates, memberCount, myVendorId, session?.userId, session?.username, session?.displayName]);
+  }, [posts, events, atlasPins, listings, initiativeUpdates, memberCount, myVendorId, consumedIds, seenPinIds, seenListingIds, seenUpdateIds, session?.userId, session?.username, session?.displayName]);
 
   if (!session) return null;
 
@@ -685,6 +782,7 @@ export default function HomeScreen() {
               </ThemedText>
             </View>
           </Pressable>
+          {hubStatus && <PresencePill status={hubStatus} />}
         </View>
 
         <View style={styles.greetingRow}>
@@ -785,6 +883,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  presencePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  presenceDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#22c55e',
+  },
+  presenceLabel: {
+    fontSize: 12.5,
+    opacity: 0.7,
   },
   headerTitle: {
     flexShrink: 1,

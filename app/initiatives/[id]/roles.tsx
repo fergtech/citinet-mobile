@@ -200,7 +200,7 @@ export default function InitiativeRolesScreen() {
         ListEmptyComponent={!loading ? <ThemedText style={styles.empty}>No open roles right now.</ThemedText> : null}
         ListFooterComponent={
           roles.length > 0 ? (
-            <ThemedText style={styles.footerNote}>Volunteering also joins you to the initiative</ThemedText>
+            <ThemedText style={styles.footerNote}>Volunteering also joins you to the project</ThemedText>
           ) : null
         }
       />

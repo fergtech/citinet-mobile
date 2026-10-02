@@ -225,7 +225,7 @@ export function AppDrawer({ children }: { children: ReactNode }) {
             for its own not-yet-typed push. Drop the cast once the dev
             server's next typegen pass resolves it. */}
         <DrawerRow icon={<CustomIcon name="spacesGlyph" size={26} color={rowColor} />} label="Clubs" onPress={() => go('/clubs' as Href)} />
-        <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Initiatives" onPress={() => go('/initiatives')} />
+        <DrawerRow icon={<CustomIcon name="bullseyeArrow" size={26} color={rowColor} />} label="Projects" onPress={() => go('/initiatives')} />
         <DrawerRow icon={<IconSymbol name="storefront.fill" size={26} color={rowColor} />} label="Marketplace" onPress={() => go('/marketplace')} />
         <View style={styles.divider} />
         <DrawerRow

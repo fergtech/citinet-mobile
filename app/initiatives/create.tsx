@@ -93,7 +93,7 @@ export default function CreateInitiativeScreen() {
         router.replace({ pathname: '/initiatives/[id]', params: { id: created.id } });
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Couldn't create that initiative.");
+        setError(err instanceof Error ? err.message : "Couldn't create that project.");
         setSaving(false);
       });
   }
@@ -107,7 +107,7 @@ export default function CreateInitiativeScreen() {
           <ThemedText style={styles.cancel}>Cancel</ThemedText>
         </Pressable>
         <ThemedText type="defaultSemiBold" style={styles.headerTitle}>
-          New initiative
+          New project
         </ThemedText>
         <Pressable
           onPress={handleSave}
@@ -135,7 +135,7 @@ export default function CreateInitiativeScreen() {
         <TextInput
           value={title}
           onChangeText={setTitle}
-          placeholder="What's this initiative called?"
+          placeholder="What's this project called?"
           placeholderTextColor={Colors[colorScheme].icon}
           maxLength={200}
           style={[styles.input, { color: Colors[colorScheme].text }]}

@@ -101,6 +101,15 @@ export function PostConsumptionProvider({ children }: { children: ReactNode }) {
   // server.js's apiLimiter — 300 req/min shared with every other request
   // this device makes).
   const viewQueueRef = useRef<string[]>([]);
+  // Post ids whose POST /view actually succeeded this app session. Distinct
+  // from "locally consumed" (reasonsRef, which is also seeded from disk and
+  // survives relaunches): a post can be locally consumed yet never have
+  // reached the server (request failed/rate-limited/hub mid-restart — the
+  // POST is fire-and-forget), and then the server's my_viewed stays false
+  // forever, so anything reading it (Home's Feed card) keeps treating the
+  // post as unseen. markConsumed below re-sends until one succeeds; the
+  // server's UNIQUE(post_id, user_id) makes repeats harmless.
+  const confirmedViewsRef = useRef(new Set<string>());
   const drainingViewQueueRef = useRef(false);
   const VIEW_QUEUE_STAGGER_MS = 150;
 
@@ -111,7 +120,11 @@ export function PostConsumptionProvider({ children }: { children: ReactNode }) {
       while (viewQueueRef.current.length > 0) {
         const postId = viewQueueRef.current.shift();
         const s = sessionRef.current;
-        if (postId && s) await recordPostView(s.hub.tunnelUrl, s.token, postId).catch(() => {});
+        if (postId && s) {
+          await recordPostView(s.hub.tunnelUrl, s.token, postId)
+            .then(() => confirmedViewsRef.current.add(postId))
+            .catch(() => {});
+        }
         if (viewQueueRef.current.length > 0) {
           await new Promise((resolve) => setTimeout(resolve, VIEW_QUEUE_STAGGER_MS));
         }
@@ -123,7 +136,14 @@ export function PostConsumptionProvider({ children }: { children: ReactNode }) {
 
   const markConsumed = useCallback(
     (postId: string, reason: PostConsumedReason) => {
-      if (reasonsRef.current.has(postId)) return;
+      if (reasonsRef.current.has(postId)) {
+        // Already seen locally — only the server may still be missing it.
+        if (!confirmedViewsRef.current.has(postId) && !viewQueueRef.current.includes(postId)) {
+          viewQueueRef.current.push(postId);
+          drainViewQueue();
+        }
+        return;
+      }
       reasonsRef.current.set(postId, reason);
       setConsumedIds(new Set(reasonsRef.current.keys()));
       const persisted = [...reasonsRef.current.keys()].slice(-MAX_PERSISTED_SEEN);

@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 import { Image as RNImage, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { LeafletMap } from '@/components/atlas/leaflet-map';
+import { HubAvatar } from '@/components/hub-avatar';
 import { HubMedia } from '@/components/hub-media';
 import { VendorLogo } from '@/components/marketplace/vendor-logo';
 import { ThemedText } from '@/components/themed-text';
-import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
 import { Brand } from '@/constants/theme';
 import { initiativeBannerUrl } from '@/lib/api/hubService';
 import { AtlasPin } from '@/lib/api/types';
@@ -16,7 +16,6 @@ import { fetchPlacePhoto, type PlacePhoto } from '@/lib/atlas/place-photo';
 import { peekCardVisual, readCardVisual, writeCardVisual } from '@/lib/atlas/card-visual-cache';
 import { geocodeLocation } from '@/lib/atlas/geocoding';
 import { useHubCenter } from '@/lib/atlas/hub-center';
-import { initiativeCategoryMeta, initiativeCategoryPresetImage, initiativeColor } from '@/lib/initiatives/meta';
 import { goToProfile } from '@/lib/ui/navigate-to-profile';
 
 // Card styling lifted from the Sept 1 2026 Home "Featured" carousel
@@ -35,23 +34,27 @@ export type HomeActivityCardData = {
   caption?: string | null;
   authorUsername?: string | null;
   authorId?: string | null;
+  // Show the author's avatar beside their name (Project cards). With no
+  // authorId (deleted account) the avatar falls back to an initial and the
+  // name isn't a link.
+  showAuthorAvatar?: boolean;
   mediaFileName?: string | null;
   // Defaults to true (post/pin/event attachments are always public
   // server-side). Marketplace listing images aren't marked that way — the
   // listing detail loads them through the authenticated path — so listing
   // cards pass false.
   mediaIsPublic?: boolean;
-  // Marketplace cards: shown in place of the media when the listing has no
-  // image — the same solid category-color box + big category icon the
-  // listing detail screen uses (app/marketplace/[id].tsx).
-  placeholder?: { color: string; icon: IconSymbolName };
+  // Marketplace cards: a sticker (require()'d asset) shown in place of the
+  // media when the vendor didn't upload an image for the listing.
+  fallbackSticker?: number;
   // Marketplace cards: the vendor responsible, shown at the bottom where an
   // author would be, tappable to the vendor page.
   vendor?: { id: string; name: string; logoFileName: string | null };
-  // Initiative cards: same visual the Initiatives list uses — the user-
-  // uploaded banner if there is one, else the category's preset photo, else
-  // the initiative's solid color with its category icon.
-  initiativeVisual?: { id: string; category: string; colorName: string; hasBannerImage: boolean };
+  // Initiative ("Project") cards: the banner its organizer uploaded, else
+  // the task-list sticker. Deliberately not the category preset photo the
+  // Projects list falls back to — on Home, an organizer-made visual is
+  // shown as such and everything else reads as an obvious placeholder.
+  initiativeVisual?: { id: string; hasBannerImage: boolean };
   // Set on Atlas cards. When the pin has no uploaded photo (mediaFileName),
   // the card shows a place photo / street-view still / mini-map instead — see
   // AtlasVisual below.
@@ -122,33 +125,39 @@ function MapFill({ pin, center, onFail }: { pin: AtlasPin | null; center: [numbe
 }
 
 const CALENDAR_STICKER = require('@/assets/images/calendar.png');
-const stickerSource = RNImage.resolveAssetSource(CALENDAR_STICKER);
-const STICKER_RATIO = stickerSource?.width && stickerSource?.height ? stickerSource.width / stickerSource.height : 1;
+const TASK_LIST_STICKER = require('@/assets/images/task-list.png');
 const STICKER_HEIGHT = 140;
 
-// Event cards' fallback chain — see HomeActivityCardData.eventVisual. While
-// a location is still being geocoded it holds an empty map-sized box, so the
-// card doesn't flash the photo/sticker and then swap to the map.
-function EventVisual({
-  card,
-  tunnelUrl,
-  token,
-  innerWidth,
-  maxHeight,
-  renderMedia,
-}: {
-  card: HomeActivityCardData;
-  tunnelUrl: string;
-  token: string;
-  innerWidth: number;
-  maxHeight: number;
-  renderMedia: () => React.ReactNode;
-}) {
-  const { location, pin } = card.eventVisual!;
+// Decorative sticker at its own aspect ratio, centered, capped at
+// STICKER_HEIGHT (and the card's max media height).
+function StickerImage({ source, innerWidth, maxHeight }: { source: number; innerWidth: number; maxHeight: number }) {
+  const asset = RNImage.resolveAssetSource(source);
+  const ratio = asset?.width && asset?.height ? asset.width / asset.height : 1;
+  const height = Math.min(STICKER_HEIGHT, maxHeight);
+  return (
+    <RNImage
+      source={source}
+      resizeMode="contain"
+      style={[styles.media, { width: Math.min(height * ratio, innerWidth), height }]}
+    />
+  );
+}
+
+type EventVisualState = { status: 'pending' | 'none' | 'found'; coords: [number, number] | null };
+
+// Event cards' location resolution — see HomeActivityCardData.eventVisual.
+// Lives in the card itself (not in EventVisual below) because the card needs
+// to know up front whether the event ended up with a map, its own media, or
+// neither, to decide whether the calendar sticker goes above the title.
+// While a location is still being geocoded, status is 'pending' and the
+// visual holds an empty map-sized box, so the card doesn't flash the
+// photo/sticker and then swap to the map.
+function useEventVisualState(visual: HomeActivityCardData['eventVisual']) {
+  const { location, pin } = visual ?? { location: null, pin: null };
   const hubCenter = useHubCenter();
   const geoKey = location?.trim() ? `geo:${location.trim().toLowerCase()}` : null;
   const knownCoords = geoKey ? peekCardVisual<[number, number]>(geoKey) : undefined;
-  const [state, setState] = useState<{ status: 'pending' | 'none' | 'found'; coords: [number, number] | null }>(
+  const [state, setState] = useState<EventVisualState>(
     pin
       ? { status: 'found', coords: [pin.latitude, pin.longitude] }
       : knownCoords !== undefined
@@ -191,61 +200,66 @@ function EventVisual({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- hubCenter is a fresh array each render; location/pin identify the source.
   }, [location, pin?.id]);
 
+  // No event visual at all (not an Event card) → nothing to resolve.
+  return [visual ? state : null, setState] as const;
+}
+
+// Map (or its pending placeholder) / media for an Event card. The "neither"
+// case — the calendar sticker — is drawn by the card above the title instead.
+function EventVisual({
+  card,
+  state,
+  onMapFail,
+  innerWidth,
+  maxHeight,
+  renderMedia,
+}: {
+  card: HomeActivityCardData;
+  state: EventVisualState;
+  onMapFail: () => void;
+  innerWidth: number;
+  maxHeight: number;
+  renderMedia: () => React.ReactNode;
+}) {
   if (state.status === 'pending' || state.status === 'found') {
     const height = Math.min(innerWidth / FALLBACK_RATIO, maxHeight);
     return (
       <View style={[styles.media, styles.atlasBox, { width: height * FALLBACK_RATIO, height }]}>
         {state.status === 'found' && state.coords && (
-          <MapFill pin={pin} center={state.coords} onFail={() => setState({ status: 'none', coords: null })} />
+          <MapFill pin={card.eventVisual!.pin} center={state.coords} onFail={onMapFail} />
         )}
       </View>
     );
   }
-
-  if (card.mediaFileName) return <>{renderMedia()}</>;
-
-  const stickerHeight = Math.min(STICKER_HEIGHT, maxHeight);
-  return (
-    <RNImage
-      source={CALENDAR_STICKER}
-      resizeMode="contain"
-      style={[styles.media, { width: Math.min(stickerHeight * STICKER_RATIO, innerWidth), height: stickerHeight }]}
-    />
-  );
+  return card.mediaFileName ? <>{renderMedia()}</> : null;
 }
 
-function InitiativeVisual({
-  visual,
+// The organizer-uploaded banner. (No banner → the task-list sticker, which
+// the card draws above the title instead.)
+function InitiativeBanner({
+  initiativeId,
   tunnelUrl,
   innerWidth,
   maxHeight,
 }: {
-  visual: NonNullable<HomeActivityCardData['initiativeVisual']>;
+  initiativeId: string;
   tunnelUrl: string;
   innerWidth: number;
   maxHeight: number;
 }) {
-  const presetImage = initiativeCategoryPresetImage(visual.category);
   const [ratio, setRatio] = useState<number | null>(null);
-  const hasImage = visual.hasBannerImage || !!presetImage;
-  const boxRatio = hasImage ? (ratio ?? FALLBACK_RATIO) : FALLBACK_RATIO;
+  const boxRatio = ratio ?? FALLBACK_RATIO;
   const height = Math.min(innerWidth / boxRatio, maxHeight);
-  const width = height * boxRatio;
-
   return (
-    <View style={[styles.media, styles.placeholderBox, { width, height, backgroundColor: initiativeColor(visual.colorName) }]}>
-      {hasImage ? (
-        <Image
-          source={visual.hasBannerImage ? { uri: initiativeBannerUrl(tunnelUrl, visual.id) } : presetImage}
-          style={StyleSheet.absoluteFill}
-          contentFit="contain"
-          onLoad={(e) => {
-            if (e.source.width > 0 && e.source.height > 0) setRatio(e.source.width / e.source.height);
-          }}
-        />
-      ) : (
-        <IconSymbol name={initiativeCategoryMeta(visual.category).icon} size={64} color="rgba(255,255,255,0.85)" />
-      )}
+    <View style={[styles.media, styles.atlasBox, { width: height * boxRatio, height }]}>
+      <Image
+        source={{ uri: initiativeBannerUrl(tunnelUrl, initiativeId) }}
+        style={StyleSheet.absoluteFill}
+        contentFit="contain"
+        onLoad={(e) => {
+          if (e.source.width > 0 && e.source.height > 0) setRatio(e.source.width / e.source.height);
+        }}
+      />
     </View>
   );
 }
@@ -350,6 +364,25 @@ export function HomeActivityCard({ card, tunnelUrl, token, currentUserId }: Prop
   const mediaHeight = Math.min(innerWidth / mediaRatio, maxHeight);
   const mediaWidth = mediaHeight * mediaRatio;
 
+  const [eventState, setEventState] = useEventVisualState(card.eventVisual);
+
+  // Sticker-type visuals sit between the type label and the title (rather
+  // than under the text like photos/maps/banners): the calendar for an event
+  // with no map and no media of its own, the task list for a project with no
+  // uploaded banner, the card's fallbackSticker (shopping cart) for a listing
+  // with no image.
+  const topSticker: number | null = card.eventVisual
+    ? eventState?.status === 'none' && !card.mediaFileName
+      ? CALENDAR_STICKER
+      : null
+    : card.initiativeVisual
+      ? card.initiativeVisual.hasBannerImage
+        ? null
+        : TASK_LIST_STICKER
+      : !card.mediaFileName && card.fallbackSticker
+        ? card.fallbackSticker
+        : null;
+
   const renderMedia = () => (
     <HubMedia
       fileName={card.mediaFileName!}
@@ -369,6 +402,7 @@ export function HomeActivityCard({ card, tunnelUrl, token, currentUserId }: Prop
     <Pressable style={styles.card} onPress={card.onPress}>
       <View style={styles.textArea}>
         <ThemedText style={[styles.categoryLabel, { color: Brand }]}>{card.label}</ThemedText>
+        {topSticker !== null && <StickerImage source={topSticker} innerWidth={innerWidth} maxHeight={maxHeight} />}
         <ThemedText type="defaultSemiBold" numberOfLines={2} style={styles.title}>
           {card.title}
         </ThemedText>
@@ -377,11 +411,11 @@ export function HomeActivityCard({ card, tunnelUrl, token, currentUserId }: Prop
             {card.caption}
           </ThemedText>
         )}
-        {card.eventVisual ? (
+        {card.eventVisual && eventState ? (
           <EventVisual
             card={card}
-            tunnelUrl={tunnelUrl}
-            token={token}
+            state={eventState}
+            onMapFail={() => setEventState({ status: 'none', coords: null })}
             innerWidth={innerWidth}
             maxHeight={maxHeight}
             renderMedia={renderMedia}
@@ -389,18 +423,13 @@ export function HomeActivityCard({ card, tunnelUrl, token, currentUserId }: Prop
         ) : (
           card.mediaFileName && renderMedia()
         )}
-        {card.initiativeVisual && (
-          <InitiativeVisual visual={card.initiativeVisual} tunnelUrl={tunnelUrl} innerWidth={innerWidth} maxHeight={maxHeight} />
-        )}
-        {!card.eventVisual && !card.mediaFileName && card.placeholder && (
-          <View
-            style={[
-              styles.media,
-              styles.placeholderBox,
-              { backgroundColor: card.placeholder.color, width: innerWidth, height: Math.min(innerWidth / FALLBACK_RATIO, maxHeight) },
-            ]}>
-            <IconSymbol name={card.placeholder.icon} size={64} color="rgba(255,255,255,0.85)" />
-          </View>
+        {card.initiativeVisual?.hasBannerImage && (
+          <InitiativeBanner
+            initiativeId={card.initiativeVisual.id}
+            tunnelUrl={tunnelUrl}
+            innerWidth={innerWidth}
+            maxHeight={maxHeight}
+          />
         )}
         {!card.mediaFileName && card.atlasPin && (
           <AtlasVisual pin={card.atlasPin} innerWidth={innerWidth} maxHeight={maxHeight} />
@@ -426,7 +455,19 @@ export function HomeActivityCard({ card, tunnelUrl, token, currentUserId }: Prop
           </Pressable>
         )}
         {card.authorUsername && (
-          <Pressable onPress={handleAuthorPress} hitSlop={6} style={styles.authorWrap}>
+          <Pressable
+            onPress={handleAuthorPress}
+            disabled={!card.authorId}
+            hitSlop={6}
+            style={[styles.authorWrap, card.showAuthorAvatar && styles.authorRowWithAvatar]}>
+            {card.showAuthorAvatar && (
+              <HubAvatar
+                userId={card.authorId ?? null}
+                displayName={card.authorUsername}
+                tunnelUrl={tunnelUrl}
+                size={20}
+              />
+            )}
             <ThemedText style={styles.author}>@{card.authorUsername}</ThemedText>
           </Pressable>
         )}
@@ -497,6 +538,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     opacity: 0.75,
+  },
+  authorRowWithAvatar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
   },
   authorWrap: {
     alignSelf: 'flex-start',

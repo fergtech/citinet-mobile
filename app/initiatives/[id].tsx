@@ -81,7 +81,7 @@ export default function InitiativeDetailScreen() {
         setInitiative(nextInitiative);
         setActivity(nextActivity);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load this initiative."))
+      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load this project."))
       .finally(() => setLoading(false));
   }, [session, id]);
 
@@ -184,7 +184,7 @@ export default function InitiativeDetailScreen() {
 
   return (
     <ThemedView style={styles.flex}>
-      <ScreenHeader title={initiative?.title ?? 'Initiative'} />
+      <ScreenHeader title={initiative?.title ?? 'Project'} />
 
       {loading && !initiative && <ActivityIndicator style={styles.spinner} />}
       {error && <ThemedText style={styles.error}>{error}</ThemedText>}
@@ -281,7 +281,7 @@ export default function InitiativeDetailScreen() {
               style={styles.joinLabel}
               lightColor={initiative.viewerIsMember ? undefined : '#fff'}
               darkColor={initiative.viewerIsMember ? undefined : '#fff'}>
-              {initiative.viewerIsMember ? 'Joined ✓' : 'Join this initiative'}
+              {initiative.viewerIsMember ? 'Joined ✓' : 'Join this project'}
             </ThemedText>
           </Pressable>
 
